@@ -161,7 +161,7 @@ export class AbsoluteSectionManager {
 		}
 
 		this.recalcOffsets(0);
-		void Promise.all(readPromises).then(() => {
+		void Promise.allSettled(readPromises).then(() => {
 			this.recalcOffsets(0);
 		});
 	}
@@ -276,6 +276,15 @@ export class AbsoluteSectionManager {
 			? (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.offset ?? 0)
 				+ (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.height ?? 0)
 			: 0;
+
+		if (fromIndex > 0) {
+			const prevData = this.sections.get(this.fileOrder[fromIndex - 1] ?? '');
+			const currData = this.sections.get(this.fileOrder[fromIndex] ?? '');
+			if (prevData && currData) {
+				offset += (prevData.endsWithHeading && currData.startsWithHeading)
+					? HEADING_GAP : TEXT_GAP;
+			}
+		}
 
 		for (let i = fromIndex; i < this.fileOrder.length; i++) {
 			const path = this.fileOrder[i] ?? '';
