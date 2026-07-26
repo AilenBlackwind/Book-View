@@ -3,6 +3,7 @@ import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
 const MIN_HEIGHT = 80;
+const SECTION_GAP = 16;
 
 interface SectionData {
 	el: HTMLElement;
@@ -197,8 +198,8 @@ export class AbsoluteSectionManager {
 		const realHeight = renderContainer.getBoundingClientRect().height;
 		if (realHeight > 0) {
 			const oldHeight = data.height;
-			data.height = realHeight;
-			this.heightCache.set(path, realHeight);
+			data.height = realHeight + SECTION_GAP;
+			this.heightCache.set(path, realHeight + SECTION_GAP);
 			this.onHeightMeasured?.(path, oldHeight, realHeight);
 
 			const idx = this.fileOrder.indexOf(path);
@@ -282,8 +283,8 @@ export class AbsoluteSectionManager {
 			if (!rendered) continue;
 			const newHeight = rendered.getBoundingClientRect().height;
 			if (newHeight > 0 && newHeight !== data.height) {
-				data.height = newHeight;
-				this.heightCache.set(path, newHeight);
+				data.height = newHeight + SECTION_GAP;
+				this.heightCache.set(path, newHeight + SECTION_GAP);
 				changed = true;
 			}
 		}
