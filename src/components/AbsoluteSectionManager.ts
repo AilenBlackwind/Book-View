@@ -3,13 +3,16 @@ import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
 const MIN_HEIGHT = 80;
-const SECTION_GAP = 16;
+const HEADING_GAP = 6;
+const TEXT_GAP = 16;
 
 interface SectionData {
 	el: HTMLElement;
 	component: Component | null;
 	offset: number;
 	height: number;
+	startsWithHeading: boolean;
+	endsWithHeading: boolean;
 }
 
 export class AbsoluteSectionManager {
@@ -131,12 +134,14 @@ export class AbsoluteSectionManager {
 			const cached = this.heightCache.get(path);
 			const estimated = cached ?? MIN_HEIGHT;
 
-			const data: SectionData = {
-				el,
-				component: null,
-				offset: 0,
-				height: estimated,
-			};
+		const data: SectionData = {
+			el,
+			component: null,
+			offset: 0,
+			height: estimated,
+			startsWithHeading: false,
+			endsWithHeading: false,
+		};
 			this.sections.set(path, data);
 			this.fileOrder.push(path);
 
@@ -147,6 +152,8 @@ export class AbsoluteSectionManager {
 				if (!cached) {
 					this.heightCache.set(path, est);
 				}
+				data.startsWithHeading = AbsoluteSectionManager.startsWithHeading(content);
+				data.endsWithHeading = AbsoluteSectionManager.endsWithHeading(content);
 			});
 			readPromises.push(p);
 
@@ -174,6 +181,25 @@ export class AbsoluteSectionManager {
 		return Math.max(MIN_HEIGHT, estimated);
 	}
 
+	private static startsWithHeading(text: string): boolean {
+		for (const line of text.split('\n')) {
+			const trimmed = line.trim();
+			if (trimmed.length === 0) continue;
+			return /^#{1,6}\s/.test(trimmed);
+		}
+		return false;
+	}
+
+	private static endsWithHeading(text: string): boolean {
+		const lines = text.split('\n');
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const trimmed = lines[i]?.trim() ?? '';
+			if (trimmed.length === 0) continue;
+			return /^#{1,6}\s/.test(trimmed);
+		}
+		return false;
+	}
+
 	private async loadSection(path: string): Promise<void> {
 		const data = this.sections.get(path);
 		if (!data || data.component) return;
@@ -198,8 +224,8 @@ export class AbsoluteSectionManager {
 		const realHeight = renderContainer.getBoundingClientRect().height;
 		if (realHeight > 0) {
 			const oldHeight = data.height;
-			data.height = realHeight + SECTION_GAP;
-			this.heightCache.set(path, realHeight + SECTION_GAP);
+			data.height = realHeight;
+			this.heightCache.set(path, realHeight);
 			this.onHeightMeasured?.(path, oldHeight, realHeight);
 
 			const idx = this.fileOrder.indexOf(path);
@@ -259,6 +285,14 @@ export class AbsoluteSectionManager {
 			data.offset = offset;
 			data.el.style.top = `${offset}px`;
 			offset += data.height;
+
+			if (i + 1 < this.fileOrder.length) {
+				const nextData = this.sections.get(this.fileOrder[i + 1] ?? '');
+				if (nextData) {
+					offset += (data.endsWithHeading && nextData.startsWithHeading)
+						? HEADING_GAP : TEXT_GAP;
+				}
+			}
 		}
 
 		this.spacerEl.style.height = `${offset}px`;
@@ -283,8 +317,8 @@ export class AbsoluteSectionManager {
 			if (!rendered) continue;
 			const newHeight = rendered.getBoundingClientRect().height;
 			if (newHeight > 0 && newHeight !== data.height) {
-				data.height = newHeight + SECTION_GAP;
-				this.heightCache.set(path, newHeight + SECTION_GAP);
+				data.height = newHeight;
+				this.heightCache.set(path, newHeight);
 				changed = true;
 			}
 		}
@@ -318,6 +352,8 @@ export class AbsoluteSectionManager {
 		this.heightCache.delete(path);
 		data.el.empty();
 		data.height = MIN_HEIGHT;
+		data.startsWithHeading = false;
+		data.endsWithHeading = false;
 		this.recalcOffsets(this.fileOrder.indexOf(path));
 		void this.loadSection(path);
 	}
