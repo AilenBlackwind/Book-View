@@ -164,6 +164,23 @@ export class AbsoluteSectionManager {
 	}
 
 	private recalcOffsets(fromIndex: number): void {
+		const scrollRect = this.scrollContainer.getBoundingClientRect();
+		let anchorEl: HTMLElement | null = null;
+		let bestTop = -Infinity;
+		for (let i = fromIndex; i < this.fileOrder.length; i++) {
+			const data = this.sections.get(this.fileOrder[i] ?? '');
+			if (!data) continue;
+			const top = data.el.getBoundingClientRect().top;
+			if (top <= scrollRect.top && top > bestTop) {
+				bestTop = top;
+				anchorEl = data.el;
+			}
+		}
+		if (!anchorEl && fromIndex < this.fileOrder.length) {
+			anchorEl = this.sections.get(this.fileOrder[fromIndex] ?? '')?.el ?? null;
+		}
+		const anchorTop = anchorEl?.getBoundingClientRect().top;
+
 		let offset = fromIndex > 0
 			? (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.offset ?? 0)
 				+ (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.height ?? 0)
@@ -180,6 +197,14 @@ export class AbsoluteSectionManager {
 		}
 
 		this.spacerEl.style.height = `${offset}px`;
+
+		if (anchorEl && anchorTop != null) {
+			const newTop = anchorEl.getBoundingClientRect().top;
+			const shift = newTop - anchorTop;
+			if (shift !== 0) {
+				this.scrollContainer.scrollTop += shift;
+			}
+		}
 	}
 
 	getOffset(path: string): number {
