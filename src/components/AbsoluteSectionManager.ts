@@ -28,6 +28,12 @@ export class AbsoluteSectionManager {
 	private resizeTimer: number = 0;
 	private prevScrollTop = 0;
 	private boundScrollHandler: (() => void) | null = null;
+	private renderQueue: string[] = [];
+	private activeRenderCount = 0;
+	private maxConcurrent = 1;
+	private coldStartTimer: number = 0;
+	private lastScrollTop = 0;
+	private destroyed = false;
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
 
@@ -55,7 +61,7 @@ export class AbsoluteSectionManager {
 					if (!path) continue;
 
 					if (entry.isIntersecting) {
-						void this.loadSection(path);
+						this.enqueueRender(path);
 					}
 				}
 			},
@@ -75,12 +81,29 @@ export class AbsoluteSectionManager {
 		this.containerResizeObserver.observe(this.scrollContainer);
 
 		this.boundScrollHandler = () => {
-			this.prevScrollTop = this.scrollContainer.scrollTop;
+			const newTop = this.scrollContainer.scrollTop;
+			const delta = Math.abs(newTop - this.lastScrollTop);
+			if (delta > 2000) {
+				this.renderQueue = this.renderQueue.filter((p) => {
+					const d = this.sections.get(p);
+					if (!d || d.component) return false;
+					const rect = d.el.getBoundingClientRect();
+					return Math.abs(rect.top) < 4000;
+				});
+			}
+			this.lastScrollTop = newTop;
+			this.prevScrollTop = newTop;
 		};
 		this.scrollContainer.addEventListener('scroll', this.boundScrollHandler, { passive: true });
+
+		this.coldStartTimer = window.setTimeout(() => {
+			this.maxConcurrent = 2;
+			this.drainQueue();
+		}, 200);
 	}
 
 	render(): void {
+		const readPromises: Promise<void>[] = [];
 		for (const link of this.links) {
 			if (link.type === 'broken') {
 				const el = this.spacerEl.createDiv({ cls: 'book-section-warning' });
@@ -116,20 +139,23 @@ export class AbsoluteSectionManager {
 			this.sections.set(path, data);
 			this.fileOrder.push(path);
 
-			void this.app.vault.cachedRead(file).then((content) => {
+			const p = this.app.vault.cachedRead(file).then((content) => {
 				this.rawContent.set(path, content);
 				const est = cached ?? this.estimateHeight(content);
 				data.height = est;
 				if (!cached) {
 					this.heightCache.set(path, est);
 				}
-				this.recalcOffsets(this.fileOrder.indexOf(path));
 			});
+			readPromises.push(p);
 
 			this.observer.observe(el);
 		}
 
 		this.recalcOffsets(0);
+		void Promise.all(readPromises).then(() => {
+			this.recalcOffsets(0);
+		});
 	}
 
 	private estimateHeight(text: string): number {
@@ -177,6 +203,27 @@ export class AbsoluteSectionManager {
 
 			const idx = this.fileOrder.indexOf(path);
 			this.recalcOffsets(idx);
+		}
+	}
+
+	private enqueueRender(path: string): void {
+		if (this.destroyed) return;
+		const data = this.sections.get(path);
+		if (!data || data.component) return;
+		if (this.renderQueue.includes(path)) return;
+		this.renderQueue.push(path);
+		this.drainQueue();
+	}
+
+	private drainQueue(): void {
+		if (this.destroyed) return;
+		while (this.activeRenderCount < this.maxConcurrent && this.renderQueue.length > 0) {
+			const path = this.renderQueue.shift()!;
+			this.activeRenderCount++;
+			void this.loadSection(path).finally(() => {
+				this.activeRenderCount--;
+				this.drainQueue();
+			});
 		}
 	}
 
@@ -279,12 +326,15 @@ export class AbsoluteSectionManager {
 	}
 
 	destroy(): void {
+		this.destroyed = true;
+		this.renderQueue.length = 0;
 		this.observer.disconnect();
 		this.containerResizeObserver.disconnect();
 		if (this.boundScrollHandler) {
 			this.scrollContainer.removeEventListener('scroll', this.boundScrollHandler);
 		}
 		window.clearTimeout(this.resizeTimer);
+		window.clearTimeout(this.coldStartTimer);
 		for (const [, data] of this.sections) {
 			data.component?.unload();
 		}
