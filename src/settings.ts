@@ -4,6 +4,7 @@ export interface BookViewSettings {
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
 	loadMargin: number;
+	absolutePositioning: boolean;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -12,4 +13,5 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	tocGuides: true,
 	tocRenderMarkdown: true,
 	loadMargin: 800,
+	absolutePositioning: false,
 };

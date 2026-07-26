@@ -76,5 +76,17 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		new Setting(containerEl)
+			.setName('Absolute positioning (experimental)')
+			.setDesc('Use absolute positioning for sections instead of normal flow. May reduce scroll jank. Requires view reload.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.absolutePositioning)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.absolutePositioning = value;
+						await this.plugin.saveSettings();
+					}),
+			);
 	}
 }

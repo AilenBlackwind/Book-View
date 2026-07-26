@@ -1,6 +1,7 @@
 import { ItemView, Menu, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
 import { SectionManager } from '../components/SectionManager';
+import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { TocController } from '../components/TocController';
 import type BookViewPlugin from '../main';
 
@@ -8,6 +9,7 @@ export const VIEW_TYPE_BOOK_VIEW = 'book-view';
 
 export class BookView extends ItemView {
 	private sectionManager: SectionManager | null = null;
+	private absoluteManager: AbsoluteSectionManager | null = null;
 	private tocController: TocController | null = null;
 	private contentContainer: HTMLElement | null = null;
 	private tocContainer: HTMLElement | null = null;
@@ -81,7 +83,7 @@ export class BookView extends ItemView {
 			this.currentFiles,
 			this.app,
 			this.contentContainer,
-			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800 },
+			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800, absolutePositioning: false },
 		);
 		this.tocController.setSectionManager(this.sectionManager!);
 		this.tocController.build();
@@ -137,18 +139,25 @@ export class BookView extends ItemView {
 		this.currentFiles = files;
 		this.manifestPaths = new Set(files.map((f) => f.path));
 
-		this.sectionManager = new SectionManager(this.contentContainer, links, this.app, file, settings?.loadMargin);
-		this.sectionManager.render();
-		window.setTimeout(() => this.sectionManager?.expandLoadMargin(), 500);
+		if (settings?.absolutePositioning) {
+			this.absoluteManager = new AbsoluteSectionManager(this.contentContainer, links, this.app, file, settings?.loadMargin);
+			this.absoluteManager.render();
+		} else {
+			this.sectionManager = new SectionManager(this.contentContainer, links, this.app, file, settings?.loadMargin);
+			this.sectionManager.render();
+			window.setTimeout(() => this.sectionManager?.expandLoadMargin(), 500);
+		}
 
 		this.tocController = new TocController(
 			this.tocContainer,
 			files,
 			this.app,
 			this.contentContainer,
-			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800 },
+			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800, absolutePositioning: false },
 		);
-		this.tocController.setSectionManager(this.sectionManager);
+		if (this.sectionManager) {
+			this.tocController.setSectionManager(this.sectionManager);
+		}
 		this.tocController.build();
 
 		this.tocController.onEntryContextMenu = (entryIndex, evt) => {
@@ -168,13 +177,13 @@ export class BookView extends ItemView {
 			menu.showAtMouseEvent(evt);
 		};
 
-		this.sectionManager.onHeightMeasured = (path, estimated, actual) => {
+		this.sectionManager?.onHeightMeasured && (this.sectionManager.onHeightMeasured = (path, estimated, actual) => {
 			this.tocController?.updateFileHeight(path, estimated, actual);
-		};
+		});
 
-		this.sectionManager.onSectionRendered = (path, container) => {
+		this.sectionManager?.onSectionRendered && (this.sectionManager.onSectionRendered = (path, container) => {
 			this.tocController?.tagHeadings(path, container);
-		};
+		});
 
 		this.registerDomEvent(this.contentContainer, 'dblclick', (evt: MouseEvent) => {
 			if (!evt.altKey && !evt.ctrlKey) return;
@@ -234,6 +243,7 @@ export class BookView extends ItemView {
 		const timer = window.setTimeout(() => {
 			this.refreshTimers.delete(path);
 			this.sectionManager?.markDirty(path);
+			this.absoluteManager?.markDirty(path);
 		}, 300);
 		this.refreshTimers.set(path, timer);
 	}
@@ -264,6 +274,10 @@ export class BookView extends ItemView {
 		if (this.sectionManager) {
 			this.sectionManager.destroy();
 			this.sectionManager = null;
+		}
+		if (this.absoluteManager) {
+			this.absoluteManager.destroy();
+			this.absoluteManager = null;
 		}
 		if (this.tocController) {
 			this.tocController.destroy();
