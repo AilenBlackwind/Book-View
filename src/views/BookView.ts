@@ -107,21 +107,6 @@ export class BookView extends ItemView {
 
 		this.contentContainer = this.contentEl.createDiv({ cls: 'book-content-container' });
 
-		this.registerDomEvent(this.contentContainer, 'wheel', (e: WheelEvent) => {
-			e.stopPropagation();
-		}, { capture: true, passive: true });
-
-		let scrollTimer = 0;
-		const container = this.contentContainer;
-		this.registerDomEvent(container, 'scroll', () => {
-			if (!container.hasClass('is-scrolling')) {
-				container.addClass('is-scrolling');
-			}
-			window.clearTimeout(scrollTimer);
-			scrollTimer = window.setTimeout(() => {
-				container.removeClass('is-scrolling');
-			}, 100);
-		}, { passive: true });
 		this.tocContainer = this.contentEl.createDiv({ cls: 'book-toc-container' });
 
 		const settings = this.plugin?.settings;
