@@ -26,6 +26,8 @@ export class AbsoluteSectionManager {
 	private observer: IntersectionObserver;
 	private containerResizeObserver: ResizeObserver;
 	private resizeTimer: number = 0;
+	private prevScrollTop = 0;
+	private boundScrollHandler: (() => void) | null = null;
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
 
@@ -71,6 +73,11 @@ export class AbsoluteSectionManager {
 			}, 200);
 		});
 		this.containerResizeObserver.observe(this.scrollContainer);
+
+		this.boundScrollHandler = () => {
+			this.prevScrollTop = this.scrollContainer.scrollTop;
+		};
+		this.scrollContainer.addEventListener('scroll', this.boundScrollHandler, { passive: true });
 	}
 
 	render(): void {
@@ -180,9 +187,9 @@ export class AbsoluteSectionManager {
 		for (let i = fromIndex; i < this.fileOrder.length; i++) {
 			const data = this.sections.get(this.fileOrder[i] ?? '');
 			if (!data) continue;
-			const top = data.el.getBoundingClientRect().top;
-			if (top <= scrollRect.top && top > bestTop) {
-				bestTop = top;
+			const rect = data.el.getBoundingClientRect();
+			if (rect.bottom <= scrollRect.top && rect.top > bestTop) {
+				bestTop = rect.top;
 				anchorEl = data.el;
 			}
 		}
@@ -212,7 +219,11 @@ export class AbsoluteSectionManager {
 			const newTop = anchorEl.getBoundingClientRect().top;
 			const shift = newTop - anchorTop;
 			if (shift !== 0) {
-				this.scrollContainer.scrollTop += shift;
+				const scrollingUp = this.scrollContainer.scrollTop < this.prevScrollTop;
+				const scrollingDown = this.scrollContainer.scrollTop > this.prevScrollTop;
+				if (!((scrollingUp && shift > 0) || (scrollingDown && shift < 0))) {
+					this.scrollContainer.scrollTop += shift;
+				}
 			}
 		}
 	}
@@ -270,6 +281,9 @@ export class AbsoluteSectionManager {
 	destroy(): void {
 		this.observer.disconnect();
 		this.containerResizeObserver.disconnect();
+		if (this.boundScrollHandler) {
+			this.scrollContainer.removeEventListener('scroll', this.boundScrollHandler);
+		}
 		window.clearTimeout(this.resizeTimer);
 		for (const [, data] of this.sections) {
 			data.component?.unload();
