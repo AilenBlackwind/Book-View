@@ -1,0 +1,9 @@
+{
+	"id": "book-view",
+	"name": "Book View",
+	"version": "1.0.0",
+	"minAppVersion": "1.7.2",
+	"description": "Render a sequence of atomic notes as a single virtualized document with lazy loading and a table of contents.",
+	"author": "",
+	"isDesktopOnly": false
+}
