@@ -27,6 +27,7 @@ export class AbsoluteSectionManager {
 	private fileOrder: string[] = [];
 	private rawContent: Map<string, string> = new Map();
 	private heightCache: Map<string, number> = new Map();
+	private renderedDomCache: Map<string, HTMLElement> = new Map();
 	private observer: IntersectionObserver;
 	private containerResizeObserver: ResizeObserver;
 	private resizeTimer: number = 0;
@@ -66,6 +67,8 @@ export class AbsoluteSectionManager {
 
 					if (entry.isIntersecting) {
 						this.enqueueRender(path);
+					} else {
+						this.unloadSection(path);
 					}
 				}
 			},
@@ -204,6 +207,15 @@ export class AbsoluteSectionManager {
 		const data = this.sections.get(path);
 		if (!data || data.component) return;
 
+		const cachedDom = this.renderedDomCache.get(path);
+		if (cachedDom) {
+			this.renderedDomCache.delete(path);
+			data.el.appendChild(cachedDom);
+			const component = new Component();
+			data.component = component;
+			return;
+		}
+
 		const file = this.app.vault.getFileByPath(path);
 		if (!(file instanceof TFile)) return;
 
@@ -231,6 +243,20 @@ export class AbsoluteSectionManager {
 			const idx = this.fileOrder.indexOf(path);
 			this.recalcOffsets(idx);
 		}
+	}
+
+	private unloadSection(path: string): void {
+		const data = this.sections.get(path);
+		if (!data || !data.component) return;
+
+		const rendered = data.el.querySelector('.markdown-rendered');
+		if (rendered) {
+			this.renderedDomCache.set(path, rendered as HTMLElement);
+		}
+
+		data.component.unload();
+		data.component = null;
+		data.el.empty();
 	}
 
 	private enqueueRender(path: string): void {
@@ -387,6 +413,7 @@ export class AbsoluteSectionManager {
 		this.sections.clear();
 		this.fileOrder = [];
 		this.heightCache.clear();
+		this.renderedDomCache.clear();
 		this.rawContent.clear();
 	}
 }
