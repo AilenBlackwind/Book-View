@@ -24,6 +24,8 @@ export class AbsoluteSectionManager {
 	private rawContent: Map<string, string> = new Map();
 	private heightCache: Map<string, number> = new Map();
 	private observer: IntersectionObserver;
+	private containerResizeObserver: ResizeObserver;
+	private resizeTimer: number = 0;
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
 
@@ -61,6 +63,14 @@ export class AbsoluteSectionManager {
 				threshold: 0,
 			},
 		);
+
+		this.containerResizeObserver = new ResizeObserver(() => {
+			window.clearTimeout(this.resizeTimer);
+			this.resizeTimer = window.setTimeout(() => {
+				this.remeasureAll();
+			}, 200);
+		});
+		this.containerResizeObserver.observe(this.scrollContainer);
 	}
 
 	render(): void {
@@ -207,6 +217,23 @@ export class AbsoluteSectionManager {
 		}
 	}
 
+	private remeasureAll(): void {
+		let changed = false;
+		for (const [path, data] of this.sections) {
+			const rendered = data.el.querySelector('.markdown-rendered');
+			if (!rendered) continue;
+			const newHeight = rendered.getBoundingClientRect().height;
+			if (newHeight > 0 && newHeight !== data.height) {
+				data.height = newHeight;
+				this.heightCache.set(path, newHeight);
+				changed = true;
+			}
+		}
+		if (changed) {
+			this.recalcOffsets(0);
+		}
+	}
+
 	getOffset(path: string): number {
 		return this.sections.get(path)?.offset ?? 0;
 	}
@@ -242,6 +269,8 @@ export class AbsoluteSectionManager {
 
 	destroy(): void {
 		this.observer.disconnect();
+		this.containerResizeObserver.disconnect();
+		window.clearTimeout(this.resizeTimer);
 		for (const [, data] of this.sections) {
 			data.component?.unload();
 		}
