@@ -91,7 +91,12 @@ export class AbsoluteSectionManager {
 
 				const data = this.sections.get(path);
 				if (!data) continue;
-				if (newHeight === data.height) continue;
+				const delta = newHeight - data.height;
+				if (delta === 0) continue;
+
+				if (data.offset < this.scrollContainer.scrollTop) {
+					this.scrollContainer.scrollTop += delta;
+				}
 
 				data.height = newHeight;
 				this.heightCache.set(path, newHeight);
