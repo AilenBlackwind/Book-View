@@ -243,7 +243,7 @@ export class TocController {
 		const targetScrollTop = elTop - containerHeight * TOC_ACTIVE_POSITION + elHeight / 2;
 
 		if (Math.abs(targetScrollTop - containerScrollTop) > 2) {
-			tocContainer.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
+			tocContainer.scrollTo({ top: targetScrollTop, behavior: 'auto' });
 		}
 
 		return changed;
