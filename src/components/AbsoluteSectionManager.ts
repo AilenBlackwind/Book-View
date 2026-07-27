@@ -38,6 +38,7 @@ export class AbsoluteSectionManager {
 	private maxConcurrent = 1;
 	private coldStartTimer: number = 0;
 	private lastScrollTop = 0;
+	private lastContainerWidth = 0;
 	private destroyed = false;
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
@@ -79,7 +80,18 @@ export class AbsoluteSectionManager {
 			},
 		);
 
-		this.containerResizeObserver = new ResizeObserver(() => {
+		this.containerResizeObserver = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const newWidth = entry.contentRect.width;
+				if (this.lastContainerWidth !== 0 && Math.abs(newWidth - this.lastContainerWidth) > 2) {
+					for (const [path, data] of this.sections) {
+						if (!data.el.querySelector('.markdown-rendered')) {
+							this.heightCache.delete(path);
+						}
+					}
+				}
+				this.lastContainerWidth = newWidth;
+			}
 			window.clearTimeout(this.resizeTimer);
 			this.resizeTimer = window.setTimeout(() => {
 				this.remeasureAll();
