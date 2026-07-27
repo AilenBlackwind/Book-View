@@ -86,6 +86,10 @@ export class AbsoluteSectionManager {
 				if (this.lastContainerWidth !== 0 && Math.abs(newWidth - this.lastContainerWidth) > 2) {
 					for (const [path, data] of this.sections) {
 						if (!data.el.querySelector('.markdown-rendered')) {
+							const content = this.rawContent.get(path);
+							if (content) {
+								data.height = this.estimateHeight(content);
+							}
 							this.heightCache.delete(path);
 						}
 					}
