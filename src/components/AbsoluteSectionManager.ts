@@ -82,6 +82,9 @@ export class AbsoluteSectionManager {
 		);
 
 		this.sectionResizeObserver = new ResizeObserver((entries) => {
+			const anchor = this.findAnchor();
+			let changed = false;
+
 			for (const entry of entries) {
 				const el = entry.target as HTMLElement;
 				const path = el.dataset.path;
@@ -94,10 +97,13 @@ export class AbsoluteSectionManager {
 				if (!data) continue;
 				if (newHeight === data.height) continue;
 
-				const anchor = this.findAnchor();
 				data.height = newHeight;
 				this.heightCache.set(path, newHeight);
-				this.recalcOffsets(this.fileOrder.indexOf(path));
+				changed = true;
+			}
+
+			if (changed) {
+				this.recalcOffsets(0);
 				this.restoreScrollAfterRecalc(anchor);
 			}
 		});
@@ -125,11 +131,10 @@ export class AbsoluteSectionManager {
 		this.containerWidthObserver.observe(this.scrollContainer);
 
 		this.boundScrollHandler = () => {
+			const newTop = this.scrollContainer.scrollTop;
 			if (this.isAdjustingScroll) {
 				this.isAdjustingScroll = false;
-				return;
 			}
-			const newTop = this.scrollContainer.scrollTop;
 			const delta = Math.abs(newTop - this.lastScrollTop);
 			if (delta > 2000) {
 				this.renderQueue = this.renderQueue.filter((p) => {
@@ -211,7 +216,13 @@ export class AbsoluteSectionManager {
 	}
 
 	private estimateHeight(text: string): number {
+		const trimmedLen = text.trim().length;
 		const lines = text.split('\n').length;
+
+		if (trimmedLen < 200 && lines <= 3) {
+			return 40;
+		}
+
 		let estimated = lines * HEIGHT_PER_LINE;
 
 		const images = (text.match(/!\[.*?\]\(.*?\)|!\[\[.*?\]\]/g) || []).length;
