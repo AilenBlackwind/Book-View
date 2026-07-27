@@ -2,9 +2,10 @@ import { App, Component, MarkdownRenderer, TFile } from 'obsidian';
 import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
-const MIN_HEIGHT = 80;
 const HEADING_GAP = 6;
 const TEXT_GAP = 16;
+const OVERSCAN_TOP = 1200;
+const SCROLL_THRESHOLD = 12;
 
 interface SectionData {
 	el: HTMLElement;
@@ -76,7 +77,7 @@ export class AbsoluteSectionManager {
 			},
 			{
 				root: this.scrollContainer,
-				rootMargin: `2000px 0px ${this.loadMargin}px 0px`,
+				rootMargin: `${OVERSCAN_TOP}px 0px ${this.loadMargin}px 0px`,
 				threshold: 0,
 			},
 		);
@@ -181,7 +182,7 @@ export class AbsoluteSectionManager {
 			});
 
 			const cached = this.heightCache.get(path);
-			const estimated = cached ?? MIN_HEIGHT;
+			const estimated = cached ?? 35;
 
 		const data: SectionData = {
 			el,
@@ -216,24 +217,22 @@ export class AbsoluteSectionManager {
 	}
 
 	private estimateHeight(text: string): number {
-		const trimmedLen = text.trim().length;
-		const lines = text.split('\n').length;
+		let estimated = 0;
+		const lines = text.split('\n');
 
-		if (trimmedLen < 200 && lines <= 3) {
-			return 40;
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed.length === 0) continue;
+			if (/^#{1,6}\s/.test(trimmed)) {
+				estimated += 42;
+			} else if (/^- /.test(trimmed)) {
+				estimated += 26;
+			} else {
+				estimated += Math.ceil(trimmed.length / 80) * 20;
+			}
 		}
 
-		let estimated = lines * HEIGHT_PER_LINE;
-
-		const images = (text.match(/!\[.*?\]\(.*?\)|!\[\[.*?\]\]/g) || []).length;
-		const codeBlocks = (text.match(/```/g) || []).length / 2;
-		const callouts = (text.match(/>\s*\[!/g) || []).length;
-
-		estimated += images * 250;
-		estimated += codeBlocks * 120;
-		estimated += callouts * 80;
-
-		return Math.max(MIN_HEIGHT, estimated);
+		return Math.max(35, estimated);
 	}
 
 	private static startsWithHeading(text: string): boolean {
@@ -376,7 +375,8 @@ export class AbsoluteSectionManager {
 		const data = this.sections.get(this.fileOrder[anchor.idx] ?? '');
 		if (!data) return;
 		const target = data.offset + anchor.anchorOffset;
-		if (target !== this.scrollContainer.scrollTop) {
+		const delta = Math.abs(target - this.scrollContainer.scrollTop);
+		if (delta > SCROLL_THRESHOLD) {
 			this.isAdjustingScroll = true;
 			this.scrollContainer.scrollTop = target;
 		}
@@ -408,7 +408,7 @@ export class AbsoluteSectionManager {
 		this.rawContent.delete(path);
 		this.heightCache.delete(path);
 		data.el.empty();
-		data.height = MIN_HEIGHT;
+		data.height = 35;
 		data.startsWithHeading = false;
 		data.endsWithHeading = false;
 		this.recalcOffsets(this.fileOrder.indexOf(path));
