@@ -41,6 +41,9 @@ export class AbsoluteSectionManager {
 	private lastScrollTop = 0;
 	private lastContainerWidth = 0;
 	private isAdjustingScroll = false;
+	private pendingHeights: Map<string, number> = new Map();
+	private pendingWidthChange = false;
+	private rafId = 0;
 	private destroyed = false;
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
@@ -83,9 +86,6 @@ export class AbsoluteSectionManager {
 		);
 
 		this.sectionResizeObserver = new ResizeObserver((entries) => {
-			const anchor = this.findAnchor();
-			let changed = false;
-
 			for (const entry of entries) {
 				const el = entry.target as HTMLElement;
 				const path = el.dataset.path;
@@ -98,14 +98,10 @@ export class AbsoluteSectionManager {
 				if (!data) continue;
 				if (newHeight === data.height) continue;
 
-				data.height = newHeight;
-				this.heightCache.set(path, newHeight);
-				changed = true;
+				this.pendingHeights.set(path, newHeight);
 			}
-
-			if (changed) {
-				this.recalcOffsets(0);
-				this.restoreScrollAfterRecalc(anchor);
+			if (this.pendingHeights.size > 0) {
+				this.scheduleUpdate();
 			}
 		});
 
@@ -113,18 +109,8 @@ export class AbsoluteSectionManager {
 			for (const entry of entries) {
 				const newWidth = entry.contentRect.width;
 				if (this.lastContainerWidth !== 0 && Math.abs(newWidth - this.lastContainerWidth) > 2) {
-					for (const [path, data] of this.sections) {
-						if (!data.el.querySelector('.markdown-rendered')) {
-							const content = this.rawContent.get(path);
-							if (content) {
-								data.height = this.estimateHeight(content);
-							}
-							this.heightCache.delete(path);
-						}
-					}
-					const anchor = this.findAnchor();
-					this.recalcOffsets(0);
-					this.restoreScrollAfterRecalc(anchor);
+					this.pendingWidthChange = true;
+					this.scheduleUpdate();
 				}
 				this.lastContainerWidth = newWidth;
 			}
@@ -358,8 +344,7 @@ export class AbsoluteSectionManager {
 		this.spacerEl.style.height = `${offset}px`;
 	}
 
-	private findAnchor(): { idx: number; anchorOffset: number } | null {
-		const scrollTop = this.scrollContainer.scrollTop;
+	private findAnchorAt(scrollTop: number): { idx: number; anchorOffset: number } | null {
 		for (let i = 0; i < this.fileOrder.length; i++) {
 			const data = this.sections.get(this.fileOrder[i] ?? '');
 			if (!data) continue;
@@ -370,16 +355,55 @@ export class AbsoluteSectionManager {
 		return null;
 	}
 
-	private restoreScrollAfterRecalc(anchor: { idx: number; anchorOffset: number } | null): void {
+	private restoreScrollAt(anchor: { idx: number; anchorOffset: number } | null, currentScrollTop: number): void {
 		if (!anchor) return;
 		const data = this.sections.get(this.fileOrder[anchor.idx] ?? '');
 		if (!data) return;
 		const target = data.offset + anchor.anchorOffset;
-		const delta = Math.abs(target - this.scrollContainer.scrollTop);
+		const delta = Math.abs(target - currentScrollTop);
 		if (delta > SCROLL_THRESHOLD) {
 			this.isAdjustingScroll = true;
 			this.scrollContainer.scrollTop = target;
 		}
+	}
+
+	private scheduleUpdate(): void {
+		if (this.rafId) return;
+		this.rafId = requestAnimationFrame(() => {
+			this.rafId = 0;
+			this.processUpdates();
+		});
+	}
+
+	private processUpdates(): void {
+		const freshScrollTop = this.scrollContainer.scrollTop;
+		const anchor = this.findAnchorAt(freshScrollTop);
+
+		if (this.pendingWidthChange) {
+			this.pendingWidthChange = false;
+			for (const [path, data] of this.sections) {
+				if (!data.el.querySelector('.markdown-rendered')) {
+					const content = this.rawContent.get(path);
+					if (content) {
+						data.height = this.estimateHeight(content);
+					}
+					this.heightCache.delete(path);
+				}
+			}
+		}
+
+		if (this.pendingHeights.size > 0) {
+			for (const [path, newHeight] of this.pendingHeights) {
+				const data = this.sections.get(path);
+				if (!data) continue;
+				data.height = newHeight;
+				this.heightCache.set(path, newHeight);
+			}
+			this.pendingHeights.clear();
+		}
+
+		this.recalcOffsets(0);
+		this.restoreScrollAt(anchor, freshScrollTop);
 	}
 
 	getOffset(path: string): number {
@@ -422,6 +446,10 @@ export class AbsoluteSectionManager {
 	destroy(): void {
 		this.destroyed = true;
 		this.renderQueue.length = 0;
+		if (this.rafId) {
+			cancelAnimationFrame(this.rafId);
+			this.rafId = 0;
+		}
 		this.observer.disconnect();
 		this.sectionResizeObserver.disconnect();
 		this.containerWidthObserver.disconnect();
@@ -435,6 +463,7 @@ export class AbsoluteSectionManager {
 		this.sections.clear();
 		this.fileOrder = [];
 		this.heightCache.clear();
+		this.pendingHeights.clear();
 		this.renderedDomCache.clear();
 		this.rawContent.clear();
 	}
