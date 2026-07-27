@@ -39,6 +39,7 @@ export class AbsoluteSectionManager {
 	private coldStartTimer: number = 0;
 	private lastScrollTop = 0;
 	private lastContainerWidth = 0;
+	private isAdjustingScroll = false;
 	private destroyed = false;
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
@@ -91,16 +92,13 @@ export class AbsoluteSectionManager {
 
 				const data = this.sections.get(path);
 				if (!data) continue;
-				const delta = newHeight - data.height;
-				if (delta === 0) continue;
+				if (newHeight === data.height) continue;
 
-				if (data.offset < this.scrollContainer.scrollTop) {
-					this.scrollContainer.scrollTop += delta;
-				}
-
+				const anchor = this.findAnchor();
 				data.height = newHeight;
 				this.heightCache.set(path, newHeight);
 				this.recalcOffsets(this.fileOrder.indexOf(path));
+				this.restoreScrollAfterRecalc(anchor);
 			}
 		});
 
@@ -117,7 +115,9 @@ export class AbsoluteSectionManager {
 							this.heightCache.delete(path);
 						}
 					}
+					const anchor = this.findAnchor();
 					this.recalcOffsets(0);
+					this.restoreScrollAfterRecalc(anchor);
 				}
 				this.lastContainerWidth = newWidth;
 			}
@@ -125,6 +125,10 @@ export class AbsoluteSectionManager {
 		this.containerWidthObserver.observe(this.scrollContainer);
 
 		this.boundScrollHandler = () => {
+			if (this.isAdjustingScroll) {
+				this.isAdjustingScroll = false;
+				return;
+			}
 			const newTop = this.scrollContainer.scrollTop;
 			const delta = Math.abs(newTop - this.lastScrollTop);
 			if (delta > 2000) {
@@ -342,6 +346,29 @@ export class AbsoluteSectionManager {
 		}
 
 		this.spacerEl.style.height = `${offset}px`;
+	}
+
+	private findAnchor(): { idx: number; anchorOffset: number } | null {
+		const scrollTop = this.scrollContainer.scrollTop;
+		for (let i = 0; i < this.fileOrder.length; i++) {
+			const data = this.sections.get(this.fileOrder[i] ?? '');
+			if (!data) continue;
+			if (data.offset <= scrollTop && data.offset + data.height > scrollTop) {
+				return { idx: i, anchorOffset: scrollTop - data.offset };
+			}
+		}
+		return null;
+	}
+
+	private restoreScrollAfterRecalc(anchor: { idx: number; anchorOffset: number } | null): void {
+		if (!anchor) return;
+		const data = this.sections.get(this.fileOrder[anchor.idx] ?? '');
+		if (!data) return;
+		const target = data.offset + anchor.anchorOffset;
+		if (target !== this.scrollContainer.scrollTop) {
+			this.isAdjustingScroll = true;
+			this.scrollContainer.scrollTop = target;
+		}
 	}
 
 	getOffset(path: string): number {
