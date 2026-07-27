@@ -3,6 +3,7 @@ import { getManifestFiles, getManifestLinks } from '../components/ManifestParser
 import { SectionManager } from '../components/SectionManager';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { TocController } from '../components/TocController';
+import { WheelAccelerator } from '../components/WheelAccelerator';
 import type BookViewPlugin from '../main';
 
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
@@ -12,6 +13,7 @@ export class BookView extends ItemView {
 	private absoluteManager: AbsoluteSectionManager | null = null;
 	private tocController: TocController | null = null;
 	private contentContainer: HTMLElement | null = null;
+	private wheelAccelerator: WheelAccelerator | null = null;
 	private tocContainer: HTMLElement | null = null;
 	private currentFiles: TFile[] = [];
 	private manifestPaths: Set<string> = new Set();
@@ -83,7 +85,7 @@ export class BookView extends ItemView {
 			this.currentFiles,
 			this.app,
 			this.contentContainer,
-			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800, absolutePositioning: false },
+			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800, absolutePositioning: false, wheelFlickEnabled: true, wheelFlickStrength: 2, wheelFlickFriction: 0.92 },
 		);
 		this.tocController.setSectionManager(this.sectionManager!);
 		this.tocController.build();
@@ -107,6 +109,15 @@ export class BookView extends ItemView {
 
 		this.contentContainer = this.contentEl.createDiv({ cls: 'book-content-container' });
 
+		this.wheelAccelerator = new WheelAccelerator(this.contentContainer, () => {
+			const s = this.plugin?.settings;
+			return {
+				enabled: s?.wheelFlickEnabled ?? true,
+				strength: s?.wheelFlickStrength ?? 2,
+				friction: s?.wheelFlickFriction ?? 0.92,
+			};
+		});
+
 		this.tocContainer = this.contentEl.createDiv({ cls: 'book-toc-container' });
 
 		const settings = this.plugin?.settings;
@@ -125,7 +136,14 @@ export class BookView extends ItemView {
 		this.manifestPaths = new Set(files.map((f) => f.path));
 
 		if (settings?.absolutePositioning) {
-			this.absoluteManager = new AbsoluteSectionManager(this.contentContainer, links, this.app, file, settings?.loadMargin);
+			this.absoluteManager = new AbsoluteSectionManager(
+				this.contentContainer,
+				links,
+				this.app,
+				file,
+				settings?.loadMargin,
+				{ get: this.plugin?.getPersistedHeight, put: this.plugin?.persistHeight },
+			);
 			this.absoluteManager.render();
 		} else {
 			this.sectionManager = new SectionManager(this.contentContainer, links, this.app, file, settings?.loadMargin);
@@ -138,7 +156,7 @@ export class BookView extends ItemView {
 			files,
 			this.app,
 			this.contentContainer,
-			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800, absolutePositioning: false },
+			settings ?? { tocWidth: 260, tocShowFileNames: true, tocGuides: true, tocRenderMarkdown: true, loadMargin: 800, absolutePositioning: false, wheelFlickEnabled: true, wheelFlickStrength: 2, wheelFlickFriction: 0.92 },
 		);
 		if (this.sectionManager) {
 			this.tocController.setSectionManager(this.sectionManager);
@@ -267,6 +285,10 @@ export class BookView extends ItemView {
 		if (this.tocController) {
 			this.tocController.destroy();
 			this.tocController = null;
+		}
+		if (this.wheelAccelerator) {
+			this.wheelAccelerator.destroy();
+			this.wheelAccelerator = null;
 		}
 		this.currentFiles = [];
 		this.manifestPaths.clear();

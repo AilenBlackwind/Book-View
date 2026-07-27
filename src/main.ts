@@ -1,6 +1,7 @@
 import { MarkdownView, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
 import { isBookManifest } from './components/ManifestParser';
+import { WheelAccelerator } from './components/WheelAccelerator';
 import { BookViewSettings, DEFAULT_SETTINGS } from './settings';
 import { BookViewSettingTab } from './ui/SettingsTab';
 import { BufferManager } from './BufferManager';
@@ -9,11 +10,40 @@ export default class BookViewPlugin extends Plugin {
 	settings: BookViewSettings = DEFAULT_SETTINGS;
 	bufferManager: BufferManager = null as unknown as BufferManager;
 	private skipPaths = new Set<string>();
+	heightStore: Record<string, { m: number; h: number }> = {};
+	private saveHeightsTimer = 0;
+
+	getPersistedHeight = (path: string, mtime: number): number | undefined => {
+		const rec = this.heightStore[path];
+		return rec && rec.m === mtime ? rec.h : undefined;
+	};
+
+	persistHeight = (path: string, mtime: number, height: number): void => {
+		const rec = this.heightStore[path];
+		if (rec && rec.m === mtime && Math.abs(rec.h - height) < 1) return;
+		this.heightStore[path] = { m: mtime, h: height };
+		const keys = Object.keys(this.heightStore);
+		if (keys.length > 1000) {
+			const oldest = keys[0];
+			if (oldest) delete this.heightStore[oldest];
+		}
+		window.clearTimeout(this.saveHeightsTimer);
+		this.saveHeightsTimer = window.setTimeout(() => {
+			void this.saveData(Object.assign({}, this.settings, { measuredHeights: this.heightStore }));
+		}, 2000);
+	};
 
 	async onload() {
 		await this.loadSettings();
 		this.bufferManager = new BufferManager(this.app);
 		this.addSettingTab(new BookViewSettingTab(this.app, this));
+
+		// Register the wheel interceptor as early as possible: among capture-phase
+		// listeners, registration order decides who may stopImmediatePropagation whom.
+		this.registerDomEvent(window, 'wheel', (evt) => WheelAccelerator.dispatchWheel(evt), {
+			capture: true,
+			passive: false,
+		});
 
 		this.registerView(VIEW_TYPE_BOOK_VIEW, (leaf) => {
 			const view = new BookView(leaf);
@@ -86,12 +116,13 @@ export default class BookViewPlugin extends Plugin {
 	onunload() {}
 
 	async loadSettings() {
-		const data = await this.loadData() as Partial<BookViewSettings> | null;
+		const data = await this.loadData() as (Partial<BookViewSettings> & { measuredHeights?: Record<string, { m: number; h: number }> }) | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+		this.heightStore = data?.measuredHeights ?? {};
 	}
 
 	async saveSettings() {
-		await this.saveData(this.settings);
+		await this.saveData(Object.assign({}, this.settings, { measuredHeights: this.heightStore }));
 		this.refreshAllTocs();
 	}
 

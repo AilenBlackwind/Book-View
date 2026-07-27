@@ -88,5 +88,45 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		new Setting(containerEl)
+			.setName('Wheel flick acceleration')
+			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks. Other scroll plugins are intercepted only within book view.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.wheelFlickEnabled)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.wheelFlickEnabled = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Wheel flick strength')
+			.setDesc('Total scroll distance per notch, as a multiple of the native amount.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(1, 5, 0.25)
+					.setValue(this.plugin.settings.wheelFlickStrength)
+					.setDynamicTooltip()
+					.onChange(async (value: number) => {
+						this.plugin.settings.wheelFlickStrength = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Wheel flick smoothness')
+			.setDesc('How long the flick glides. Higher values glide longer.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0.85, 0.97, 0.01)
+					.setValue(this.plugin.settings.wheelFlickFriction)
+					.setDynamicTooltip()
+					.onChange(async (value: number) => {
+						this.plugin.settings.wheelFlickFriction = value;
+						await this.plugin.saveSettings();
+					}),
+			);
 	}
 }

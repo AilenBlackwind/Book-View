@@ -5,7 +5,7 @@ export const HEIGHT_PER_LINE = 25;
 const HEADING_GAP = 6;
 const TEXT_GAP = 16;
 const OVERSCAN_TOP = 2500;
-const SCROLL_THRESHOLD = 0;
+const SCROLL_THRESHOLD = 1;
 
 interface SectionData {
 	el: HTMLElement;
@@ -14,6 +14,14 @@ interface SectionData {
 	height: number;
 	startsWithHeading: boolean;
 	endsWithHeading: boolean;
+	renderGen: number;
+	mtime: number;
+	heightTrusted: boolean;
+}
+
+interface HeightPersistence {
+	get?: (path: string, mtime: number) => number | undefined;
+	put?: (path: string, mtime: number, height: number) => void;
 }
 
 export class AbsoluteSectionManager {
@@ -23,6 +31,7 @@ export class AbsoluteSectionManager {
 	private app: App;
 	private masterFile: TFile;
 	private loadMargin: number;
+	private persistence: HeightPersistence;
 
 	private sections: Map<string, SectionData> = new Map();
 	private fileOrder: string[] = [];
@@ -45,6 +54,18 @@ export class AbsoluteSectionManager {
 	private pendingWidthChange = false;
 	private rafId = 0;
 	private destroyed = false;
+	private idleTimer = 0;
+	private lastUserScrollAt = 0;
+
+	private static readonly DEBUG = true;
+
+	private dbg(msg: string, ...args: unknown[]): void {
+		if (!AbsoluteSectionManager.DEBUG) return;
+		const w = window as unknown as { __bvLog?: string[] };
+		const log = w.__bvLog ?? (w.__bvLog = []);
+		log.push(`${new Date().toISOString().slice(11, 23)} ${msg} ${args.join(' ')}`);
+		if (log.length > 2000) log.splice(0, log.length - 2000);
+	}
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
 
@@ -54,12 +75,14 @@ export class AbsoluteSectionManager {
 		app: App,
 		masterFile: TFile,
 		loadMargin: number = 800,
+		persistence: HeightPersistence = {},
 	) {
 		this.scrollContainer = scrollContainer;
 		this.links = links;
 		this.app = app;
 		this.masterFile = masterFile;
 		this.loadMargin = loadMargin;
+		this.persistence = persistence;
 
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
@@ -86,6 +109,7 @@ export class AbsoluteSectionManager {
 		);
 
 		this.sectionResizeObserver = new ResizeObserver((entries) => {
+			const containerTop = this.scrollContainer.getBoundingClientRect().top;
 			for (const entry of entries) {
 				const el = entry.target as HTMLElement;
 				const path = el.dataset.path;
@@ -96,8 +120,14 @@ export class AbsoluteSectionManager {
 
 				const data = this.sections.get(path);
 				if (!data) continue;
-				if (newHeight === data.height) continue;
+				// Ignore stale notifications delivered after unload.
+				if (!data.component) continue;
+				// Ignore sub-pixel churn: fractional fluctuations still trigger
+				// scrollTop writes, and each write cancels an in-flight wheel tick.
+				if (Math.abs(newHeight - data.height) < 2) continue;
 
+				const relTop = el.getBoundingClientRect().top - containerTop;
+				this.dbg('height-change', path.split('/').pop(), `${Math.round(data.height)} -> ${Math.round(newHeight)}`, relTop < 0 ? 'above' : 'below');
 				this.pendingHeights.set(path, newHeight);
 			}
 			if (this.pendingHeights.size > 0) {
@@ -121,6 +151,9 @@ export class AbsoluteSectionManager {
 			const newTop = this.scrollContainer.scrollTop;
 			if (this.isAdjustingScroll) {
 				this.isAdjustingScroll = false;
+				this.dbg('adjust-consumed', Math.round(newTop));
+			} else {
+				this.lastUserScrollAt = Date.now();
 			}
 			const delta = Math.abs(newTop - this.lastScrollTop);
 			if (delta > 2000) {
@@ -167,7 +200,8 @@ export class AbsoluteSectionManager {
 				attr: { 'data-path': path },
 			});
 
-			const cached = this.heightCache.get(path);
+			const mtime = file.stat.mtime;
+			const cached = this.heightCache.get(path) ?? this.persistence.get?.(path, mtime);
 			const estimated = cached ?? 35;
 
 		const data: SectionData = {
@@ -177,6 +211,9 @@ export class AbsoluteSectionManager {
 			height: estimated,
 			startsWithHeading: false,
 			endsWithHeading: false,
+			renderGen: 0,
+			mtime,
+			heightTrusted: cached !== undefined,
 		};
 			this.sections.set(path, data);
 			this.fileOrder.push(path);
@@ -198,24 +235,49 @@ export class AbsoluteSectionManager {
 
 		this.recalcOffsets(0);
 		void Promise.allSettled(readPromises).then(() => {
-			this.recalcOffsets(0);
+			this.scheduleUpdate();
 		});
+		this.schedulePreRender();
 	}
 
 	private estimateHeight(text: string): number {
-		let estimated = 0;
+		let estimated = 16; // trailing paragraph margin
 		const lines = text.split('\n');
+		let inCode = false;
 
 		for (const line of lines) {
 			const trimmed = line.trim();
-			if (trimmed.length === 0) continue;
-			if (/^#{1,6}\s/.test(trimmed)) {
-				estimated += 42;
-			} else if (/^- /.test(trimmed)) {
-				estimated += 26;
-			} else {
-				estimated += Math.ceil(trimmed.length / 80) * 20;
+			if (/^```/.test(trimmed)) {
+				inCode = !inCode;
+				estimated += 22;
+				continue;
 			}
+			if (trimmed.length === 0) {
+				estimated += 16; // rendered paragraph margin
+				continue;
+			}
+			if (inCode) {
+				estimated += 22;
+				continue;
+			}
+			const heading = /^(#{1,6})\s/.exec(trimmed);
+			if (heading) {
+				estimated += 48 - (heading[1]?.length ?? 1) * 2;
+				continue;
+			}
+			if (/^>\s?\[!/.test(trimmed)) {
+				estimated += 48; // callout header
+				continue;
+			}
+			if (/^(-|\*|\+|\d+\.)\s/.test(trimmed) || trimmed.startsWith('>')) {
+				estimated += 26;
+				continue;
+			}
+			if (/!\[.*?\]\(.*?\)|!\[\[.*?\]\]/.test(trimmed)) {
+				estimated += 300;
+				continue;
+			}
+			estimated += Math.ceil(trimmed.length / 85) * 24;
 		}
 
 		return Math.max(35, estimated);
@@ -246,6 +308,7 @@ export class AbsoluteSectionManager {
 
 		const cachedDom = this.renderedDomCache.get(path);
 		if (cachedDom) {
+			this.dbg('load-cached', path.split('/').pop());
 			this.renderedDomCache.delete(path);
 			data.el.appendChild(cachedDom);
 			data.component = new Component();
@@ -256,9 +319,19 @@ export class AbsoluteSectionManager {
 		const file = this.app.vault.getFileByPath(path);
 		if (!(file instanceof TFile)) return;
 
-		const content = this.rawContent.get(path) ?? await this.app.vault.cachedRead(file);
+		const gen = data.renderGen + 1;
+		data.renderGen = gen;
+		this.dbg('load-fresh', path.split('/').pop());
 
-		const renderContainer = data.el.createDiv({
+		const content = this.rawContent.get(path) ?? await this.app.vault.cachedRead(file);
+		if (this.destroyed || data.renderGen !== gen) return;
+
+		data.startsWithHeading = AbsoluteSectionManager.startsWithHeading(content);
+		data.endsWithHeading = AbsoluteSectionManager.endsWithHeading(content);
+
+		// Render into a detached container: partial output is never visible
+		// and unloadSection cannot cache half-rendered DOM mid-flight.
+		const renderContainer = createDiv({
 			cls: 'markdown-rendered markdown-preview-view',
 		});
 
@@ -266,15 +339,19 @@ export class AbsoluteSectionManager {
 		data.component = component;
 		await MarkdownRenderer.render(this.app, content, renderContainer, path, component);
 
+		if (this.destroyed || data.renderGen !== gen || data.component !== component) return;
+
 		data.el.empty();
 		data.el.appendChild(renderContainer);
 		this.sectionResizeObserver.observe(data.el);
+		this.scheduleUpdate();
 	}
 
 	private unloadSection(path: string): void {
 		const data = this.sections.get(path);
 		if (!data || !data.component) return;
 
+		this.dbg('unload', path.split('/').pop());
 		this.sectionResizeObserver.unobserve(data.el);
 
 		const rendered = data.el.querySelector('.markdown-rendered');
@@ -284,6 +361,8 @@ export class AbsoluteSectionManager {
 
 		data.component.unload();
 		data.component = null;
+		// Invalidate any in-flight render for this section.
+		data.renderGen++;
 		data.el.empty();
 	}
 
@@ -306,6 +385,58 @@ export class AbsoluteSectionManager {
 				this.drainQueue();
 			});
 		}
+	}
+
+	private schedulePreRender(): void {
+		if (this.destroyed) return;
+		window.clearTimeout(this.idleTimer);
+		this.idleTimer = window.setTimeout(() => void this.preRenderNext(), 60);
+	}
+
+	private preRenderNext(): void {
+		if (this.destroyed) return;
+		// Never pre-measure while the user is actively scrolling: the resulting
+		// height corrections would land in the middle of wheel/touch gestures.
+		if (Date.now() - this.lastUserScrollAt < 300) {
+			this.schedulePreRender();
+			return;
+		}
+		const path = this.nextPreRenderPath();
+		if (!path) return;
+		this.dbg('pre-render', path.split('/').pop());
+		void this.loadSection(path).then(() => {
+			window.setTimeout(() => {
+				if (this.destroyed) return;
+				const data = this.sections.get(path);
+				if (data?.component) {
+					const rect = data.el.getBoundingClientRect();
+					const crect = this.scrollContainer.getBoundingClientRect();
+					const inZone = rect.bottom > crect.top - OVERSCAN_TOP && rect.top < crect.bottom + this.loadMargin;
+					// Park the measured DOM in the cache so memory stays bounded.
+					if (!inZone) this.unloadSection(path);
+				}
+				this.schedulePreRender();
+			}, 80);
+		});
+	}
+
+	private nextPreRenderPath(): string | null {
+		const anchor = this.findAnchorAt(this.scrollContainer.scrollTop);
+		const center = anchor?.idx ?? 0;
+		for (let step = 0; step < this.fileOrder.length; step++) {
+			const candidates = [center - step, center + step];
+			for (const idx of candidates) {
+				if (idx < 0 || idx >= this.fileOrder.length) continue;
+				const path = this.fileOrder[idx];
+				if (!path) continue;
+				const data = this.sections.get(path);
+				if (!data || data.component) continue;
+				if (data.heightTrusted) continue;
+				if (this.renderedDomCache.has(path)) continue;
+				return path;
+			}
+		}
+		return null;
 	}
 
 	private recalcOffsets(fromIndex: number): void {
@@ -345,11 +476,22 @@ export class AbsoluteSectionManager {
 	}
 
 	private findAnchorAt(scrollTop: number): { idx: number; anchorOffset: number } | null {
+		let lastIdx = -1;
 		for (let i = 0; i < this.fileOrder.length; i++) {
 			const data = this.sections.get(this.fileOrder[i] ?? '');
 			if (!data) continue;
-			if (data.offset <= scrollTop && data.offset + data.height > scrollTop) {
+			lastIdx = i;
+			if (data.offset + data.height > scrollTop) {
+				// Either inside this section or in the gap right above it
+				// (negative anchorOffset). Gaps are constant across a recalc,
+				// so relative compensation stays exact.
 				return { idx: i, anchorOffset: scrollTop - data.offset };
+			}
+		}
+		if (lastIdx >= 0) {
+			const data = this.sections.get(this.fileOrder[lastIdx] ?? '');
+			if (data) {
+				return { idx: lastIdx, anchorOffset: scrollTop - data.offset };
 			}
 		}
 		return null;
@@ -363,6 +505,7 @@ export class AbsoluteSectionManager {
 		const delta = Math.abs(target - currentScrollTop);
 		if (delta > SCROLL_THRESHOLD) {
 			this.isAdjustingScroll = true;
+			this.dbg('compensate', `${Math.round(currentScrollTop)} -> ${Math.round(target)}`, `delta=${Math.round(target - currentScrollTop)}`);
 			this.scrollContainer.scrollTop = target;
 		}
 	}
@@ -378,6 +521,7 @@ export class AbsoluteSectionManager {
 	private processUpdates(): void {
 		const freshScrollTop = this.scrollContainer.scrollTop;
 		const anchor = this.findAnchorAt(freshScrollTop);
+		this.dbg('update', `pending=${this.pendingHeights.size}`, anchor ? `anchor=${anchor.idx}@${Math.round(anchor.anchorOffset)}` : 'anchor=null', `scrollTop=${Math.round(freshScrollTop)}`);
 
 		if (this.pendingWidthChange) {
 			this.pendingWidthChange = false;
@@ -388,6 +532,7 @@ export class AbsoluteSectionManager {
 						data.height = this.estimateHeight(content);
 					}
 					this.heightCache.delete(path);
+					data.heightTrusted = false;
 				}
 			}
 		}
@@ -398,6 +543,8 @@ export class AbsoluteSectionManager {
 				if (!data) continue;
 				data.height = newHeight;
 				this.heightCache.set(path, newHeight);
+				this.persistence.put?.(path, data.mtime, newHeight);
+				data.heightTrusted = true;
 			}
 			this.pendingHeights.clear();
 		}
@@ -430,12 +577,16 @@ export class AbsoluteSectionManager {
 		}
 
 		this.rawContent.delete(path);
-		this.heightCache.delete(path);
+		this.renderedDomCache.delete(path);
+		const file = this.app.vault.getFileByPath(path);
+		if (file instanceof TFile) {
+			data.mtime = file.stat.mtime;
+		}
+		// Keep the last measured height and heading flags until the re-render
+		// produces new measurements: collapsing the height here would shift
+		// everything below without any scroll compensation.
+		data.renderGen++;
 		data.el.empty();
-		data.height = 35;
-		data.startsWithHeading = false;
-		data.endsWithHeading = false;
-		this.recalcOffsets(this.fileOrder.indexOf(path));
 		void this.loadSection(path);
 	}
 
@@ -457,6 +608,7 @@ export class AbsoluteSectionManager {
 			this.scrollContainer.removeEventListener('scroll', this.boundScrollHandler);
 		}
 		window.clearTimeout(this.coldStartTimer);
+		window.clearTimeout(this.idleTimer);
 		for (const [, data] of this.sections) {
 			data.component?.unload();
 		}
