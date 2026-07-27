@@ -1,92 +1,202 @@
-# Obsidian Sample Plugin
+# Book View
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Renders a sequence of linked notes as a single scrollable document with a table of contents, lazy loading, and a script API for bulk text operations.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## Features
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
+- Manifest-driven: a frontmatter property `book-view: true` activates the view
+- Table of contents with scroll spy, nesting guides, and Markdown rendering
+- Absolute-positioning layout with lazy section loading and height caching
+- Wheel flick acceleration for trackpad/mouse scroll
+- Alt/Ctrl+dblclick opens an atom in a popout window
+- Script API for external tools (QuickAdd, Templater, etc.) to read and modify atom text
 
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and outputs a Notice on click.
-- Registers a global interval which logs 'setInterval' to the console.
+## Installation
 
-## First time developing plugins?
+Copy `main.js`, `styles.css`, and `manifest.json` to your vault:
 
-Quick starting guide for new plugin devs:
+```
+<Vault>/.obsidian/plugins/Book-View/
+```
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `src/main.ts` to `main.js`.
-- Make changes to `src/main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+Enable in **Settings > Community plugins**.
 
-## Releasing new releases
+## Script API
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+Book View exposes a global `window.BookView` API that external scripts (QuickAdd macros, Templater templates, custom plugins) can use to read and modify atom text.
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+### Setup
 
-## Adding your plugin to the community plugin list
+1. Open **Settings > Book View > Scripts**
+2. Click **+ Add script**
+3. Enter a label (e.g. "Replace text") and a command ID (e.g. `quickadd:macro:Replace text`)
+4. Use **Find...** to search available commands
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+Once configured, right-click inside Book View or on a ToC heading to see the script in the context menu.
 
-## How to use
+### Accessing the API
 
-- Clone this repo.
-- Make sure your NodeJS is at least v18 (`node --version`).
-- `npm i` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+From any Obsidian script context (QuickAdd macro, Templater, etc.):
 
-## Manually installing the plugin
+```typescript
+const bv = (window as any).BookView;
+```
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+Or in a typed context:
 
-## Improve code quality with eslint
+```typescript
+declare const window: Window & { BookView?: BookViewAPI };
+const bv = window.BookView;
+if (!bv) return;
+```
 
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code.
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+### Types
 
-## Funding URL
+```typescript
+interface Atom {
+  text: string;      // one line from the note
+  filePath: string;  // vault-relative path, e.g. "Notes/Page1.md"
+  line: number;      // 0-based line number in the file
+}
 
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-	"fundingUrl": "https://buymeacoffee.com"
+interface Change {
+  filePath: string;  // target file path
+  line: number;      // 0-based line number to replace
+  newText: string;   // replacement text for that line
 }
 ```
 
-If you have multiple URLs, you can also do:
+### Methods
 
-```json
-{
-	"fundingUrl": {
-		"Buy Me a Coffee": "https://buymeacoffee.com",
-		"GitHub Sponsor": "https://github.com/sponsors",
-		"Patreon": "https://www.patreon.com/"
-	}
+#### `getSelectedText(): string`
+
+Returns the text currently selected in the Book View DOM. If no text is selected, returns an empty string.
+
+```typescript
+const selected = bv.getSelectedText();
+if (selected) {
+  console.log("User selected:", selected);
 }
 ```
 
-## API Documentation
+#### `getAtomsUnderHeading(entryIndex?: number): Promise<Atom[]>`
 
-See https://docs.obsidian.md
+Returns all atoms (one `Atom` per line per file) under a heading. Scope: from the given heading down to the next heading of equal or higher level.
+
+- If `entryIndex` is omitted, uses the heading that was right-clicked.
+- If no heading context exists, falls back to `getAllAtoms()`.
+
+Each `Atom` represents **one line** of a file. Files are read via `vault.cachedRead()`.
+
+```typescript
+// Get atoms under the heading the user right-clicked
+const atoms = await bv.getAtomsUnderHeading();
+
+// Or specify an explicit ToC index
+const atoms = await bv.getAtomsUnderHeading(3);
+
+for (const atom of atoms) {
+  console.log(`${atom.filePath}:${atom.line} -> ${atom.text}`);
+}
+```
+
+#### `getAllAtoms(): Promise<Atom[]>`
+
+Returns all atoms from every note linked in the current Book View manifest.
+
+```typescript
+const atoms = await bv.getAllAtoms();
+console.log(`Total lines across all atoms: ${atoms.length}`);
+```
+
+#### `replaceText(changes: Change[], onApplied?: (paths: string[]) => void): void`
+
+Opens a preview modal showing all proposed changes. The user reviews and clicks **Apply** to commit.
+
+- `changes` — array of `Change` objects (one per line to replace)
+- `onApplied` — optional callback receiving the list of file paths that were modified
+
+After applying, Book View automatically re-renders affected sections.
+
+```typescript
+const atoms = await bv.getAtomsUnderHeading();
+
+const changes: Change[] = atoms
+  .filter(a => a.text.includes("old term"))
+  .map(a => ({
+    filePath: a.filePath,
+    line: a.line,
+    newText: a.text.replace("old term", "new term"),
+  }));
+
+bv.replaceText(changes, (appliedPaths) => {
+  console.log("Modified files:", appliedPaths);
+});
+```
+
+### Context
+
+When a script is triggered from the right-click menu, Book View sets a context that the API reads:
+
+```typescript
+// Available after a right-click menu trigger
+bv.getSelectedText();  // text the user had selected (or "")
+bv.getContext();       // { selection: string, entryIndex: number }
+```
+
+- `selection` — the DOM text selection at the time of right-click
+- `entryIndex` — the ToC entry index if a heading was right-clicked (-1 otherwise)
+
+### Full Example: QuickAdd Macro
+
+Create a QuickAdd macro that replaces a word across all atoms under a heading:
+
+```typescript
+// In a QuickAdd User Script:
+const bv = (window as any).BookView;
+if (!bv) return;
+
+const selected = bv.getSelectedText();
+const replacement = await tp.system.prompt("Replace with:");
+
+const atoms = await bv.getAtomsUnderHeading();
+
+const changes = atoms
+  .filter(a => a.text.includes(selected))
+  .map(a => ({
+    filePath: a.filePath,
+    line: a.line,
+    newText: a.text.replaceAll(selected, replacement),
+  }));
+
+bv.replaceText(changes);
+```
+
+### Full Example: Templater Template
+
+```typescript
+<%*
+const bv = app.plugins.plugins["Book-View"]?.api
+  ?? window.BookView;
+if (!bv) return;
+
+const atoms = await bv.getAllAtoms();
+const count = atoms.filter(a => a.text.includes("TODO")).length;
+tR += `Found ${count} lines containing "TODO"`;
+%>
+```
+
+## Development
+
+```bash
+npm install
+npm run dev     # watch mode
+npm run build   # production build
+npm run lint    # eslint
+```
+
+Build artifacts (`main.js`, `styles.css`, `manifest.json`) are copied to the vault plugin folder automatically.
+
+## License
+
+MIT
