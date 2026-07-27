@@ -30,7 +30,8 @@ export class TocController {
 	private scrollHandler: (() => void) | null = null;
 	private highlightEl: HTMLElement | null = null;
 	private fadeTimer: number = 0;
-	private isScrolling = false;
+	private lastScrollTop = 0;
+	private lastScrollTime = 0;
 
 	constructor(
 		containerEl: HTMLElement,
@@ -182,8 +183,16 @@ export class TocController {
 		if (this.tocItems.length === 0) return;
 
 		this.scrollHandler = () => {
+			const now = performance.now();
+			const scrollTop = this.scrollContainer.scrollTop;
+			const dt = now - this.lastScrollTime;
+			const ds = Math.abs(scrollTop - this.lastScrollTop);
+			const speed = dt > 0 ? (ds / dt) * 1000 : 0;
+			this.lastScrollTop = scrollTop;
+			this.lastScrollTime = now;
+
 			this.calculatePositions();
-			this.highlightByPosition();
+			this.highlightByPosition(speed > 1500);
 
 			if (this.highlightEl) {
 				this.highlightEl.classList.remove('fading');
@@ -197,7 +206,7 @@ export class TocController {
 		this.scrollContainer.addEventListener('scroll', this.scrollHandler, { passive: true });
 	}
 
-	private highlightByPosition(): void {
+	private highlightByPosition(fast: boolean): void {
 		if (this.headingPositions.length === 0) return;
 
 		const scrollTop = this.scrollContainer.scrollTop;
@@ -213,11 +222,11 @@ export class TocController {
 		}
 
 		if (bestIndex >= 0) {
-			this.setActiveByIndex(bestIndex);
+			this.setActiveByIndex(bestIndex, fast);
 		}
 	}
 
-	private setActiveByIndex(index: number): boolean {
+	private setActiveByIndex(index: number, instant = false): boolean {
 		const el = this.tocItems[index];
 		if (!el) return false;
 
@@ -243,7 +252,7 @@ export class TocController {
 		const targetScrollTop = elTop - containerHeight * TOC_ACTIVE_POSITION + elHeight / 2;
 
 		if (Math.abs(targetScrollTop - containerScrollTop) > 2) {
-			tocContainer.scrollTo({ top: targetScrollTop, behavior: 'auto' });
+			tocContainer.scrollTo({ top: targetScrollTop, behavior: instant ? 'auto' : 'smooth' });
 		}
 
 		return changed;
@@ -276,7 +285,7 @@ export class TocController {
 		this.scrollContainer.scrollTo({ top: correctedScroll, behavior: 'auto' });
 
 		this.highlightHeading(targetHeading as HTMLElement);
-		this.setActiveByIndex(entryIndex);
+		this.setActiveByIndex(entryIndex, true);
 	}
 
 	private highlightHeading(el: HTMLElement): void {
