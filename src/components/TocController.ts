@@ -28,6 +28,9 @@ export class TocController {
 
 	private headingPositions: number[] = [];
 	private scrollHandler: (() => void) | null = null;
+	private highlightEl: HTMLElement | null = null;
+	private fadeTimer: number = 0;
+	private isScrolling = false;
 
 	constructor(
 		containerEl: HTMLElement,
@@ -135,6 +138,9 @@ export class TocController {
 			}
 		}
 
+		this.containerEl.style.position = 'relative';
+		this.highlightEl = this.containerEl.createDiv({ cls: 'book-toc-highlight' });
+
 		this.calculatePositions();
 		this.setupScrollSpy();
 	}
@@ -178,6 +184,14 @@ export class TocController {
 		this.scrollHandler = () => {
 			this.calculatePositions();
 			this.highlightByPosition();
+
+			if (this.highlightEl) {
+				this.highlightEl.classList.remove('fading');
+			}
+			window.clearTimeout(this.fadeTimer);
+			this.fadeTimer = window.setTimeout(() => {
+				this.highlightEl?.classList.add('fading');
+			}, 400);
 		};
 
 		this.scrollContainer.addEventListener('scroll', this.scrollHandler, { passive: true });
@@ -214,6 +228,12 @@ export class TocController {
 		}
 		el.addClass('is-active');
 		this.activeHeading = el;
+
+		if (this.highlightEl) {
+			this.highlightEl.classList.remove('fading');
+			this.highlightEl.style.top = `${el.offsetTop}px`;
+			this.highlightEl.style.height = `${el.offsetHeight}px`;
+		}
 
 		const tocContainer = this.containerEl;
 		const containerHeight = tocContainer.clientHeight;
@@ -273,6 +293,8 @@ export class TocController {
 			this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;
 		}
+		window.clearTimeout(this.fadeTimer);
+		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
 		this.tocItems = [];
