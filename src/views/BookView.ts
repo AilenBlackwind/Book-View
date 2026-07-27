@@ -153,6 +153,10 @@ export class BookView extends ItemView {
 		);
 		this.tocController.build();
 
+		this.absoluteManager.onSectionRendered = (path, container) => {
+			this.tocController?.tagHeadings(path, container);
+		};
+
 		this.tocController.onEntryContextMenu = (entryIndex, evt) => {
 			const masterFile = this.app.vault.getFileByPath(this.filePath);
 			if (!(masterFile instanceof TFile)) return;

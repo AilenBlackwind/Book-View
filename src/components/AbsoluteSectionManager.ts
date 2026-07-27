@@ -68,6 +68,7 @@ export class AbsoluteSectionManager {
 	}
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
+	onSectionRendered: ((path: string, container: HTMLElement) => void) | null = null;
 
 	constructor(
 		scrollContainer: HTMLElement,
@@ -344,6 +345,7 @@ export class AbsoluteSectionManager {
 		data.el.empty();
 		data.el.appendChild(renderContainer);
 		this.sectionResizeObserver.observe(data.el);
+		this.onSectionRendered?.(path, renderContainer);
 		this.scheduleUpdate();
 	}
 
