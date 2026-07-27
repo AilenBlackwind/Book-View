@@ -1,5 +1,7 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type BookViewPlugin from '../main';
+import type { ScriptEntry } from '../settings';
+import { CommandSuggestModal } from './CommandSuggestModal';
 
 export class BookViewSettingTab extends PluginSettingTab {
 	plugin: BookViewPlugin;
@@ -116,5 +118,114 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		this.renderScripts(containerEl);
+	}
+
+	private renderScripts(containerEl: HTMLElement): void {
+		containerEl.createEl('h3', { text: 'Scripts' });
+		containerEl.createEl('p', {
+			text: 'Commands shown in the right-click menu inside Book View. External scripts (QuickAdd, Templater, etc.) can use the BookView API to read and modify atom text.',
+			cls: 'setting-item-description',
+		});
+
+		const scripts = this.plugin.settings.scripts;
+
+		const listDiv = containerEl.createDiv();
+
+		const renderList = () => {
+			listDiv.empty();
+
+			for (let i = 0; i < scripts.length; i++) {
+				const entry = scripts[i];
+				if (!entry) continue;
+
+				const row = listDiv.createDiv();
+				row.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-bottom: 4px;';
+
+				const moveUp = row.createEl('button', { text: '\u25B2' });
+				moveUp.style.cssText = 'width: 22px; height: 22px; padding: 0; border: 1px solid var(--background-modifier-border); border-radius: 3px; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;';
+				moveUp.title = 'Move up';
+				moveUp.disabled = i === 0;
+			moveUp.onclick = async () => {
+				if (i > 0) {
+					const prev = scripts[i - 1];
+					if (prev) {
+						scripts[i - 1] = entry;
+						scripts[i] = prev;
+						await this.plugin.saveSettings();
+						renderList();
+					}
+				}
+			};
+
+			const moveDown = row.createEl('button', { text: '\u25BC' });
+			moveDown.style.cssText = 'width: 22px; height: 22px; padding: 0; border: 1px solid var(--background-modifier-border); border-radius: 3px; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;';
+			moveDown.title = 'Move down';
+			moveDown.disabled = i === scripts.length - 1;
+			moveDown.onclick = async () => {
+				if (i < scripts.length - 1) {
+					const next = scripts[i + 1];
+					if (next) {
+						scripts[i + 1] = entry;
+						scripts[i] = next;
+						await this.plugin.saveSettings();
+						renderList();
+					}
+				}
+			};
+
+				const labelInput = row.createEl('input', { type: 'text' });
+				labelInput.value = entry.label;
+				labelInput.style.cssText = 'flex: 1; background: var(--background-primary);';
+				labelInput.placeholder = 'Label (e.g. Replace text)';
+				labelInput.onchange = async () => {
+					entry.label = labelInput.value;
+					await this.plugin.saveSettings();
+				};
+
+				const cmdInput = row.createEl('input', { type: 'text' });
+				cmdInput.value = entry.commandId;
+				cmdInput.style.cssText = 'flex: 1; background: var(--background-primary);';
+				cmdInput.placeholder = 'Command ID (e.g. quickadd:macro:MyMacro)';
+				cmdInput.onchange = async () => {
+					entry.commandId = cmdInput.value;
+					await this.plugin.saveSettings();
+				};
+
+				const searchBtn = row.createEl('button', { text: 'Find...' });
+				searchBtn.style.cssText = 'background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 12px;';
+				searchBtn.title = 'Search for a command';
+				searchBtn.onclick = () => {
+					new CommandSuggestModal(this.app, (command) => {
+						labelInput.value = command.name;
+						cmdInput.value = command.id;
+						entry.label = command.name;
+						entry.commandId = command.id;
+						this.plugin.saveSettings();
+					}).open();
+				};
+
+				const removeBtn = row.createEl('button', { text: '\u00D7' });
+				removeBtn.style.cssText = 'background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 16px;';
+				removeBtn.onclick = async () => {
+					scripts.splice(i, 1);
+					await this.plugin.saveSettings();
+					renderList();
+				};
+			}
+		};
+
+		renderList();
+
+		const addRow = containerEl.createDiv();
+		addRow.style.cssText = 'display: flex; gap: 8px; margin-top: 8px;';
+		const addBtn = addRow.createEl('button', { text: '+ Add script' });
+		addBtn.onclick = async () => {
+			const newEntry: ScriptEntry = { label: 'New script', commandId: '' };
+			scripts.push(newEntry);
+			await this.plugin.saveSettings();
+			renderList();
+		};
 	}
 }

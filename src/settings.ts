@@ -1,3 +1,8 @@
+export interface ScriptEntry {
+	label: string;
+	commandId: string;
+}
+
 export interface BookViewSettings {
 	tocWidth: number;
 	tocShowFileNames: boolean;
@@ -7,6 +12,7 @@ export interface BookViewSettings {
 	wheelFlickEnabled: boolean;
 	wheelFlickStrength: number;
 	wheelFlickFriction: number;
+	scripts: ScriptEntry[];
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -18,4 +24,5 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	wheelFlickEnabled: true,
 	wheelFlickStrength: 2,
 	wheelFlickFriction: 0.92,
+	scripts: [],
 };

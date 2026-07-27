@@ -5,10 +5,12 @@ import { WheelAccelerator } from './components/WheelAccelerator';
 import { BookViewSettings, DEFAULT_SETTINGS } from './settings';
 import { BookViewSettingTab } from './ui/SettingsTab';
 import { BufferManager } from './BufferManager';
+import { BookViewAPI } from './BookViewAPI';
 
 export default class BookViewPlugin extends Plugin {
 	settings: BookViewSettings = DEFAULT_SETTINGS;
 	bufferManager: BufferManager = null as unknown as BufferManager;
+	api: BookViewAPI | null = null;
 	private skipPaths = new Set<string>();
 	heightStore: Record<string, { m: number; h: number }> = {};
 	private saveHeightsTimer = 0;
@@ -36,6 +38,19 @@ export default class BookViewPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 		this.bufferManager = new BufferManager(this.app);
+		this.api = new BookViewAPI(
+			this.app,
+			() => {
+				const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BOOK_VIEW);
+				for (const leaf of leaves) {
+					if (leaf.view instanceof BookView && leaf.view.filePath) {
+						return leaf.view;
+					}
+				}
+				return null;
+			},
+		);
+		window.BookView = this.api;
 		this.addSettingTab(new BookViewSettingTab(this.app, this));
 
 		// Register the wheel interceptor as early as possible: among capture-phase
@@ -113,7 +128,10 @@ export default class BookViewPlugin extends Plugin {
 		});
 	}
 
-	onunload() {}
+	onunload() {
+		delete window.BookView;
+		this.api = null;
+	}
 
 	async loadSettings() {
 		const data = await this.loadData() as (Partial<BookViewSettings> & { measuredHeights?: Record<string, { m: number; h: number }> }) | null;

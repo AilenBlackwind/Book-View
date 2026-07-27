@@ -1,8 +1,9 @@
 import { ItemView, Menu, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
-import { TocController } from '../components/TocController';
+import { TocController, TocEntry } from '../components/TocController';
 import { WheelAccelerator } from '../components/WheelAccelerator';
+import { showScriptMenu, dismissAllMenus } from '../ui/ContextMenu';
 import type BookViewPlugin from '../main';
 
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
@@ -89,6 +90,10 @@ export class BookView extends ItemView {
 		this.tocController.build();
 	}
 
+	getTocEntries(): TocEntry[] {
+		return this.tocController?.getEntries() ?? [];
+	}
+
 	refreshAppliedAtoms(paths: string[]): void {
 		for (const path of paths) {
 			this.absoluteManager?.markDirty(path);
@@ -161,6 +166,8 @@ export class BookView extends ItemView {
 			const masterFile = this.app.vault.getFileByPath(this.filePath);
 			if (!(masterFile instanceof TFile)) return;
 
+			const scripts = this.plugin?.settings.scripts ?? [];
+
 			const menu = new Menu();
 			menu.addItem((item) => {
 				item.setTitle('Create buffer note').onClick(() => {
@@ -171,6 +178,20 @@ export class BookView extends ItemView {
 					);
 				});
 			});
+
+			if (scripts.length > 0) {
+				menu.addSeparator();
+				for (const script of scripts) {
+					menu.addItem((item) => {
+						item.setTitle(script.label).onClick(() => {
+							this.plugin?.api?.setContext({ selection: '', entryIndex });
+							(this.app as unknown as { commands: { executeCommandById: (id: string) => void } })
+								.commands.executeCommandById(script.commandId);
+						});
+					});
+				}
+			}
+
 			menu.showAtMouseEvent(evt);
 		};
 
@@ -190,6 +211,29 @@ export class BookView extends ItemView {
 			const leaf = this.app.workspace.openPopoutLeaf();
 			this.popoutLeaf = leaf;
 			void leaf.openFile(targetFile, { state: { mode: 'source' } });
+		});
+
+		this.registerDomEvent(this.contentContainer, 'contextmenu', (evt: MouseEvent) => {
+			const scripts = this.plugin?.settings.scripts;
+			if (!scripts || scripts.length === 0) return;
+
+			evt.preventDefault();
+			evt.stopPropagation();
+
+			const selection = window.getSelection()?.toString() ?? '';
+
+			const closestHeading = (evt.target as HTMLElement).closest('h1, h2, h3, h4, h5, h6');
+			let entryIndex = -1;
+			if (closestHeading instanceof HTMLElement) {
+				const idx = closestHeading.getAttribute('data-entry-index');
+				if (idx !== null) entryIndex = parseInt(idx, 10);
+			}
+
+			showScriptMenu(evt, scripts, this.app, (entry) => {
+				this.plugin?.api?.setContext({ selection, entryIndex });
+				(this.app as unknown as { commands: { executeCommandById: (id: string) => void } })
+					.commands.executeCommandById(entry.commandId);
+			});
 		});
 
 		this.registerEvent(
