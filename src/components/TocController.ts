@@ -1,7 +1,7 @@
 import { App, TFile } from 'obsidian';
 import { BookViewSettings } from '../settings';
-import { HEIGHT_PER_LINE } from './SectionManager';
-import type { SectionManager } from './SectionManager';
+import { HEIGHT_PER_LINE } from './AbsoluteSectionManager';
+import type { AbsoluteSectionManager } from './AbsoluteSectionManager';
 import { renderInlineMarkdown, stripMarkdown } from '../utils/renderInlineMarkdown';
 
 export interface TocEntry {
@@ -20,35 +20,31 @@ export class TocController {
 	private files: TFile[];
 	private app: App;
 	private scrollContainer: HTMLElement;
-	private settings: BookViewSettings;
-	private sectionManager: SectionManager | null = null;
+	private settings: BookViewSettings | null;
+	private absoluteManager: AbsoluteSectionManager | null;
 	private entries: TocEntry[] = [];
 	private tocItems: HTMLElement[] = [];
 	private activeHeading: HTMLElement | null = null;
 	onEntryContextMenu: ((entryIndex: number, evt: MouseEvent) => void) | null = null;
 
-	private fileOffsets: Map<string, number> = new Map();
 	private headingPositions: number[] = [];
 	private scrollHandler: (() => void) | null = null;
 	private settleTimer: number = 0;
-	private pendingCorrection: number | null = null;
 
 	constructor(
 		containerEl: HTMLElement,
 		files: TFile[],
 		app: App,
 		scrollContainer: HTMLElement,
-		settings: BookViewSettings,
+		settings: BookViewSettings | null,
+		absoluteManager: AbsoluteSectionManager | null,
 	) {
 		this.containerEl = containerEl;
 		this.files = files;
 		this.app = app;
 		this.scrollContainer = scrollContainer;
 		this.settings = settings;
-	}
-
-	setSectionManager(sm: SectionManager): void {
-		this.sectionManager = sm;
+		this.absoluteManager = absoluteManager;
 	}
 
 	getEntries(): TocEntry[] {
@@ -65,7 +61,7 @@ export class TocController {
 			cls: 'book-toc-item',
 			attr: { 'data-path': file.path, 'data-line': String(heading.position.start.line), 'data-level': String(heading.level) },
 		});
-		if (this.settings.tocRenderMarkdown) {
+		if (this.settings?.tocRenderMarkdown) {
 			const span = a.createSpan();
 			// sanitized by renderInlineMarkdown which escapes HTML entities
 			// eslint-disable-next-line no-unsanitized/property -- input is escaped by renderInlineMarkdown
@@ -93,7 +89,7 @@ export class TocController {
 		this.tocItems = [];
 
 		const tocEl = this.containerEl.createDiv({ cls: 'book-toc' });
-		if (this.settings.tocGuides) {
+		if (this.settings?.tocGuides) {
 			tocEl.addClass('book-toc-guides');
 		}
 		const listEl = tocEl.createEl('ul', { cls: 'book-toc-list' });
@@ -102,7 +98,7 @@ export class TocController {
 			const cache = this.app.metadataCache.getFileCache(file);
 			if (!cache?.headings) continue;
 
-			if (this.settings.tocShowFileNames) {
+			if (this.settings?.tocShowFileNames) {
 				const fileHeading = listEl.createEl('li', { cls: 'book-toc-file' });
 				fileHeading.createDiv({
 					cls: 'book-toc-file-title',
@@ -146,47 +142,13 @@ export class TocController {
 	}
 
 	calculatePositions(): void {
-		this.fileOffsets.clear();
-		let cumulativeY = 0;
+		if (!this.absoluteManager) return;
 
-		for (const file of this.files) {
-			this.fileOffsets.set(file.path, cumulativeY);
-			const cached = this.sectionManager?.getHeightCache(file.path);
-			if (cached !== undefined) {
-				cumulativeY += cached + 16;
-			} else {
-				const raw = this.sectionManager?.getRawContent(file.path);
-				const est = raw ? Math.max(80, raw.split('\n').length * HEIGHT_PER_LINE) : 300;
-				cumulativeY += est + 16;
-			}
-		}
-
+		const offsets = this.absoluteManager.getAllOffsets();
 		this.headingPositions = this.entries.map((entry) => {
-			const fileOffset = this.fileOffsets.get(entry.file.path) ?? 0;
+			const fileOffset = offsets.get(entry.file.path) ?? 0;
 			return fileOffset + entry.line * HEIGHT_PER_LINE;
 		});
-	}
-
-	updateFileHeight(path: string, estimatedHeight: number, actualHeight: number): void {
-		const delta = actualHeight - estimatedHeight;
-		if (delta === 0) return;
-
-		const fileIndex = this.files.findIndex((f) => f.path === path);
-		if (fileIndex < 0) return;
-
-		for (let i = fileIndex; i < this.files.length; i++) {
-			const filePath = this.files[i]?.path;
-			if (!filePath) break;
-			const current = this.fileOffsets.get(filePath) ?? 0;
-			this.fileOffsets.set(filePath, current + delta);
-		}
-
-		for (let i = 0; i < this.entries.length; i++) {
-			const entry = this.entries[i];
-			if (!entry) continue;
-			const fileOffset = this.fileOffsets.get(entry.file.path) ?? 0;
-			this.headingPositions[i] = fileOffset + entry.line * HEIGHT_PER_LINE;
-		}
 	}
 
 	tagHeadings(path: string, container: HTMLElement): void {
@@ -277,10 +239,10 @@ export class TocController {
 
 	async scrollToHeading(entryIndex: number): Promise<void> {
 		const entry = this.entries[entryIndex];
-		if (!entry) return;
+		if (!entry || !this.absoluteManager) return;
 
-		const fileOffset = this.fileOffsets.get(entry.file.path) ?? 0;
-		const estimatedY = fileOffset + entry.line * HEIGHT_PER_LINE;
+		const sectionOffset = this.absoluteManager.getOffset(entry.file.path);
+		const estimatedY = sectionOffset + entry.line * HEIGHT_PER_LINE;
 
 		this.scrollContainer.scrollTo({ top: Math.max(0, estimatedY - 20), behavior: 'auto' });
 
@@ -288,16 +250,6 @@ export class TocController {
 			`.book-section-placeholder[data-path="${entry.file.path}"]`,
 		);
 		if (!(placeholder instanceof HTMLElement)) return;
-
-		if (!placeholder.querySelector('.markdown-rendered') && this.sectionManager) {
-			await this.sectionManager.loadSectionNow(entry.file.path);
-
-			const actualOffset = this.fileOffsets.get(entry.file.path) ?? 0;
-			const correctedY = actualOffset + entry.line * HEIGHT_PER_LINE;
-			if (Math.abs(correctedY - estimatedY) > 2) {
-				this.scrollContainer.scrollTo({ top: Math.max(0, correctedY - 20), behavior: 'auto' });
-			}
-		}
 
 		await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 
@@ -313,12 +265,6 @@ export class TocController {
 
 		this.highlightHeading(targetHeading as HTMLElement);
 		this.setActiveByIndex(entryIndex);
-	}
-
-	applyPendingCorrection(): void {
-		if (this.pendingCorrection === null) return;
-		this.scrollContainer.scrollTop += this.pendingCorrection;
-		this.pendingCorrection = null;
 	}
 
 	private highlightHeading(el: HTMLElement): void {
@@ -340,7 +286,5 @@ export class TocController {
 		this.entries = [];
 		this.tocItems = [];
 		this.headingPositions = [];
-		this.fileOffsets.clear();
-		this.pendingCorrection = null;
 	}
 }

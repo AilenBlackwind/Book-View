@@ -78,18 +78,6 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Absolute positioning (experimental)')
-			.setDesc('Use absolute positioning for sections instead of normal flow. May reduce scroll jank. Requires view reload.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.absolutePositioning)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.absolutePositioning = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
 			.setName('Wheel flick acceleration')
 			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks. Other scroll plugins are intercepted only within book view.')
 			.addToggle((toggle) =>
