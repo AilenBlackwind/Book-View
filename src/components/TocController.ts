@@ -12,7 +12,6 @@ export interface TocEntry {
 	fileHeadingIndex: number;
 }
 
-const SCROLL_SETTLE_DELAY = 16;
 const TOC_ACTIVE_POSITION = 0.25;
 
 export class TocController {
@@ -29,7 +28,6 @@ export class TocController {
 
 	private headingPositions: number[] = [];
 	private scrollHandler: (() => void) | null = null;
-	private settleTimer: number = 0;
 
 	constructor(
 		containerEl: HTMLElement,
@@ -178,31 +176,25 @@ export class TocController {
 		if (this.tocItems.length === 0) return;
 
 		this.scrollHandler = () => {
-			window.clearTimeout(this.settleTimer);
-			this.settleTimer = window.setTimeout(() => {
-				this.highlightByDOM();
-			}, SCROLL_SETTLE_DELAY);
+			this.calculatePositions();
+			this.highlightByPosition();
 		};
 
 		this.scrollContainer.addEventListener('scroll', this.scrollHandler, { passive: true });
 	}
 
-	private highlightByDOM(): void {
-		const containerRect = this.scrollContainer.getBoundingClientRect();
-		const triggerY = containerRect.top + containerRect.height * 0.3;
+	private highlightByPosition(): void {
+		if (this.headingPositions.length === 0) return;
+
+		const scrollTop = this.scrollContainer.scrollTop;
+		const viewportHeight = this.scrollContainer.clientHeight;
+		const triggerY = scrollTop + viewportHeight * 0.3;
 
 		let bestIndex = -1;
-		let bestDist = Infinity;
-
-		const tagged = Array.from(this.scrollContainer.querySelectorAll<HTMLElement>('[data-entry-index]'));
-		for (const el of tagged) {
-			const rect = el.getBoundingClientRect();
-			if (rect.top <= triggerY) {
-				const dist = triggerY - rect.top;
-				if (dist < bestDist) {
-					bestDist = dist;
-					bestIndex = parseInt(el.getAttribute('data-entry-index') ?? '-1', 10);
-				}
+		for (let i = this.headingPositions.length - 1; i >= 0; i--) {
+			if ((this.headingPositions[i] ?? 0) <= triggerY) {
+				bestIndex = i;
+				break;
 			}
 		}
 
@@ -281,7 +273,6 @@ export class TocController {
 			this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;
 		}
-		window.clearTimeout(this.settleTimer);
 		this.activeHeading = null;
 		this.entries = [];
 		this.tocItems = [];
