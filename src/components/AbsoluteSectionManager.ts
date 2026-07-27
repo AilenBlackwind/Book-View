@@ -4,8 +4,8 @@ import { ManifestLink } from './ManifestParser';
 export const HEIGHT_PER_LINE = 25;
 const HEADING_GAP = 6;
 const TEXT_GAP = 16;
-const OVERSCAN_TOP = 1200;
-const SCROLL_THRESHOLD = 12;
+const OVERSCAN_TOP = 2500;
+const SCROLL_THRESHOLD = 0;
 
 interface SectionData {
 	el: HTMLElement;
