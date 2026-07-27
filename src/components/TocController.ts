@@ -12,7 +12,8 @@ export interface TocEntry {
 	fileHeadingIndex: number;
 }
 
-const SCROLL_SETTLE_DELAY = 150;
+const SCROLL_SETTLE_DELAY = 16;
+const TOC_ACTIVE_POSITION = 0.25;
 
 export class TocController {
 	private containerEl: HTMLElement;
@@ -244,20 +245,7 @@ export class TocController {
 		}
 
 		if (bestIndex >= 0) {
-			const scrolled = this.setActiveByIndex(bestIndex);
-			if (scrolled) {
-				const tocEl = this.tocItems[bestIndex];
-				if (tocEl) {
-					tocEl.removeClass('book-toc-pulse');
-					void tocEl.offsetWidth;
-					tocEl.addClass('book-toc-pulse');
-					const handler = () => {
-						tocEl.removeClass('book-toc-pulse');
-						tocEl.removeEventListener('animationend', handler);
-					};
-					tocEl.addEventListener('animationend', handler);
-				}
-			}
+			this.setActiveByIndex(bestIndex);
 		}
 	}
 
@@ -274,12 +262,14 @@ export class TocController {
 		this.activeHeading = el;
 
 		const tocContainer = this.containerEl;
-		const elRect = el.getBoundingClientRect();
-		const containerRect = tocContainer.getBoundingClientRect();
+		const containerHeight = tocContainer.clientHeight;
+		const containerScrollTop = tocContainer.scrollTop;
+		const elTop = el.offsetTop;
+		const elHeight = el.offsetHeight;
+		const targetScrollTop = elTop - containerHeight * TOC_ACTIVE_POSITION + elHeight / 2;
 
-		if (elRect.top < containerRect.top || elRect.bottom > containerRect.bottom) {
-			el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-			return true;
+		if (Math.abs(targetScrollTop - containerScrollTop) > 2) {
+			tocContainer.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
 		}
 
 		return changed;
