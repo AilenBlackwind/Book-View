@@ -3,8 +3,13 @@ import { getManifestFiles, getManifestLinks } from '../components/ManifestParser
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { TocController, TocEntry } from '../components/TocController';
 import { WheelAccelerator } from '../components/WheelAccelerator';
-import { showScriptMenu, dismissAllMenus } from '../ui/ContextMenu';
+import { showScriptMenu } from '../ui/ContextMenu';
 import type BookViewPlugin from '../main';
+import type { ModifierConfig } from '../settings';
+
+function matchesModifiers(evt: MouseEvent, mod: ModifierConfig): boolean {
+	return evt.altKey === mod.alt && evt.ctrlKey === mod.ctrl && evt.shiftKey === mod.shift && evt.metaKey === mod.meta;
+}
 
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
 
@@ -166,7 +171,7 @@ export class BookView extends ItemView {
 			const masterFile = this.app.vault.getFileByPath(this.filePath);
 			if (!(masterFile instanceof TFile)) return;
 
-			const scripts = this.plugin?.settings.scripts ?? [];
+			const profiles = this.plugin?.settings.menuProfiles ?? [];
 
 			const menu = new Menu();
 			menu.addItem((item) => {
@@ -179,16 +184,18 @@ export class BookView extends ItemView {
 				});
 			});
 
-			if (scripts.length > 0) {
-				menu.addSeparator();
-				for (const script of scripts) {
-					menu.addItem((item) => {
-						item.setTitle(script.label).onClick(() => {
-							this.plugin?.api?.setContext({ selection: '', entryIndex });
-							(this.app as unknown as { commands: { executeCommandById: (id: string) => void } })
-								.commands.executeCommandById(script.commandId);
+			for (const profile of profiles) {
+				if (profile.scripts.length > 0) {
+					menu.addSeparator();
+					for (const script of profile.scripts) {
+						menu.addItem((item) => {
+							item.setTitle(script.label).onClick(() => {
+								this.plugin?.api?.setContext({ selection: '', entryIndex });
+								(this.app as unknown as { commands: { executeCommandById: (id: string) => void } })
+									.commands.executeCommandById(script.commandId);
+							});
 						});
-					});
+					}
 				}
 			}
 
@@ -196,7 +203,8 @@ export class BookView extends ItemView {
 		};
 
 		this.registerDomEvent(this.contentContainer, 'dblclick', (evt: MouseEvent) => {
-			if (!evt.altKey && !evt.ctrlKey) return;
+			const mod = this.plugin?.settings.editorModifiers;
+			if (!mod || !matchesModifiers(evt, mod)) return;
 			evt.preventDefault();
 
 			const placeholder = (evt.target as HTMLElement).closest('.book-section-placeholder');
@@ -214,8 +222,18 @@ export class BookView extends ItemView {
 		});
 
 		this.registerDomEvent(this.contentContainer, 'contextmenu', (evt: MouseEvent) => {
-			const scripts = this.plugin?.settings.scripts;
-			if (!scripts || scripts.length === 0) return;
+			const profiles = this.plugin?.settings.menuProfiles;
+			if (!profiles || profiles.length === 0) return;
+
+			let matchedProfile: import('../settings').MenuProfile | null = null;
+			for (const profile of profiles) {
+				if (matchesModifiers(evt, profile.modifiers)) {
+					matchedProfile = profile;
+					break;
+				}
+			}
+
+			if (!matchedProfile || matchedProfile.scripts.length === 0) return;
 
 			evt.preventDefault();
 			evt.stopPropagation();
@@ -229,7 +247,7 @@ export class BookView extends ItemView {
 				if (idx !== null) entryIndex = parseInt(idx, 10);
 			}
 
-			showScriptMenu(evt, scripts, this.app, (entry) => {
+			showScriptMenu(evt, matchedProfile.scripts, this.app, (entry) => {
 				this.plugin?.api?.setContext({ selection, entryIndex });
 				(this.app as unknown as { commands: { executeCommandById: (id: string) => void } })
 					.commands.executeCommandById(entry.commandId);

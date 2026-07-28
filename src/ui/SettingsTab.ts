@@ -1,7 +1,25 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import type BookViewPlugin from '../main';
-import type { ScriptEntry } from '../settings';
-import { CommandSuggestModal } from './CommandSuggestModal';
+import type { ModifierConfig, MenuProfile } from '../settings';
+import { CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
+
+let _defaultColor: string | null = null;
+
+function getDefaultColor(): string {
+	if (_defaultColor) return _defaultColor;
+	const temp = createDiv();
+	temp.addClass('bv-color-probe');
+	document.body.appendChild(temp);
+	const rgb = getComputedStyle(temp).color;
+	temp.remove();
+	const m = rgb.match(/\d+/g);
+	if (m && m.length >= 3) {
+		_defaultColor = '#' + [0, 1, 2].map((i) => parseInt(m[i]!).toString(16).padStart(2, '0')).join('');
+	} else {
+		_defaultColor = '#000000';
+	}
+	return _defaultColor;
+}
 
 export class BookViewSettingTab extends PluginSettingTab {
 	plugin: BookViewPlugin;
@@ -119,19 +137,118 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		this.renderScripts(containerEl);
+		this.renderSingleModifier(containerEl, 'Popout editor shortcut', 'Modifier keys required to open the native editor in a popout window on double-click.', 'editorModifiers');
+		this.renderMenuProfiles(containerEl);
 	}
 
-	private renderScripts(containerEl: HTMLElement): void {
-		containerEl.createEl('h3', { text: 'Scripts' });
+	private renderSingleModifier(containerEl: HTMLElement, heading: string, description: string, key: 'editorModifiers'): void {
+		new Setting(containerEl)
+			.setName(heading)
+			.setHeading();
+
 		containerEl.createEl('p', {
-			text: 'Commands shown in the right-click menu inside Book View. External scripts (QuickAdd, Templater, etc.) can use the BookView API to read and modify atom text.',
+			text: description,
 			cls: 'setting-item-description',
 		});
 
-		const scripts = this.plugin.settings.scripts;
+		const mod = this.plugin.settings[key];
+		const row = containerEl.createDiv({ cls: 'bv-mod-row' });
 
+		const renderCheckbox = (label: string, modKey: keyof ModifierConfig) => {
+			const labelEl = row.createEl('label');
+			labelEl.addClass('bv-mod-label');
+			const cb = labelEl.createEl('input', { type: 'checkbox' });
+			cb.checked = mod[modKey];
+			cb.onchange = async () => {
+				mod[modKey] = cb.checked;
+				await this.plugin.saveSettings();
+			};
+			labelEl.append(` ${label}`);
+		};
+
+		renderCheckbox('Alt', 'alt');
+		renderCheckbox('Ctrl', 'ctrl');
+		renderCheckbox('Shift', 'shift');
+		renderCheckbox('Meta', 'meta');
+	}
+
+	private renderMenuProfiles(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName('Menu profiles')
+			.setHeading();
+
+		containerEl.createEl('p', {
+			text: 'Each profile is an independent right-click menu with its own modifier shortcut and scripts. Right-click with the matching modifiers to open that profile\'s menu.',
+			cls: 'setting-item-description',
+		});
+
+		const profiles = this.plugin.settings.menuProfiles;
 		const listDiv = containerEl.createDiv();
+
+		const renderAll = () => {
+			listDiv.empty();
+
+			for (let pi = 0; pi < profiles.length; pi++) {
+				const profile = profiles[pi];
+				if (!profile) continue;
+
+				const card = listDiv.createDiv({ cls: 'bv-profile-card' });
+
+				const header = card.createDiv({ cls: 'bv-profile-header' });
+
+				const nameInput = header.createEl('input', { type: 'text', cls: 'bv-profile-name' });
+				nameInput.value = profile.name;
+				nameInput.placeholder = 'Profile name';
+				nameInput.onchange = async () => {
+					profile.name = nameInput.value;
+					await this.plugin.saveSettings();
+				};
+
+				const removeProfileBtn = header.createEl('button', { text: '\u00D7', cls: 'bv-remove-btn' });
+				removeProfileBtn.title = 'Remove profile';
+				removeProfileBtn.onclick = async () => {
+					profiles.splice(pi, 1);
+					await this.plugin.saveSettings();
+					renderAll();
+				};
+
+				card.createEl('p', { text: 'Modifier shortcut:', cls: 'bv-profile-mod-label' });
+				const modRow = card.createDiv({ cls: 'bv-mod-row' });
+
+				const renderModCheckbox = (label: string, modKey: keyof ModifierConfig) => {
+					const labelEl = modRow.createEl('label');
+					labelEl.addClass('bv-mod-label');
+					const cb = labelEl.createEl('input', { type: 'checkbox' });
+					cb.checked = profile.modifiers[modKey];
+					cb.onchange = async () => {
+						profile.modifiers[modKey] = cb.checked;
+						await this.plugin.saveSettings();
+					};
+					labelEl.append(` ${label}`);
+				};
+
+				renderModCheckbox('Alt', 'alt');
+				renderModCheckbox('Ctrl', 'ctrl');
+				renderModCheckbox('Shift', 'shift');
+				renderModCheckbox('Meta', 'meta');
+
+				this.renderProfileScripts(card, profile, renderAll);
+			}
+		};
+
+		renderAll();
+
+		const addBtn = listDiv.createEl('button', { text: '+ add profile' });
+		addBtn.onclick = async () => {
+			profiles.push({ name: 'New profile', modifiers: { alt: false, ctrl: false, shift: false, meta: false }, scripts: [] });
+			await this.plugin.saveSettings();
+			renderAll();
+		};
+	}
+
+	private renderProfileScripts(card: HTMLElement, profile: MenuProfile, onReorder: () => void): void {
+		const scripts = profile.scripts;
+		const listDiv = card.createDiv({ cls: 'bv-profile-scripts' });
 
 		const renderList = () => {
 			listDiv.empty();
@@ -140,61 +257,80 @@ export class BookViewSettingTab extends PluginSettingTab {
 				const entry = scripts[i];
 				if (!entry) continue;
 
-				const row = listDiv.createDiv();
-				row.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-bottom: 4px;';
+				if (entry.isSeparator) {
+					const row = listDiv.createDiv({ cls: 'bv-script-row' });
+					this.renderMoveButtons(row, scripts, i, renderList);
 
-				const moveUp = row.createEl('button', { text: '\u25B2' });
-				moveUp.style.cssText = 'width: 22px; height: 22px; padding: 0; border: 1px solid var(--background-modifier-border); border-radius: 3px; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;';
-				moveUp.title = 'Move up';
-				moveUp.disabled = i === 0;
-			moveUp.onclick = async () => {
-				if (i > 0) {
-					const prev = scripts[i - 1];
-					if (prev) {
-						scripts[i - 1] = entry;
-						scripts[i] = prev;
+					const sepIcon = row.createSpan({ cls: 'bv-sep-icon' });
+					sepIcon.setText('\u2014');
+
+					row.createSpan({ cls: 'bv-sep-label', text: 'Separator' });
+
+					const removeBtn = row.createEl('button', { text: '\u00D7', cls: 'bv-remove-btn' });
+					removeBtn.onclick = async () => {
+						scripts.splice(i, 1);
 						await this.plugin.saveSettings();
 						renderList();
-					}
-				}
-			};
+					};
 
-			const moveDown = row.createEl('button', { text: '\u25BC' });
-			moveDown.style.cssText = 'width: 22px; height: 22px; padding: 0; border: 1px solid var(--background-modifier-border); border-radius: 3px; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;';
-			moveDown.title = 'Move down';
-			moveDown.disabled = i === scripts.length - 1;
-			moveDown.onclick = async () => {
-				if (i < scripts.length - 1) {
-					const next = scripts[i + 1];
-					if (next) {
-						scripts[i + 1] = entry;
-						scripts[i] = next;
-						await this.plugin.saveSettings();
-						renderList();
-					}
+					continue;
 				}
-			};
 
-				const labelInput = row.createEl('input', { type: 'text' });
+				const row = listDiv.createDiv({ cls: 'bv-script-row' });
+				this.renderMoveButtons(row, scripts, i, renderList);
+
+				const labelInput = row.createEl('input', { type: 'text', cls: 'bv-script-input' });
 				labelInput.value = entry.label;
-				labelInput.style.cssText = 'flex: 1; background: var(--background-primary);';
 				labelInput.placeholder = 'Label (e.g. Replace text)';
 				labelInput.onchange = async () => {
 					entry.label = labelInput.value;
 					await this.plugin.saveSettings();
 				};
 
-				const cmdInput = row.createEl('input', { type: 'text' });
+				const iconBtn = row.createEl('button', { cls: 'bv-icon-btn' });
+				iconBtn.title = 'Choose icon';
+				const renderIcon = () => {
+					iconBtn.empty();
+					if (entry.icon) {
+						setIcon(iconBtn, entry.icon);
+					} else {
+						iconBtn.setText('?');
+					}
+				};
+				renderIcon();
+				iconBtn.onclick = () => {
+					new IconSuggestModal(this.app, (iconName) => {
+						entry.icon = iconName;
+						renderIcon();
+						void this.plugin.saveSettings();
+					}).open();
+				};
+
+				const colorInput = row.createEl('input', { type: 'color', cls: 'bv-color-input' });
+				colorInput.value = entry.color || getDefaultColor();
+				colorInput.title = 'Item color';
+				colorInput.onchange = () => {
+					entry.color = colorInput.value;
+					void this.plugin.saveSettings();
+				};
+
+				const clearColorBtn = row.createEl('button', { text: '\u00D7', cls: 'bv-clear-color-btn' });
+				clearColorBtn.title = 'Clear color';
+				clearColorBtn.onclick = async () => {
+					entry.color = undefined;
+					colorInput.value = getDefaultColor();
+					await this.plugin.saveSettings();
+				};
+
+				const cmdInput = row.createEl('input', { type: 'text', cls: 'bv-script-input' });
 				cmdInput.value = entry.commandId;
-				cmdInput.style.cssText = 'flex: 1; background: var(--background-primary);';
-				cmdInput.placeholder = 'Command ID (e.g. quickadd:macro:MyMacro)';
+				cmdInput.placeholder = 'Command ID (e.g. Quickadd:macro:mymacro)';
 				cmdInput.onchange = async () => {
 					entry.commandId = cmdInput.value;
 					await this.plugin.saveSettings();
 				};
 
-				const searchBtn = row.createEl('button', { text: 'Find...' });
-				searchBtn.style.cssText = 'background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 12px;';
+				const searchBtn = row.createEl('button', { text: 'Find...', cls: 'bv-find-btn' });
 				searchBtn.title = 'Search for a command';
 				searchBtn.onclick = () => {
 					new CommandSuggestModal(this.app, (command) => {
@@ -202,12 +338,11 @@ export class BookViewSettingTab extends PluginSettingTab {
 						cmdInput.value = command.id;
 						entry.label = command.name;
 						entry.commandId = command.id;
-						this.plugin.saveSettings();
+						void this.plugin.saveSettings();
 					}).open();
 				};
 
-				const removeBtn = row.createEl('button', { text: '\u00D7' });
-				removeBtn.style.cssText = 'background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 16px;';
+				const removeBtn = row.createEl('button', { text: '\u00D7', cls: 'bv-remove-btn' });
 				removeBtn.onclick = async () => {
 					scripts.splice(i, 1);
 					await this.plugin.saveSettings();
@@ -218,14 +353,52 @@ export class BookViewSettingTab extends PluginSettingTab {
 
 		renderList();
 
-		const addRow = containerEl.createDiv();
-		addRow.style.cssText = 'display: flex; gap: 8px; margin-top: 8px;';
-		const addBtn = addRow.createEl('button', { text: '+ Add script' });
+		const addRow = listDiv.createDiv({ cls: 'bv-add-row' });
+		const addBtn = addRow.createEl('button', { text: '+ add script' });
 		addBtn.onclick = async () => {
-			const newEntry: ScriptEntry = { label: 'New script', commandId: '' };
-			scripts.push(newEntry);
+			scripts.push({ label: 'New script', commandId: '' });
 			await this.plugin.saveSettings();
 			renderList();
+		};
+		const addSepBtn = addRow.createEl('button', { text: '+ separator' });
+		addSepBtn.onclick = async () => {
+			scripts.push({ label: '', commandId: '', isSeparator: true });
+			await this.plugin.saveSettings();
+			renderList();
+		};
+	}
+
+	private renderMoveButtons(row: HTMLElement, list: unknown[], index: number, onReorder: () => void): void {
+		const moveUp = row.createEl('button', { text: '\u25B2', cls: 'bv-move-btn' });
+		moveUp.title = 'Move up';
+		moveUp.disabled = index === 0;
+		moveUp.onclick = async () => {
+			if (index > 0) {
+				const prev = list[index - 1];
+				const curr = list[index];
+				if (prev !== undefined && curr !== undefined) {
+					list[index - 1] = curr;
+					list[index] = prev;
+					await this.plugin.saveSettings();
+					onReorder();
+				}
+			}
+		};
+
+		const moveDown = row.createEl('button', { text: '\u25BC', cls: 'bv-move-btn' });
+		moveDown.title = 'Move down';
+		moveDown.disabled = index === list.length - 1;
+		moveDown.onclick = async () => {
+			if (index < list.length - 1) {
+				const next = list[index + 1];
+				const curr = list[index];
+				if (next !== undefined && curr !== undefined) {
+					list[index + 1] = curr;
+					list[index] = next;
+					await this.plugin.saveSettings();
+					onReorder();
+				}
+			}
 		};
 	}
 }

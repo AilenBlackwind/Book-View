@@ -117,7 +117,7 @@ export class WheelAccelerator {
 	private findScrollableTarget(target: EventTarget | null): HTMLElement {
 		let el = target instanceof Element ? target : null;
 		while (el && el !== this.container) {
-			if (el instanceof HTMLElement) {
+			if (el.instanceOf(HTMLElement)) {
 				const style = getComputedStyle(el);
 				if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
 					return el;

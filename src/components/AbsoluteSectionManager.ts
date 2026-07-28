@@ -514,7 +514,7 @@ export class AbsoluteSectionManager {
 
 	private scheduleUpdate(): void {
 		if (this.rafId) return;
-		this.rafId = requestAnimationFrame(() => {
+		this.rafId = window.requestAnimationFrame(() => {
 			this.rafId = 0;
 			this.processUpdates();
 		});

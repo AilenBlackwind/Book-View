@@ -1,4 +1,4 @@
-import { App } from 'obsidian';
+import { App, setIcon } from 'obsidian';
 import { computePosition, flip, shift, offset, size } from '@floating-ui/dom';
 import type { ScriptEntry } from '../settings';
 
@@ -6,9 +6,23 @@ export function dismissAllMenus(): void {
 	const menus = document.querySelectorAll('[data-bv-menu]');
 	Array.from(menus).forEach((el) => {
 		const bvEl = el as HTMLElement;
+		clearTimeouts(bvEl);
 		const cleanup = (bvEl as unknown as { _bvCleanup?: () => void })._bvCleanup;
 		if (cleanup) cleanup();
 		bvEl.remove();
+	});
+}
+
+function clearTimeouts(el: HTMLElement): void {
+	const groups = el.querySelectorAll('[data-bv-timeouts]');
+	Array.from(groups).forEach((g) => {
+		const ids = (g as HTMLElement).dataset.bvTimeouts;
+		if (ids) {
+			ids.split(',').forEach((id) => {
+				const n = parseInt(id, 10);
+				if (!isNaN(n)) window.clearTimeout(n);
+			});
+		}
 	});
 }
 
@@ -35,7 +49,7 @@ export function showScriptMenu(
 		getBoundingClientRect: () => DOMRect.fromRect({ x, y, width: 0, height: 0 }),
 	};
 
-	computePosition(virtualEl, menuEl, {
+	void computePosition(virtualEl, menuEl, {
 		placement: 'bottom-start',
 		strategy: 'fixed',
 		middleware: [
@@ -45,7 +59,7 @@ export function showScriptMenu(
 			size({
 				apply({ availableHeight, elements }) {
 					elements.floating.style.maxHeight = `${Math.max(Math.min(availableHeight - 16, 600), 100)}px`;
-					elements.floating.style.overflowY = 'auto';
+					elements.floating.addClass('bv-menu-scrollable');
 				},
 				padding: 8,
 			}),
@@ -65,16 +79,17 @@ function buildMenu(
 	app: App,
 	onExecute: (entry: ScriptEntry) => void,
 ): HTMLElement {
-	const menu = document.createElement('div');
-	menu.className = 'bv-menu';
+	const menu = createDiv({ cls: 'bv-menu' });
 
-	if (scripts.length === 0) {
-		const empty = menu.createDiv({ cls: 'bv-menu-empty', text: 'No scripts configured' });
-		empty.style.cssText = 'padding: 12px 16px; color: var(--text-muted); font-size: 12px; text-align: center;';
+	const valid = scripts.filter((e) => e.commandId || e.isSeparator);
+
+	if (valid.length === 0) {
+		const empty = menu.createDiv({ cls: 'bv-menu-empty' });
+		empty.setText('No commands configured');
 		return menu;
 	}
 
-	for (const entry of scripts) {
+	for (const entry of valid) {
 		menu.appendChild(createItem(entry, app, onExecute));
 	}
 
@@ -86,8 +101,21 @@ function createItem(
 	app: App,
 	onExecute: (entry: ScriptEntry) => void,
 ): HTMLElement {
-	const item = document.createElement('div');
-	item.className = 'bv-menu-item';
+	if (entry.isSeparator) return createSeparator();
+
+	const item = createDiv({ cls: 'bv-menu-item' });
+
+	if (entry.color) {
+		item.style.color = entry.color;
+	}
+
+	if (entry.icon) {
+		const iconEl = item.createSpan({ cls: 'bv-menu-item-icon' });
+		if (entry.color) {
+			iconEl.style.color = entry.color;
+		}
+		try { setIcon(iconEl, entry.icon); } catch { /* lucide icon not found */ }
+	}
 
 	item.createSpan({ cls: 'bv-menu-item-label', text: entry.label });
 
@@ -98,6 +126,10 @@ function createItem(
 	});
 
 	return item;
+}
+
+function createSeparator(): HTMLElement {
+	return createDiv({ cls: 'bv-menu-separator' });
 }
 
 function registerDismissHandlers(menuEl: HTMLElement): () => void {

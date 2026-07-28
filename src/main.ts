@@ -1,6 +1,6 @@
-import { MarkdownView, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
-import { isBookManifest } from './components/ManifestParser';
+import { getManifestFiles, isBookManifest } from './components/ManifestParser';
 import { WheelAccelerator } from './components/WheelAccelerator';
 import { BookViewSettings, DEFAULT_SETTINGS } from './settings';
 import { BookViewSettingTab } from './ui/SettingsTab';
@@ -96,6 +96,14 @@ export default class BookViewPlugin extends Plugin {
 				} else {
 					void this.bufferManager.applyAnyBuffer();
 				}
+			},
+		});
+
+		this.addCommand({
+			id: 'collect-manuscript',
+			name: 'Collect manuscript from linked notes',
+			callback: () => {
+				void this.collectManuscript();
 			},
 		});
 
@@ -214,6 +222,40 @@ export default class BookViewPlugin extends Plugin {
 			type: VIEW_TYPE_BOOK_VIEW,
 			state: { filePath },
 		});
+	}
+
+	private async collectManuscript(): Promise<void> {
+		const bv = this.app.workspace.getActiveViewOfType(BookView);
+		if (!bv || !bv.filePath) {
+			new Notice('Open a book view first.');
+			return;
+		}
+
+		const manifestFile = this.app.vault.getFileByPath(bv.filePath);
+		if (!(manifestFile instanceof TFile)) return;
+
+		const files = getManifestFiles(this.app, manifestFile);
+		if (files.length === 0) {
+			new Notice('No linked notes found in this book.');
+			return;
+		}
+
+		const parts: string[] = [];
+		for (const file of files) {
+			const content = await this.app.vault.cachedRead(file);
+			const stripped = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n\r?\n?/, '');
+			parts.push(stripped.trimEnd());
+		}
+
+		const manuscript = parts.join('\n\n');
+		const name = `${manifestFile.basename} — Manuscript`;
+		const existing = this.app.vault.getAbstractFileByPath(`${name}.md`);
+		if (existing instanceof TFile) {
+			await this.app.vault.modify(existing, manuscript);
+		} else {
+			await this.app.vault.create(`${name}.md`, manuscript);
+		}
+		new Notice(`Manuscript saved: ${name}.md`);
 	}
 
 	private async disableBookView(filePath: string, leaf: WorkspaceLeaf) {

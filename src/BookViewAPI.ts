@@ -39,7 +39,7 @@ class ReplacePreviewModal extends Modal {
 		for (const change of this.changes) {
 			const item = list.createDiv({ cls: 'book-replace-item' });
 			const file = this.app.vault.getFileByPath(change.filePath);
-			item.createEl('div', {
+			item.createDiv({
 				cls: 'book-replace-file',
 				text: `${file?.basename ?? change.filePath}:${change.line}`,
 			});

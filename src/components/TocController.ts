@@ -65,9 +65,11 @@ export class TocController {
 		});
 		if (this.settings?.tocRenderMarkdown) {
 			const span = a.createSpan();
-			// sanitized by renderInlineMarkdown which escapes HTML entities
-			// eslint-disable-next-line no-unsanitized/property -- input is escaped by renderInlineMarkdown
-			span.innerHTML = renderInlineMarkdown(heading.heading);
+			const html = renderInlineMarkdown(heading.heading);
+			const doc = new DOMParser().parseFromString(html, 'text/html');
+			while (doc.body.firstChild) {
+				span.appendChild(doc.body.firstChild);
+			}
 		} else {
 			a.createSpan({ text: stripMarkdown(heading.heading) });
 		}
@@ -139,7 +141,7 @@ export class TocController {
 			}
 		}
 
-		this.containerEl.style.position = 'relative';
+		this.containerEl.addClass('book-toc-relative');
 		this.highlightEl = this.containerEl.createDiv({ cls: 'book-toc-highlight' });
 
 		this.calculatePositions();
