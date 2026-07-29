@@ -34,6 +34,7 @@ export class TocController {
 	/** Force-expanded by scroll tracking (recomputed every tick) */
 	private activePathSet: Set<number> = new Set();
 	private activeEntryIndex = -1;
+	private lastSnappedIndex = -1;
 	private pendingPathIndex = -1;
 	private activePathTimer = 0;
 	private scrollGuard = false;
@@ -546,7 +547,8 @@ export class TocController {
 		}
 
 		// Skip TOC dead-zone scroll during grid transition (avoids "accordion" effect)
-		if (!this.scrollGuard) {
+		// Only dead-zone snap when the active index changes (not when layout shifts)
+		if (!this.scrollGuard && index !== this.lastSnappedIndex) {
 			const tocContainer = this.containerEl;
 			const containerScrollTop = tocContainer.scrollTop;
 			const containerHeight = tocContainer.clientHeight;
@@ -562,6 +564,7 @@ export class TocController {
 
 			if (Math.abs(idealScrollTop - containerScrollTop) > snapThreshold) {
 				tocContainer.scrollTo({ top: idealScrollTop, behavior: 'auto' });
+				this.lastSnappedIndex = index;
 			}
 		}
 	}
