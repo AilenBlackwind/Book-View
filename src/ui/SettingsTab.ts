@@ -96,12 +96,14 @@ export class BookViewSettingTab extends PluginSettingTab {
 					.onChange(async (value: string) => {
 						this.plugin.settings.tocActiveColor = value;
 						await this.plugin.saveSettings();
+						this.applyTocActiveColor(value);
 					}),
 			)
 			.addButton((btn) => {
 				btn.setIcon('x').setTooltip('Reset to default').onClick(async () => {
 					this.plugin.settings.tocActiveColor = '';
 					await this.plugin.saveSettings();
+					this.applyTocActiveColor('');
 					this.display();
 				});
 			});
@@ -205,6 +207,19 @@ export class BookViewSettingTab extends PluginSettingTab {
 
 		this.renderSingleModifier(containerEl, 'Popout editor shortcut', 'Modifier keys required to open the native editor in a popout window on double-click.', 'editorModifiers');
 		this.renderMenuProfiles(containerEl);
+	}
+
+	private applyTocActiveColor(color: string): void {
+		const els = document.querySelectorAll('.book-view-container');
+		els.forEach((el) => {
+			if (el instanceof HTMLElement) {
+				if (color) {
+					el.style.setProperty('--bv-toc-active-color', color);
+				} else {
+					el.style.removeProperty('--bv-toc-active-color');
+				}
+			}
+		});
 	}
 
 	private renderSingleModifier(containerEl: HTMLElement, heading: string, description: string, key: 'editorModifiers'): void {
