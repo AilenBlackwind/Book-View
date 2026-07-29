@@ -36,6 +36,8 @@ export class TocController {
 	private activeEntryIndex = -1;
 	private pendingPathIndex = -1;
 	private activePathTimer = 0;
+	private scrollGuard = false;
+	private scrollGuardTimer = 0;
 	private defaultLevel = 0;
 
 	// --- Scroll ---
@@ -309,6 +311,13 @@ export class TocController {
 	}
 
 	private applyVisibility(): void {
+		// Suppress TOC dead-zone scroll during grid transition
+		this.scrollGuard = true;
+		window.clearTimeout(this.scrollGuardTimer);
+		this.scrollGuardTimer = window.setTimeout(() => {
+			this.scrollGuard = false;
+		}, 200);
+
 		for (let i = 0; i < this.entries.length; i++) {
 			const li = this.headingLis[i];
 			if (!li) continue;
@@ -496,21 +505,24 @@ export class TocController {
 			this.highlightEl.style.height = `${el.offsetHeight}px`;
 		}
 
-		const tocContainer = this.containerEl;
-		const containerScrollTop = tocContainer.scrollTop;
-		const containerHeight = tocContainer.clientHeight;
-		const elTop = el.offsetTop;
-		const elHeight = el.offsetHeight;
+		// Skip TOC dead-zone scroll during grid transition (avoids "accordion" effect)
+		if (!this.scrollGuard) {
+			const tocContainer = this.containerEl;
+			const containerScrollTop = tocContainer.scrollTop;
+			const containerHeight = tocContainer.clientHeight;
+			const elTop = el.offsetTop;
+			const elHeight = el.offsetHeight;
 
-		// Ideal position: active item at 25% from top
-		const idealScrollTop = elTop - containerHeight * TOC_ACTIVE_POSITION + elHeight / 2;
+			// Ideal position: active item at 25% from top
+			const idealScrollTop = elTop - containerHeight * TOC_ACTIVE_POSITION + elHeight / 2;
 
-		// Dead zone: allow ±2 items of drift before snapping
-		const approxItemHeight = 30;
-		const snapThreshold = 2 * approxItemHeight;
+			// Dead zone: allow ±2 items of drift before snapping
+			const approxItemHeight = 30;
+			const snapThreshold = 2 * approxItemHeight;
 
-		if (Math.abs(idealScrollTop - containerScrollTop) > snapThreshold) {
-			tocContainer.scrollTo({ top: idealScrollTop, behavior: 'auto' });
+			if (Math.abs(idealScrollTop - containerScrollTop) > snapThreshold) {
+				tocContainer.scrollTo({ top: idealScrollTop, behavior: 'auto' });
+			}
 		}
 	}
 
@@ -648,6 +660,7 @@ export class TocController {
 		window.clearTimeout(this.settleTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
+		window.clearTimeout(this.scrollGuardTimer);
 		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
