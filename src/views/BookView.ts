@@ -93,6 +93,7 @@ export class BookView extends ItemView {
 			this.absoluteManager,
 		);
 		this.tocController.build();
+		this.initTocHeadingsCache();
 	}
 
 	getTocEntries(): TocEntry[] {
@@ -280,6 +281,7 @@ export class BookView extends ItemView {
 			this.app.metadataCache.on('changed', (file) => {
 				if (!(file instanceof TFile)) return;
 				if (!this.manifestPaths.has(file.path)) return;
+				if (!this.haveHeadingsChanged(file)) return;
 				this.scheduleTocRefresh(file.path);
 			}),
 		);
@@ -287,6 +289,8 @@ export class BookView extends ItemView {
 
 	private refreshTimers: Map<string, number> = new Map();
 	private tocRefreshTimers: Map<string, number> = new Map();
+	/** JSON hash of each file's headings (level + heading text), used to skip TOC rebuild when only body text changed */
+	private tocHeadingsCache: Map<string, string> = new Map();
 
 	private scheduleRefresh(path: string): void {
 		const existing = this.refreshTimers.get(path);
@@ -297,6 +301,27 @@ export class BookView extends ItemView {
 			this.absoluteManager?.markDirty(path);
 		}, 300);
 		this.refreshTimers.set(path, timer);
+	}
+
+	private initTocHeadingsCache(): void {
+		for (const file of this.currentFiles) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			const headings = cache?.headings ?? [];
+			this.tocHeadingsCache.set(file.path, JSON.stringify(headings.map((h) => `${h.level}:${h.heading}`)));
+		}
+	}
+
+	private haveHeadingsChanged(file: TFile): boolean {
+		const cache = this.app.metadataCache.getFileCache(file);
+		const newHeadings = cache?.headings ?? [];
+		const hash = JSON.stringify(newHeadings.map((h) => `${h.level}:${h.heading}`));
+		const prev = this.tocHeadingsCache.get(file.path);
+		if (prev === undefined) {
+			this.tocHeadingsCache.set(file.path, hash);
+			return hash.length > 2; // true if file has any headings (first time)
+		}
+		this.tocHeadingsCache.set(file.path, hash);
+		return hash !== prev;
 	}
 
 	private scheduleTocRefresh(path: string): void {
@@ -337,6 +362,7 @@ export class BookView extends ItemView {
 			window.clearTimeout(timer);
 		}
 		this.tocRefreshTimers.clear();
+		this.tocHeadingsCache.clear();
 		if (this.absoluteManager) {
 			this.absoluteManager.destroy();
 			this.absoluteManager = null;
