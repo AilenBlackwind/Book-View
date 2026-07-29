@@ -36,6 +36,8 @@ export class TocController {
 	private activeEntryIndex = -1;
 	private pendingPathIndex = -1;
 	private activePathTimer = 0;
+	private visibilityAnimating = false;
+	private visibilityAnimTimer = 0;
 	private defaultLevel = 0;
 
 	// --- Scroll ---
@@ -310,7 +312,6 @@ export class TocController {
 	}
 
 	private applyVisibility(): void {
-		// Save offsetTop of the active element before changes
 		const tocContainer = this.containerEl;
 		const prevActiveTop = this.activeHeading?.offsetTop ?? 0;
 
@@ -348,6 +349,13 @@ export class TocController {
 				chevron.addClass('book-toc-chevron-closed');
 			}
 		}
+
+		// Block highlight DOM-position updates during grid transition
+		this.visibilityAnimating = true;
+		window.clearTimeout(this.visibilityAnimTimer);
+		this.visibilityAnimTimer = window.setTimeout(() => {
+			this.visibilityAnimating = false;
+		}, 350);
 
 		if (this.activeHeading) {
 			const newActiveTop = this.activeHeading.offsetTop;
@@ -534,6 +542,8 @@ export class TocController {
 			this.activeHeading = el;
 		}
 
+		if (this.visibilityAnimating) return;
+
 		if (this.highlightEl) {
 			this.highlightEl.style.top = `${el.offsetTop}px`;
 			this.highlightEl.style.height = `${el.offsetHeight}px`;
@@ -695,6 +705,7 @@ export class TocController {
 		window.clearTimeout(this.settleTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
+		window.clearTimeout(this.visibilityAnimTimer);
 		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
