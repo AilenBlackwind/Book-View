@@ -34,6 +34,8 @@ export class TocController {
 	/** Force-expanded by scroll tracking (recomputed every tick) */
 	private activePathSet: Set<number> = new Set();
 	private activeEntryIndex = -1;
+	private pendingPathIndex = -1;
+	private activePathTimer = 0;
 	private defaultLevel = 0;
 
 	// --- Scroll ---
@@ -50,6 +52,7 @@ export class TocController {
 	private navigationTimer = 0;
 	/** true while programmatic scroll is in progress */
 	private isJumping = false;
+	private scrollAnimFrame = 0;
 
 	constructor(
 		containerEl: HTMLElement,
@@ -73,11 +76,13 @@ export class TocController {
 
 	private createHeadingItem(parent: HTMLElement, entry: TocEntry, heading: { heading: string; position: { start: { line: number } }; level: number }, file: TFile): void {
 		const li = parent.createEl('li', { cls: 'book-toc-heading' });
-		const indent = (heading.level - 1) * 12;
-		li.style.paddingLeft = `${indent}px`;
+		li.style.paddingLeft = `${(heading.level - 1) * 12}px`;
 		li.dataset.level = String(heading.level);
 
-		const chevron = li.createSpan({ cls: 'book-toc-chevron' });
+		// Inner wrapper for grid row animation
+		const inner = li.createDiv({ cls: 'book-toc-heading-inner' });
+
+		const chevron = inner.createSpan({ cls: 'book-toc-chevron' });
 		setIcon(chevron, 'chevron-right');
 		const entryIdx = this.entries.length - 1;
 		this.chevronEls.push(chevron);
@@ -87,7 +92,7 @@ export class TocController {
 			this.toggleCollapse(entryIdx);
 		});
 
-		const a = li.createEl('a', {
+		const a = inner.createEl('a', {
 			cls: 'book-toc-item',
 			attr: { 'data-path': file.path, 'data-line': String(heading.position.start.line), 'data-level': String(heading.level) },
 		});
@@ -344,12 +349,35 @@ export class TocController {
 			}
 		}
 
-		// Compensate TOC scroll for newly visible items above the active heading
 		if (this.activeHeading) {
 			const newActiveTop = this.activeHeading.offsetTop;
-			const delta = newActiveTop - prevActiveTop;
-			if (delta !== 0) {
-				tocContainer.scrollTop += delta;
+			const totalDelta = newActiveTop - prevActiveTop;
+			if (totalDelta !== 0) {
+				// Cancel any in-progress animation
+				if (this.scrollAnimFrame) {
+					window.cancelAnimationFrame(this.scrollAnimFrame);
+				}
+				// Animate scrollTop alongside CSS transition (300ms ease-out)
+				const startScroll = tocContainer.scrollTop;
+				const endScroll = startScroll + totalDelta;
+				const duration = 300;
+				const startTime = performance.now();
+
+				const frame = (now: number) => {
+					if (this.activeHeading) {
+						const t = Math.min((now - startTime) / duration, 1);
+						const ease = 1 - Math.pow(1 - t, 3);
+						tocContainer.scrollTop = startScroll + (endScroll - startScroll) * ease;
+						if (t < 1) {
+							this.scrollAnimFrame = window.requestAnimationFrame(frame);
+						} else {
+							this.scrollAnimFrame = 0;
+						}
+					} else {
+						this.scrollAnimFrame = 0;
+					}
+				};
+				this.scrollAnimFrame = window.requestAnimationFrame(frame);
 			}
 		}
 	}
@@ -424,7 +452,8 @@ export class TocController {
 		}
 
 		if (bestIndex < 0) {
-			// No heading found — clear active path
+			window.clearTimeout(this.activePathTimer);
+			this.pendingPathIndex = -1;
 			if (this.activePathSet.size > 0) {
 				this.activePathSet.clear();
 				this.applyVisibility();
@@ -434,17 +463,9 @@ export class TocController {
 
 		this.activeEntryIndex = bestIndex;
 
-		// Compute active path for auto-expand
 		const mode = this.settings?.autoExpandMode ?? 'disabled';
-		const newPath = mode !== 'disabled' ? this.computeActivePath(bestIndex) : new Set<number>();
 
-		// Only mutate visibility if path changed
-		if (!this.setsEqual(this.activePathSet, newPath)) {
-			this.activePathSet = newPath;
-			this.applyVisibility();
-		}
-
-		// Update highlight (resolve to visible ancestor when auto-expand is disabled)
+		// Update highlight immediately (tracks scroll in real-time)
 		let highlightIndex = bestIndex;
 		if (mode === 'disabled') {
 			const li = this.headingLis[bestIndex];
@@ -464,8 +485,30 @@ export class TocController {
 				}
 			}
 		}
-
 		this.updateHighlight(highlightIndex);
+
+		// Debounce expand/collapse: wait for scroll to settle (150ms)
+		if (bestIndex !== this.pendingPathIndex) {
+			this.pendingPathIndex = bestIndex;
+			window.clearTimeout(this.activePathTimer);
+			this.activePathTimer = window.setTimeout(() => {
+				this.pendingPathIndex = -1;
+				const newPath = mode !== 'disabled'
+					? this.computeActivePath(this.activeEntryIndex)
+					: new Set<number>();
+
+				if (!this.setsEqual(this.activePathSet, newPath)) {
+					this.activePathSet = newPath;
+					this.applyVisibility();
+					// Re-snap TOC after grid transition completes
+					window.setTimeout(() => {
+						if (this.activeEntryIndex >= 0) {
+							this.updateHighlight(this.activeEntryIndex);
+						}
+					}, 320);
+				}
+			}, 150);
+		}
 
 		// Fade highlight indicator after idle
 		if (this.highlightEl) {
@@ -640,6 +683,10 @@ export class TocController {
 			window.cancelAnimationFrame(this.scrollRafId);
 			this.scrollRafId = 0;
 		}
+		if (this.scrollAnimFrame) {
+			window.cancelAnimationFrame(this.scrollAnimFrame);
+			this.scrollAnimFrame = 0;
+		}
 		if (this.scrollHandler) {
 			this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;
@@ -647,6 +694,7 @@ export class TocController {
 		window.clearTimeout(this.fadeTimer);
 		window.clearTimeout(this.settleTimer);
 		window.clearTimeout(this.navigationTimer);
+		window.clearTimeout(this.activePathTimer);
 		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
