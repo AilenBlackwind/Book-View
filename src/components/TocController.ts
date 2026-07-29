@@ -43,7 +43,9 @@ export class TocController {
 	private scrollRafId = 0;
 	private highlightEl: HTMLElement | null = null;
 	private fadeTimer = 0;
-	private settleTimer = 0;
+	private lastCenterIndex = -1;
+	private scrollCenterTimer = 0;
+	private scrollCenterBlocked = false;
 	private lastScrollTop = 0;
 
 	// --- Navigation guard ---
@@ -481,7 +483,14 @@ export class TocController {
 				}
 			}
 		}
+
 		this.updateHighlight(highlightIndex);
+
+		// Center active TOC item on change (leading 100ms debounce)
+		if (this.lastCenterIndex !== bestIndex) {
+			this.lastCenterIndex = bestIndex;
+			this.scrollActiveIntoView(bestIndex);
+		}
 
 		// Debounce expand/collapse: wait for scroll to settle (30ms)
 		if (bestIndex !== this.pendingPathIndex) {
@@ -505,13 +514,9 @@ export class TocController {
 			this.highlightEl.classList.remove('fading');
 		}
 		window.clearTimeout(this.fadeTimer);
-		window.clearTimeout(this.settleTimer);
 		this.fadeTimer = window.setTimeout(() => {
 			this.highlightEl?.classList.add('fading');
 		}, 400);
-		this.settleTimer = window.setTimeout(() => {
-			this.correctByDomPositions();
-		}, 150);
 	}
 
 	private updateHighlight(index: number): void {
@@ -530,49 +535,18 @@ export class TocController {
 		}
 	}
 
-	private correctByDomPositions(): void {
-		const mode = this.settings?.autoExpandMode ?? 'disabled';
-		if (mode !== 'disabled') return;
+	/** Quiet Outline-style leading-edge debounced scroll centering */
+	private scrollActiveIntoView(index: number): void {
+		if (this.scrollCenterBlocked || index < 0) return;
+		this.scrollCenterBlocked = true;
 
-		const containerRect = this.scrollContainer.getBoundingClientRect();
-		const triggerY = containerRect.top + containerRect.height * 0.3;
+		const el = this.tocItems[index];
+		el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 
-		let bestIndex = -1;
-		let bestDistance = Infinity;
-
-		const headings = Array.from(this.scrollContainer.querySelectorAll('[data-entry-index]'));
-		for (const el of headings) {
-			const idx = parseInt(el.getAttribute('data-entry-index') ?? '', 10);
-			if (isNaN(idx)) continue;
-			const rect = el.getBoundingClientRect();
-			const midY = rect.top + rect.height / 2;
-			const dist = Math.abs(midY - triggerY);
-			if (midY <= triggerY && dist < bestDistance) {
-				bestDistance = dist;
-				bestIndex = idx;
-			}
-		}
-
-		if (bestIndex >= 0) {
-			// Resolve to visible ancestor if heading is hidden
-			const li = this.headingLis[bestIndex];
-			if (li?.hasClass('book-toc-collapsed-hidden')) {
-				let targetLevel = this.entries[bestIndex]?.level ?? 0;
-				for (let j = bestIndex - 1; j >= 0; j--) {
-					const a = this.entries[j];
-					if (!a) break;
-					if (a.level < targetLevel) {
-						const ancLi = this.headingLis[j];
-						if (ancLi && !ancLi.hasClass('book-toc-collapsed-hidden')) {
-							bestIndex = j;
-							break;
-						}
-						targetLevel = a.level;
-					}
-				}
-			}
-			this.updateHighlight(bestIndex);
-		}
+		window.clearTimeout(this.scrollCenterTimer);
+		this.scrollCenterTimer = window.setTimeout(() => {
+			this.scrollCenterBlocked = false;
+		}, 100);
 	}
 
 	async scrollToHeading(entryIndex: number): Promise<void> {
@@ -661,7 +635,7 @@ export class TocController {
 			this.scrollHandler = null;
 		}
 		window.clearTimeout(this.fadeTimer);
-		window.clearTimeout(this.settleTimer);
+		window.clearTimeout(this.scrollCenterTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
 		window.clearTimeout(this.animCleanupTimer);
