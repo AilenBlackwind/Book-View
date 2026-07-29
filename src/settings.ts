@@ -19,11 +19,16 @@ export interface MenuProfile {
 	scripts: ScriptEntry[];
 }
 
+export type AutoExpandMode = 'expand-collapse-default' | 'only-expand' | 'expand-collapse-level' | 'disabled';
+
 export interface BookViewSettings {
 	tocWidth: number;
 	tocShowFileNames: boolean;
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
+	tocActiveColor: string;
+	tocCollapsedLevel: number;
+	autoExpandMode: AutoExpandMode;
 	loadMargin: number;
 	wheelFlickEnabled: boolean;
 	wheelFlickStrength: number;
@@ -37,6 +42,9 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	tocShowFileNames: true,
 	tocGuides: true,
 	tocRenderMarkdown: true,
+	tocActiveColor: '',
+	tocCollapsedLevel: 0,
+	autoExpandMode: 'disabled',
 	loadMargin: 800,
 	wheelFlickEnabled: true,
 	wheelFlickStrength: 2,

@@ -142,9 +142,15 @@ export default class BookViewPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		const data = await this.loadData() as (Partial<BookViewSettings> & { measuredHeights?: Record<string, { m: number; h: number }> }) | null;
+		const data = await this.loadData() as (Partial<BookViewSettings> & { measuredHeights?: Record<string, { m: number; h: number }>; tocAutoCollapse?: boolean }) | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.heightStore = data?.measuredHeights ?? {};
+
+		if (data?.tocAutoCollapse !== undefined && data.autoExpandMode === undefined) {
+			this.settings.autoExpandMode = data.tocAutoCollapse ? 'expand-collapse-level' : 'disabled';
+			delete (this.settings as unknown as Record<string, unknown>).tocAutoCollapse;
+			void this.saveData(Object.assign({}, this.settings, { measuredHeights: this.heightStore }));
+		}
 	}
 
 	async saveSettings() {

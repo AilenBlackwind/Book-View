@@ -34,7 +34,11 @@ export class BookViewSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Table of contents width')
+			.setName('Table of contents')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('Width')
 			.setDesc('Width of the toc panel in pixels.')
 			.addSlider((slider) =>
 				slider
@@ -48,7 +52,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Show file names in toc')
+			.setName('Show file names')
 			.setDesc('Display file names as section headers in the table of contents.')
 			.addToggle((toggle) =>
 				toggle
@@ -60,7 +64,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Show nesting guides in toc')
+			.setName('Nesting guides')
 			.setDesc('Display vertical guide lines from headings to show nesting depth.')
 			.addToggle((toggle) =>
 				toggle
@@ -72,7 +76,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Render Markdown in toc')
+			.setName('Render Markdown')
 			.setDesc('Render bold, italic, code and other inline Markdown in headings instead of showing raw syntax.')
 			.addToggle((toggle) =>
 				toggle
@@ -82,6 +86,64 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		new Setting(containerEl)
+			.setName('Active heading color')
+			.setDesc('Color of the highlight behind the active heading. Leave empty for the default accent color.')
+			.addColorPicker((picker) =>
+				picker
+					.setValue(this.plugin.settings.tocActiveColor || '#000000')
+					.onChange(async (value: string) => {
+						this.plugin.settings.tocActiveColor = value;
+						await this.plugin.saveSettings();
+					}),
+			)
+			.addButton((btn) => {
+				btn.setIcon('x').setTooltip('Reset to default').onClick(async () => {
+					this.plugin.settings.tocActiveColor = '';
+					await this.plugin.saveSettings();
+					this.display();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Default collapsed level')
+			.setDesc('Headings at this level and deeper are collapsed when opening a book. Set to off to disable.')
+			.addDropdown((dd) =>
+				dd
+					.addOption('0', 'Off')
+					.addOption('1', 'H1')
+					.addOption('2', 'H2')
+					.addOption('3', 'H3')
+					.addOption('4', 'H4')
+					.addOption('5', 'H5')
+					.addOption('6', 'H6')
+					.setValue(String(this.plugin.settings.tocCollapsedLevel))
+					.onChange(async (value: string) => {
+						this.plugin.settings.tocCollapsedLevel = parseInt(value, 10);
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Auto expand')
+			.setDesc('Auto expand and collapse headings when scrolling and cursor position change.')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption('expand-collapse-default', 'Expand and collapse rest to default')
+					.addOption('only-expand', 'Only expand')
+					.addOption('expand-collapse-level', 'Expand and collapse rest to setting level')
+					.addOption('disabled', 'Disabled')
+					.setValue(this.plugin.settings.autoExpandMode)
+					.onChange(async (value: string) => {
+						this.plugin.settings.autoExpandMode = value as import('../settings').AutoExpandMode;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Reading')
+			.setHeading();
 
 		new Setting(containerEl)
 			.setName('Lazy load margin')
@@ -98,8 +160,12 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName('Wheel flick')
+			.setHeading();
+
+		new Setting(containerEl)
 			.setName('Wheel flick acceleration')
-			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks. Other scroll plugins are intercepted only within book view.')
+			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks.')
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.wheelFlickEnabled)
