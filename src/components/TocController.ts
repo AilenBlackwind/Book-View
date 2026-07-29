@@ -34,6 +34,7 @@ export class TocController {
 	private activeEntryIndex = -1;
 	private pendingPathIndex = -1;
 	private activePathTimer = 0;
+	private animCleanupTimer = 0;
 	private defaultLevel = 0;
 
 	// --- Scroll ---
@@ -307,10 +308,9 @@ export class TocController {
 	}
 
 	private applyVisibility(): void {
+		// Phase 1: compute new state
+		const willHide: boolean[] = new Array(this.entries.length).fill(false);
 		for (let i = 0; i < this.entries.length; i++) {
-			const li = this.headingLis[i];
-			if (!li) continue;
-
 			let isHidden = false;
 			let targetLevel = this.entries[i]?.level ?? 0;
 			for (let j = i - 1; j >= 0 && targetLevel >= 1; j--) {
@@ -324,13 +324,48 @@ export class TocController {
 					targetLevel = ancestor.level;
 				}
 			}
+			willHide[i] = isHidden;
+		}
 
-			if (isHidden) {
+		// Phase 2: lock heights for changing items
+		const changed: HTMLElement[] = [];
+		for (let i = 0; i < this.entries.length; i++) {
+			const li = this.headingLis[i];
+			if (!li) continue;
+			const currentlyHidden = li.hasClass('book-toc-collapsed-hidden');
+			if (willHide[i] === currentlyHidden) continue;
+			changed.push(li);
+			li.style.maxHeight = li.scrollHeight + 'px';
+		}
+
+		if (changed.length > 0) void document.body.offsetHeight;
+
+		// Phase 3: toggle class and set target height
+		for (let i = 0; i < this.entries.length; i++) {
+			const li = this.headingLis[i];
+			if (!li) continue;
+			if (willHide[i]) {
 				li.addClass('book-toc-collapsed-hidden');
 			} else {
 				li.removeClass('book-toc-collapsed-hidden');
 			}
 		}
+
+		for (let i = 0; i < this.entries.length; i++) {
+			const li = this.headingLis[i];
+			if (!li || !changed.includes(li)) continue;
+			li.style.maxHeight = willHide[i] ? '0' : li.scrollHeight + 'px';
+		}
+
+		// Phase 4: after transition, clear inline max-height for expanded items
+		window.clearTimeout(this.animCleanupTimer);
+		this.animCleanupTimer = window.setTimeout(() => {
+			for (let i = 0; i < this.entries.length; i++) {
+				const li = this.headingLis[i];
+				if (!li || willHide[i]) continue;
+				li.style.maxHeight = '';
+			}
+		}, 160);
 
 		for (let i = 0; i < this.chevronEls.length; i++) {
 			const chevron = this.chevronEls[i];
@@ -629,6 +664,7 @@ export class TocController {
 		window.clearTimeout(this.settleTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
+		window.clearTimeout(this.animCleanupTimer);
 		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
