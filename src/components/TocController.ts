@@ -42,6 +42,8 @@ export class TocController {
 	private headingPositions: number[] = [];
 	private scrollHandler: (() => void) | null = null;
 	private scrollRafId = 0;
+	private highlightEl: HTMLElement | null = null;
+	private fadeTimer = 0;
 	private settleTimer = 0;
 	private lastScrollTop = 0;
 
@@ -179,6 +181,9 @@ export class TocController {
 				}
 			}
 		}
+
+		this.containerEl.addClass('book-toc-relative');
+		this.highlightEl = this.containerEl.createDiv({ cls: 'book-toc-highlight' });
 
 		if (this.settings?.tocActiveColor) {
 			this.containerEl.style.setProperty('--bv-toc-active-color', this.settings.tocActiveColor);
@@ -462,7 +467,15 @@ export class TocController {
 			}, 30);
 		}
 
+		// Fade highlight indicator after idle
+		if (this.highlightEl) {
+			this.highlightEl.classList.remove('fading');
+		}
+		window.clearTimeout(this.fadeTimer);
 		window.clearTimeout(this.settleTimer);
+		this.fadeTimer = window.setTimeout(() => {
+			this.highlightEl?.classList.add('fading');
+		}, 400);
 		this.settleTimer = window.setTimeout(() => {
 			this.correctByDomPositions();
 		}, 150);
@@ -476,6 +489,11 @@ export class TocController {
 			this.activeHeading?.removeClass('is-active');
 			el.addClass('is-active');
 			this.activeHeading = el;
+		}
+
+		if (this.highlightEl) {
+			this.highlightEl.style.top = `${el.offsetTop}px`;
+			this.highlightEl.style.height = `${el.offsetHeight}px`;
 		}
 
 		const tocContainer = this.containerEl;
@@ -626,9 +644,11 @@ export class TocController {
 			this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;
 		}
+		window.clearTimeout(this.fadeTimer);
 		window.clearTimeout(this.settleTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
+		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
 		this.tocItems = [];
