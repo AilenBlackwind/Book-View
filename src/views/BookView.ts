@@ -280,12 +280,13 @@ export class BookView extends ItemView {
 			this.app.metadataCache.on('changed', (file) => {
 				if (!(file instanceof TFile)) return;
 				if (!this.manifestPaths.has(file.path)) return;
-				this.tocController?.build();
+				this.scheduleTocRefresh(file.path);
 			}),
 		);
 	}
 
 	private refreshTimers: Map<string, number> = new Map();
+	private tocRefreshTimers: Map<string, number> = new Map();
 
 	private scheduleRefresh(path: string): void {
 		const existing = this.refreshTimers.get(path);
@@ -296,6 +297,17 @@ export class BookView extends ItemView {
 			this.absoluteManager?.markDirty(path);
 		}, 300);
 		this.refreshTimers.set(path, timer);
+	}
+
+	private scheduleTocRefresh(path: string): void {
+		const existing = this.tocRefreshTimers.get(path);
+		if (existing) window.clearTimeout(existing);
+
+		const timer = window.setTimeout(() => {
+			this.tocRefreshTimers.delete(path);
+			this.tocController?.build();
+		}, 500);
+		this.tocRefreshTimers.set(path, timer);
 	}
 
 	private saveScrollPosition(): void {
@@ -321,6 +333,10 @@ export class BookView extends ItemView {
 			window.clearTimeout(timer);
 		}
 		this.refreshTimers.clear();
+		for (const timer of this.tocRefreshTimers.values()) {
+			window.clearTimeout(timer);
+		}
+		this.tocRefreshTimers.clear();
 		if (this.absoluteManager) {
 			this.absoluteManager.destroy();
 			this.absoluteManager = null;
