@@ -36,16 +36,12 @@ export class TocController {
 	private activeEntryIndex = -1;
 	private pendingPathIndex = -1;
 	private activePathTimer = 0;
-	private visibilityAnimating = false;
-	private visibilityAnimTimer = 0;
 	private defaultLevel = 0;
 
 	// --- Scroll ---
 	private headingPositions: number[] = [];
 	private scrollHandler: (() => void) | null = null;
 	private scrollRafId = 0;
-	private highlightEl: HTMLElement | null = null;
-	private fadeTimer = 0;
 	private settleTimer = 0;
 	private lastScrollTop = 0;
 
@@ -54,7 +50,6 @@ export class TocController {
 	private navigationTimer = 0;
 	/** true while programmatic scroll is in progress */
 	private isJumping = false;
-	private scrollAnimFrame = 0;
 
 	constructor(
 		containerEl: HTMLElement,
@@ -185,9 +180,6 @@ export class TocController {
 			}
 		}
 
-		this.containerEl.addClass('book-toc-relative');
-		this.highlightEl = this.containerEl.createDiv({ cls: 'book-toc-highlight' });
-
 		if (this.settings?.tocActiveColor) {
 			this.containerEl.style.setProperty('--bv-toc-active-color', this.settings.tocActiveColor);
 		}
@@ -312,9 +304,6 @@ export class TocController {
 	}
 
 	private applyVisibility(): void {
-		const tocContainer = this.containerEl;
-		const prevActiveTop = this.activeHeading?.offsetTop ?? 0;
-
 		for (let i = 0; i < this.entries.length; i++) {
 			const li = this.headingLis[i];
 			if (!li) continue;
@@ -347,45 +336,6 @@ export class TocController {
 				chevron.removeClass('book-toc-chevron-closed');
 			} else {
 				chevron.addClass('book-toc-chevron-closed');
-			}
-		}
-
-		// Block highlight DOM-position updates during grid transition
-		this.visibilityAnimating = true;
-		window.clearTimeout(this.visibilityAnimTimer);
-		this.visibilityAnimTimer = window.setTimeout(() => {
-			this.visibilityAnimating = false;
-		}, 350);
-
-		if (this.activeHeading) {
-			const newActiveTop = this.activeHeading.offsetTop;
-			const totalDelta = newActiveTop - prevActiveTop;
-			if (totalDelta !== 0) {
-				// Cancel any in-progress animation
-				if (this.scrollAnimFrame) {
-					window.cancelAnimationFrame(this.scrollAnimFrame);
-				}
-				// Animate scrollTop alongside CSS transition (300ms ease-out)
-				const startScroll = tocContainer.scrollTop;
-				const endScroll = startScroll + totalDelta;
-				const duration = 300;
-				const startTime = performance.now();
-
-				const frame = (now: number) => {
-					if (this.activeHeading) {
-						const t = Math.min((now - startTime) / duration, 1);
-						const ease = 1 - Math.pow(1 - t, 3);
-						tocContainer.scrollTop = startScroll + (endScroll - startScroll) * ease;
-						if (t < 1) {
-							this.scrollAnimFrame = window.requestAnimationFrame(frame);
-						} else {
-							this.scrollAnimFrame = 0;
-						}
-					} else {
-						this.scrollAnimFrame = 0;
-					}
-				};
-				this.scrollAnimFrame = window.requestAnimationFrame(frame);
 			}
 		}
 	}
@@ -495,7 +445,7 @@ export class TocController {
 		}
 		this.updateHighlight(highlightIndex);
 
-		// Debounce expand/collapse: wait for scroll to settle (150ms)
+		// Debounce expand/collapse: wait for scroll to settle (30ms)
 		if (bestIndex !== this.pendingPathIndex) {
 			this.pendingPathIndex = bestIndex;
 			window.clearTimeout(this.activePathTimer);
@@ -508,25 +458,11 @@ export class TocController {
 				if (!this.setsEqual(this.activePathSet, newPath)) {
 					this.activePathSet = newPath;
 					this.applyVisibility();
-					// Re-snap TOC after grid transition completes
-					window.setTimeout(() => {
-						if (this.activeEntryIndex >= 0) {
-							this.updateHighlight(this.activeEntryIndex);
-						}
-					}, 320);
 				}
-			}, 150);
+			}, 30);
 		}
 
-		// Fade highlight indicator after idle
-		if (this.highlightEl) {
-			this.highlightEl.classList.remove('fading');
-		}
-		window.clearTimeout(this.fadeTimer);
 		window.clearTimeout(this.settleTimer);
-		this.fadeTimer = window.setTimeout(() => {
-			this.highlightEl?.classList.add('fading');
-		}, 400);
 		this.settleTimer = window.setTimeout(() => {
 			this.correctByDomPositions();
 		}, 150);
@@ -540,13 +476,6 @@ export class TocController {
 			this.activeHeading?.removeClass('is-active');
 			el.addClass('is-active');
 			this.activeHeading = el;
-		}
-
-		if (this.visibilityAnimating) return;
-
-		if (this.highlightEl) {
-			this.highlightEl.style.top = `${el.offsetTop}px`;
-			this.highlightEl.style.height = `${el.offsetHeight}px`;
 		}
 
 		const tocContainer = this.containerEl;
@@ -693,20 +622,13 @@ export class TocController {
 			window.cancelAnimationFrame(this.scrollRafId);
 			this.scrollRafId = 0;
 		}
-		if (this.scrollAnimFrame) {
-			window.cancelAnimationFrame(this.scrollAnimFrame);
-			this.scrollAnimFrame = 0;
-		}
 		if (this.scrollHandler) {
 			this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;
 		}
-		window.clearTimeout(this.fadeTimer);
 		window.clearTimeout(this.settleTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
-		window.clearTimeout(this.visibilityAnimTimer);
-		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
 		this.tocItems = [];
