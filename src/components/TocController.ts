@@ -266,11 +266,17 @@ export class TocController {
 		return (this.entries[i]?.level ?? 0) < this.defaultLevel;
 	}
 
-	/** Compute the ancestor path that must be force-expanded to reveal entry `index` */
+	/** Compute the active path: entry `index` (if it has children) + all ancestors */
 	private computeActivePath(index: number): Set<number> {
 		const path = new Set<number>();
 		const entry = this.entries[index];
 		if (!entry) return path;
+
+		// Add current heading if it has children (so its section expands as soon as we arrive)
+		const next = this.entries[index + 1];
+		if (next && next.level > entry.level) {
+			path.add(index);
+		}
 
 		let targetLevel = entry.level;
 		for (let i = index - 1; i >= 0; i--) {
@@ -299,6 +305,10 @@ export class TocController {
 	}
 
 	private applyVisibility(): void {
+		// Save offsetTop of the active element before changes
+		const tocContainer = this.containerEl;
+		const prevActiveTop = this.activeHeading?.offsetTop ?? 0;
+
 		for (let i = 0; i < this.entries.length; i++) {
 			const li = this.headingLis[i];
 			if (!li) continue;
@@ -331,6 +341,15 @@ export class TocController {
 				chevron.removeClass('book-toc-chevron-closed');
 			} else {
 				chevron.addClass('book-toc-chevron-closed');
+			}
+		}
+
+		// Compensate TOC scroll for newly visible items above the active heading
+		if (this.activeHeading) {
+			const newActiveTop = this.activeHeading.offsetTop;
+			const delta = newActiveTop - prevActiveTop;
+			if (delta !== 0) {
+				tocContainer.scrollTop += delta;
 			}
 		}
 	}
@@ -583,6 +602,13 @@ export class TocController {
 
 			this.calculatePositions();
 			this.updateHighlight(entryIndex);
+
+			// Apply auto-expand for the clicked heading
+			const mode = this.settings?.autoExpandMode ?? 'disabled';
+			if (mode !== 'disabled') {
+				this.activePathSet = this.computeActivePath(entryIndex);
+				this.applyVisibility();
+			}
 		} finally {
 			window.clearTimeout(this.navigationTimer);
 			this.navigationTimer = window.setTimeout(() => {
