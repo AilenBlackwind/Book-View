@@ -37,8 +37,6 @@ export class TocController {
 	private lastSnappedIndex = -1;
 	private pendingPathIndex = -1;
 	private activePathTimer = 0;
-	private scrollGuard = false;
-	private scrollGuardTimer = 0;
 	private animCleanupTimer = 0;
 	private defaultLevel = 0;
 
@@ -313,13 +311,6 @@ export class TocController {
 	}
 
 	private applyVisibility(): void {
-		// Suppress TOC dead-zone scroll during grid transition
-		this.scrollGuard = true;
-		window.clearTimeout(this.scrollGuardTimer);
-		this.scrollGuardTimer = window.setTimeout(() => {
-			this.scrollGuard = false;
-		}, 200);
-
 		// Phase 1: compute new state for every entry
 		const willHide: boolean[] = new Array(this.entries.length).fill(false);
 		for (let i = 0; i < this.entries.length; i++) {
@@ -347,14 +338,10 @@ export class TocController {
 			const currentlyHidden = li.hasClass('book-toc-collapsed-hidden');
 			if (willHide[i] === currentlyHidden) continue;
 			changed.push(li);
-			// Lock to current (scrollHeight works even when hidden with overflow)
 			li.style.maxHeight = li.scrollHeight + 'px';
 		}
 
-		// Force layout so the max-height takes effect
-		if (changed.length > 0) {
-			void document.body.offsetHeight;
-		}
+		if (changed.length > 0) void document.body.offsetHeight;
 
 		// Phase 3: toggle class and set target max-height
 		for (let i = 0; i < this.entries.length; i++) {
@@ -376,7 +363,6 @@ export class TocController {
 		// Phase 4: after transition, clear inline max-height for expanded items
 		window.clearTimeout(this.animCleanupTimer);
 		this.animCleanupTimer = window.setTimeout(() => {
-			this.scrollGuard = false;
 			for (let i = 0; i < this.entries.length; i++) {
 				const li = this.headingLis[i];
 				if (!li || willHide[i]) continue;
@@ -548,7 +534,7 @@ export class TocController {
 
 		// Skip TOC dead-zone scroll during grid transition (avoids "accordion" effect)
 		// Only dead-zone snap when the active index changes (not when layout shifts)
-		if (!this.scrollGuard && index !== this.lastSnappedIndex) {
+		if (index !== this.lastSnappedIndex) {
 			const tocContainer = this.containerEl;
 			const containerScrollTop = tocContainer.scrollTop;
 			const containerHeight = tocContainer.clientHeight;
@@ -703,7 +689,6 @@ export class TocController {
 		window.clearTimeout(this.settleTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
-		window.clearTimeout(this.scrollGuardTimer);
 		window.clearTimeout(this.animCleanupTimer);
 		this.highlightEl = null;
 		this.activeHeading = null;
