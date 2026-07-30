@@ -81,20 +81,27 @@
 	margin: 0;
 }
 
+.book-section-absolute .markdown-rendered :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6),
 .book-section-absolute .markdown-rendered :is(h1, h2, h3, h4, h5, h6) {
 	margin-top: var(--heading-spacing, calc(var(--p-spacing, 1rem) * 2.5)) !important;
+	margin-bottom: 0.5em;
 }
 
-.book-section-absolute:has(.markdown-rendered > :is(h1, h2, h3, h4, h5, h6):last-child)
-+ .book-section-absolute > .markdown-rendered > :is(h1, h2, h3, h4, h5, h6):first-child {
+.book-section-absolute:has(.markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6):last-child)
++ .book-section-absolute > .markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6):first-child,
+.book-section-absolute:has(.markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6):last-child)
++ .book-section-absolute > .markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6):first-child * {
+	margin-top: 0 !important;
+	margin-block-start: 0 !important;
+}
+
+.book-section-absolute:first-child .markdown-rendered > :first-child,
+.book-section-absolute:first-child .markdown-rendered > :first-child * {
 	margin-top: 0 !important;
 }
 
-.book-section-absolute:first-child .markdown-rendered > :first-child {
-	margin-top: 0 !important;
-}
-
-.book-section-absolute .markdown-rendered > :last-child {
+.book-section-absolute .markdown-rendered > :last-child,
+.book-section-absolute .markdown-rendered > :last-child * {
 	margin-bottom: 0 !important;
 }
 
