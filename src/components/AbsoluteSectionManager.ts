@@ -86,7 +86,7 @@ export class AbsoluteSectionManager {
 		this.loadMargin = loadMargin;
 		this.persistence = persistence;
 
-		this.textGap = this.resolveTextGap();
+		this.textGap = 0;
 
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
@@ -442,25 +442,6 @@ export class AbsoluteSectionManager {
 			}
 		}
 		return null;
-	}
-
-	private resolveTextGap(): number {
-		const style = getComputedStyle(this.scrollContainer);
-		const pSpacing = this.parseCssPx(style.getPropertyValue('--p-spacing'), 16);
-		const hSpacing = this.parseCssPx(style.getPropertyValue('--heading-spacing'), 0);
-		return Math.max(pSpacing, hSpacing);
-	}
-
-	private parseCssPx(val: string | undefined, fallback: number): number {
-		if (!val) return fallback;
-		const m = val.trim().match(/^([\d.]+)(px|rem|em)?$/);
-		if (!m) return fallback;
-		const num = parseFloat(m[1] ?? '');
-		const unit = m[2];
-		if (unit === 'rem' || unit === 'em') {
-			return num * parseFloat(getComputedStyle(this.scrollContainer).fontSize);
-		}
-		return num;
 	}
 
 	private recalcOffsets(fromIndex: number): void {
