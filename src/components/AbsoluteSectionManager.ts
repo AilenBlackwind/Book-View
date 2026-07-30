@@ -3,6 +3,9 @@ import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
 
+let _headingGap: number | null = null;
+let _textGap: number | null = null;
+
 function resolveCssGap(variable: string, fallback: string): number {
 	const temp = createDiv();
 	document.body.appendChild(temp);
@@ -12,8 +15,15 @@ function resolveCssGap(variable: string, fallback: string): number {
 	return value;
 }
 
-const HEADING_GAP = resolveCssGap('--heading-spacing', '1.5em');
-const TEXT_GAP = resolveCssGap('--p-spacing', '1rem');
+function getHeadingGap(): number {
+	if (_headingGap === null) _headingGap = resolveCssGap('--heading-spacing', '1.5em');
+	return _headingGap;
+}
+
+function getTextGap(): number {
+	if (_textGap === null) _textGap = resolveCssGap('--p-spacing', '1rem');
+	return _textGap;
+}
 const OVERSCAN_TOP = 2500;
 const SCROLL_THRESHOLD = 1;
 
@@ -462,7 +472,7 @@ export class AbsoluteSectionManager {
 			const currData = this.sections.get(this.fileOrder[fromIndex] ?? '');
 			if (prevData && currData) {
 				offset += (prevData.endsWithHeading && currData.startsWithHeading)
-					? HEADING_GAP : TEXT_GAP;
+					? getHeadingGap() : getTextGap();
 			}
 		}
 
@@ -479,7 +489,7 @@ export class AbsoluteSectionManager {
 				const nextData = this.sections.get(this.fileOrder[i + 1] ?? '');
 				if (nextData) {
 					offset += (data.endsWithHeading && nextData.startsWithHeading)
-						? HEADING_GAP : TEXT_GAP;
+						? getHeadingGap() : getTextGap();
 				}
 			}
 		}
