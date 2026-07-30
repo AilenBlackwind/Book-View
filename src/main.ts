@@ -1,4 +1,5 @@
 import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { AbsoluteSectionManager, ThemeSpacings } from './components/AbsoluteSectionManager';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
 import { getManifestFiles, isBookManifest } from './components/ManifestParser';
 import { WheelAccelerator } from './components/WheelAccelerator';
@@ -13,6 +14,7 @@ export default class BookViewPlugin extends Plugin {
 	api: BookViewAPI | null = null;
 	private skipPaths = new Set<string>();
 	heightStore: Record<string, { m: number; h: number }> = {};
+	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
 	private saveHeightsTimer = 0;
 
 	getPersistedHeight = (path: string, mtime: number): number | undefined => {
@@ -37,6 +39,15 @@ export default class BookViewPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		this.themeSpacings = await AbsoluteSectionManager.measureThemeSpacings(this.app);
+		this.registerEvent(
+			this.app.workspace.on('css-change', async () => {
+				this.themeSpacings = await AbsoluteSectionManager.measureThemeSpacings(this.app);
+				this.recalculateBookLayouts();
+			}),
+		);
+
 		this.bufferManager = new BufferManager(this.app);
 		this.api = new BookViewAPI(
 			this.app,
@@ -163,6 +174,15 @@ export default class BookViewPlugin extends Plugin {
 		for (const leaf of leaves) {
 			if (leaf.view instanceof BookView) {
 				leaf.view.refreshToc();
+			}
+		}
+	}
+
+	recalculateBookLayouts() {
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BOOK_VIEW);
+		for (const leaf of leaves) {
+			if (leaf.view instanceof BookView && leaf.view.absoluteManager) {
+				leaf.view.absoluteManager.applyThemeSpacings(this.themeSpacings);
 			}
 		}
 	}

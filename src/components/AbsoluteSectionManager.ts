@@ -6,6 +6,13 @@ export const HEIGHT_PER_LINE = 25;
 const OVERSCAN_TOP = 2500;
 const SCROLL_THRESHOLD = 1;
 
+export interface ThemeSpacings {
+	h1TopGap: number;
+	h2TopGap: number;
+	headerToHeaderGap: number;
+	textGap: number;
+}
+
 interface SectionData {
 	el: HTMLElement;
 	component: Component | null;
@@ -31,6 +38,8 @@ export class AbsoluteSectionManager {
 	private masterFile: TFile;
 	private loadMargin: number;
 	private persistence: HeightPersistence;
+
+	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
 
 	private sections: Map<string, SectionData> = new Map();
 	private fileOrder: string[] = [];
@@ -464,40 +473,127 @@ export class AbsoluteSectionManager {
 	private getGapBetweenNotes(prevPath: string, nextPath: string): number {
 		const prevEl = this.sections.get(prevPath)?.el;
 		const nextEl = this.sections.get(nextPath)?.el;
-		if (!prevEl || !nextEl) return 16;
+		if (!prevEl || !nextEl) return this.themeSpacings.textGap;
 
-		const prevLast = AbsoluteSectionManager.getLastContentElement(prevEl);
-		const nextFirst = AbsoluteSectionManager.getFirstContentElement(nextEl);
-		if (!prevLast || !nextFirst) return 16;
+		const prevLast = this.getLastContentElement(prevEl);
+		const nextFirst = this.getFirstContentElement(nextEl);
+		if (!prevLast || !nextFirst) return this.themeSpacings.textGap;
 
 		const prevLevel = AbsoluteSectionManager.getHeaderLevel(prevLast);
 		const currLevel = AbsoluteSectionManager.getHeaderLevel(nextFirst);
 
-		let gap = 16;
+		const s = this.themeSpacings;
 
 		if (prevLevel && currLevel) {
-			gap = 0;
+			return Math.max(0, s.headerToHeaderGap);
 		} else if (currLevel === 'h1') {
-			gap = 52;
+			return s.h1TopGap;
 		} else if (currLevel) {
-			gap = 34;
+			return s.h2TopGap;
 		}
 
-		return gap;
+		return s.textGap;
 	}
 
-	private static getFirstContentElement(noteEl: HTMLElement): Element | null {
+	private isIgnoredElement(el: Element): boolean {
+		if (el.tagName === 'PRE' && el.classList.contains('frontmatter')) return true;
+		if (el.classList.contains('frontmatter-container')) return true;
+		if (el.classList.contains('metadata-container')) return true;
+		if (el.classList.contains('mod-header')) return true;
+		if ((el as HTMLElement).style.display === 'none') return true;
+		return false;
+	}
+
+	private getFirstContentElement(noteEl: HTMLElement): Element | null {
 		const rendered = noteEl.classList.contains('markdown-rendered')
 			? noteEl
 			: (noteEl.querySelector('.markdown-rendered') || noteEl);
-		return rendered.firstElementChild;
+		for (const child of Array.from(rendered.children)) {
+			if (this.isIgnoredElement(child)) continue;
+			return child;
+		}
+		return null;
 	}
 
-	private static getLastContentElement(noteEl: HTMLElement): Element | null {
+	private getLastContentElement(noteEl: HTMLElement): Element | null {
 		const rendered = noteEl.classList.contains('markdown-rendered')
 			? noteEl
 			: (noteEl.querySelector('.markdown-rendered') || noteEl);
-		return rendered.lastElementChild;
+		const children = Array.from(rendered.children);
+		for (let i = children.length - 1; i >= 0; i--) {
+			const child = children[i];
+			if (!child) continue;
+			if (this.isIgnoredElement(child)) continue;
+			return child;
+		}
+		return null;
+	}
+
+	static async measureThemeSpacings(app: App): Promise<ThemeSpacings> {
+		const probe = document.body.createDiv({
+			cls: 'book-view-probe markdown-rendered',
+			attr: {
+				style: 'position: absolute !important; visibility: hidden !important; pointer-events: none !important; left: -9999px !important; top: -9999px !important; width: 800px !important;',
+			},
+		});
+
+		const testMarkdown = 'Тест 1\n\n# Заголовок 1\n\n## Заголовок 2\n\nТест 2';
+		const spacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
+
+		try {
+			const component = new Component();
+			await MarkdownRenderer.render(app, testMarkdown, probe, '', component);
+
+			const blocks = Array.from(probe.children).filter((el) => {
+				if (el.tagName === 'PRE' && el.classList.contains('frontmatter')) return false;
+				if (el.classList.contains('frontmatter-container')) return false;
+				if (el.classList.contains('metadata-container')) return false;
+				return true;
+			});
+
+			const p1Block = blocks.find(
+				(el) => el.querySelector('p, .el-p') || el.classList.contains('el-p'),
+			);
+			const h1Block = blocks.find(
+				(el) => el.querySelector('h1') || el.classList.contains('el-h1'),
+			);
+			const h2Block = blocks.find(
+				(el) => el.querySelector('h2') || el.classList.contains('el-h2'),
+			);
+			const p2Block = [...blocks].reverse().find(
+				(el) => el.querySelector('p, .el-p') || el.classList.contains('el-p'),
+			);
+
+			if (p1Block && h1Block) {
+				spacings.h1TopGap = Math.round(
+					h1Block.getBoundingClientRect().top - p1Block.getBoundingClientRect().bottom,
+				);
+			}
+			if (h1Block && h2Block) {
+				spacings.headerToHeaderGap = Math.round(
+					h2Block.getBoundingClientRect().top - h1Block.getBoundingClientRect().bottom,
+				);
+			}
+			if (p1Block && h2Block) {
+				spacings.h2TopGap = Math.round(
+					h2Block.getBoundingClientRect().top - p1Block.getBoundingClientRect().bottom,
+				);
+			}
+			if (p1Block && p2Block) {
+				const textGap = Math.round(
+					p2Block.getBoundingClientRect().top - p1Block.getBoundingClientRect().bottom,
+				);
+				if (textGap >= 0) spacings.textGap = textGap;
+			}
+
+			component.unload();
+		} catch (e) {
+			console.warn('BookView: theme probe failed, using defaults', e);
+		} finally {
+			probe.remove();
+		}
+
+		return spacings;
 	}
 
 	private static getHeaderLevel(el: Element): string | null {
@@ -548,7 +644,12 @@ export class AbsoluteSectionManager {
 		}
 	}
 
-	private scheduleUpdate(): void {
+	applyThemeSpacings(spacings: ThemeSpacings): void {
+		this.themeSpacings = spacings;
+		this.scheduleUpdate();
+	}
+
+	scheduleUpdate(): void {
 		if (this.rafId) return;
 		this.rafId = window.requestAnimationFrame(() => {
 			this.rafId = 0;

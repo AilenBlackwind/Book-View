@@ -14,7 +14,7 @@ function matchesModifiers(evt: MouseEvent, mod: ModifierConfig): boolean {
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
 
 export class BookView extends ItemView {
-	private absoluteManager: AbsoluteSectionManager | null = null;
+	absoluteManager: AbsoluteSectionManager | null = null;
 	private tocController: TocController | null = null;
 	private contentContainer: HTMLElement | null = null;
 	private wheelAccelerator: WheelAccelerator | null = null;
@@ -152,6 +152,9 @@ export class BookView extends ItemView {
 			settings?.loadMargin,
 			{ get: this.plugin?.getPersistedHeight, put: this.plugin?.persistHeight },
 		);
+		if (this.plugin?.themeSpacings) {
+			this.absoluteManager.themeSpacings = this.plugin.themeSpacings;
+		}
 		this.absoluteManager.render();
 
 		this.tocController = new TocController(
