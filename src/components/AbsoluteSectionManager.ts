@@ -234,7 +234,7 @@ export class AbsoluteSectionManager {
 			this.observer.observe(el);
 		}
 
-		this.recalcOffsets();
+		this.recalcOffsets(0);
 		void Promise.allSettled(readPromises).then(() => {
 			this.scheduleUpdate();
 		});
@@ -487,10 +487,19 @@ export class AbsoluteSectionManager {
 		return num;
 	}
 
-	private recalcOffsets(): void {
-		let offset = 0;
+	private recalcOffsets(fromIndex: number, recalcAll = false): void {
+		let offset = fromIndex > 0
+			? (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.offset ?? 0)
+				+ (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.height ?? 0)
+			: 0;
 
-		for (let i = 0; i < this.fileOrder.length; i++) {
+		if (fromIndex > 0 && !recalcAll) {
+			const prevPath = this.fileOrder[fromIndex - 1] ?? '';
+			const currPath = this.fileOrder[fromIndex] ?? '';
+			offset += this.gapBetween(prevPath, currPath);
+		}
+
+		for (let i = fromIndex; i < this.fileOrder.length; i++) {
 			const path = this.fileOrder[i] ?? '';
 			const data = this.sections.get(path);
 			if (!data) break;
@@ -582,7 +591,7 @@ export class AbsoluteSectionManager {
 			this.pendingHeights.clear();
 		}
 
-		this.recalcOffsets();
+		this.recalcOffsets(0);
 		this.restoreScrollAt(anchor, freshScrollTop);
 	}
 
