@@ -89,6 +89,15 @@
 	scroll-margin-top: 20px;
 }
 
+.book-section-placeholder .markdown-preview-view h1:first-child,
+.book-section-placeholder .markdown-preview-view h2:first-child,
+.book-section-placeholder .markdown-preview-view h3:first-child,
+.book-section-placeholder .markdown-preview-view h4:first-child,
+.book-section-placeholder .markdown-preview-view h5:first-child,
+.book-section-placeholder .markdown-preview-view h6:first-child {
+	margin-top: var(--heading-spacing) !important;
+}
+
 @keyframes book-heading-pulse {
 	0% {
 		background-color: var(--interactive-accent);
