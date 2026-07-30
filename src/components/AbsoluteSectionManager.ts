@@ -470,23 +470,29 @@ export class AbsoluteSectionManager {
 		const nextFirst = nextEl.querySelector('.markdown-rendered > :first-child');
 		if (!prevLast || !nextFirst) return 16;
 
-		const isPrevHeading = AbsoluteSectionManager.isHeadingElement(prevLast);
-		const isNextHeading = AbsoluteSectionManager.isHeadingElement(nextFirst);
+		const prevLevel = AbsoluteSectionManager.getHeaderLevel(prevLast);
+		const currLevel = AbsoluteSectionManager.getHeaderLevel(nextFirst);
 
-		// heading → heading: 0
-		if (isPrevHeading && isNextHeading) return 0;
+		// heading → heading: minimal gap (~4px)
+		if (prevLevel && currLevel) return 4;
 
-		// text → heading: large spacing
-		if (isNextHeading) return 28;
+		// text → H1: large section gap (~52px)
+		if (currLevel === 'h1') return 52;
 
-		// text → text or heading → text: paragraph spacing
+		// text → H2-H6: medium gap (~34px)
+		if (currLevel) return 34;
+
+		// text → text: paragraph spacing (~16px)
 		return 16;
 	}
 
-	private static isHeadingElement(el: Element): boolean {
-		if (/^H[1-6]$/.test(el.tagName)) return true;
-		const cls = el.className;
-		return typeof cls === 'string' && /(^|\s)el-h[1-6](\s|$)/.test(cls);
+	private static getHeaderLevel(el: Element): string | null {
+		if (!el) return null;
+		const heading = el.matches('h1,h2,h3,h4,h5,h6')
+			? el
+			: el.querySelector('h1,h2,h3,h4,h5,h6');
+		if (!heading) return null;
+		return heading.tagName.toLowerCase();
 	}
 
 	private findAnchorAt(scrollTop: number): { idx: number; anchorOffset: number } | null {
