@@ -3,27 +3,8 @@ import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
 
-let _headingGap: number | null = null;
-let _textGap: number | null = null;
-
-function resolveCssGap(variable: string, fallback: string): number {
-	const temp = createDiv();
-	document.body.appendChild(temp);
-	temp.style.marginTop = `var(${variable}, ${fallback})`;
-	const value = parseFloat(getComputedStyle(temp).marginTop) || 0;
-	temp.remove();
-	return value;
-}
-
-function getHeadingGap(): number {
-	if (_headingGap === null) _headingGap = resolveCssGap('--heading-spacing', '1.5em');
-	return _headingGap;
-}
-
-function getTextGap(): number {
-	if (_textGap === null) _textGap = resolveCssGap('--p-spacing', '1rem');
-	return _textGap;
-}
+const HEADING_GAP = 6;
+const TEXT_GAP = 16;
 const OVERSCAN_TOP = 2500;
 const SCROLL_THRESHOLD = 1;
 
@@ -472,7 +453,7 @@ export class AbsoluteSectionManager {
 			const currData = this.sections.get(this.fileOrder[fromIndex] ?? '');
 			if (prevData && currData) {
 				offset += (prevData.endsWithHeading && currData.startsWithHeading)
-					? getHeadingGap() : getTextGap();
+					? HEADING_GAP : TEXT_GAP;
 			}
 		}
 
@@ -487,9 +468,9 @@ export class AbsoluteSectionManager {
 
 			if (i + 1 < this.fileOrder.length) {
 				const nextData = this.sections.get(this.fileOrder[i + 1] ?? '');
-				if (nextData) {
+			if (nextData) {
 					offset += (data.endsWithHeading && nextData.startsWithHeading)
-						? getHeadingGap() : getTextGap();
+						? HEADING_GAP : TEXT_GAP;
 				}
 			}
 		}
