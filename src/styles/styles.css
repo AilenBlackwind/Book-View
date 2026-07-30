@@ -79,9 +79,6 @@
 	margin: 0;
 }
 
-.book-section-placeholder .markdown-preview-view > :last-child {
-	margin-bottom: 0 !important;
-}
 
 .book-section-placeholder .markdown-preview-view h1,
 .book-section-placeholder .markdown-preview-view h2,
