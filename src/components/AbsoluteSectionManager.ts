@@ -3,7 +3,7 @@ import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
 
-const HEADING_GAP = 0;
+const FALLBACK_PX = 16;
 const OVERSCAN_TOP = 2500;
 const SCROLL_THRESHOLD = 1;
 
@@ -32,7 +32,6 @@ export class AbsoluteSectionManager {
 	private masterFile: TFile;
 	private loadMargin: number;
 	private persistence: HeightPersistence;
-	private textGap: number;
 
 	private sections: Map<string, SectionData> = new Map();
 	private fileOrder: string[] = [];
@@ -85,8 +84,6 @@ export class AbsoluteSectionManager {
 		this.masterFile = masterFile;
 		this.loadMargin = loadMargin;
 		this.persistence = persistence;
-
-		this.textGap = this.resolveTextGap();
 
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
@@ -444,38 +441,62 @@ export class AbsoluteSectionManager {
 		return null;
 	}
 
-	private resolveTextGap(): number {
+	private gapBetween(prevPath: string, nextPath: string): number {
+		const prevData = this.sections.get(prevPath);
+		const nextData = this.sections.get(nextPath);
+		if (!prevData || !nextData) return FALLBACK_PX;
+
+		const lastA = prevData.el.querySelector('.markdown-rendered')?.lastElementChild;
+		const firstB = nextData.el.querySelector('.markdown-rendered')?.firstElementChild;
+
+		const isAHeader = lastA
+			? /^H[1-6]$/.test(lastA.tagName)
+			: prevData.endsWithHeading;
+
+		const isBHeader = firstB
+			? /^H[1-6]$/.test(firstB.tagName)
+			: nextData.startsWithHeading;
+
+		// heading → heading: 0
+		if (isAHeader && isBHeader) return 0;
+
 		const style = getComputedStyle(this.scrollContainer);
-		const pSpacing = this.parseCssPx(style.getPropertyValue('--p-spacing'), 16);
-		const hSpacing = this.parseCssPx(style.getPropertyValue('--heading-spacing'), 0);
-		return Math.max(pSpacing, hSpacing);
+		const pSpacing = AbsoluteSectionManager.parseCssPx(
+			style.getPropertyValue('--p-spacing'), FALLBACK_PX,
+		);
+
+		if (isBHeader) {
+			const hSpacing = AbsoluteSectionManager.parseCssPx(
+				style.getPropertyValue('--heading-spacing'), FALLBACK_PX,
+			);
+			return Math.max(pSpacing, hSpacing);
+		}
+
+		return pSpacing;
 	}
 
-	private parseCssPx(val: string | undefined, fallback: number): number {
+	private static parseCssPx(val: string | undefined, fallback: number): number {
 		if (!val) return fallback;
 		const m = val.trim().match(/^([\d.]+)(px|rem|em)?$/);
 		if (!m) return fallback;
 		const num = parseFloat(m[1] ?? '');
 		const unit = m[2];
 		if (unit === 'rem' || unit === 'em') {
-			return num * parseFloat(getComputedStyle(this.scrollContainer).fontSize);
+			return num * parseFloat(getComputedStyle(document.body).fontSize);
 		}
 		return num;
 	}
 
-	private recalcOffsets(fromIndex: number): void {
+	private recalcOffsets(fromIndex: number, recalcAll = false): void {
 		let offset = fromIndex > 0
 			? (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.offset ?? 0)
 				+ (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.height ?? 0)
 			: 0;
 
-		if (fromIndex > 0) {
-			const prevData = this.sections.get(this.fileOrder[fromIndex - 1] ?? '');
-			const currData = this.sections.get(this.fileOrder[fromIndex] ?? '');
-			if (prevData && currData) {
-				offset += (prevData.endsWithHeading && currData.startsWithHeading)
-					? HEADING_GAP : this.textGap;
-			}
+		if (fromIndex > 0 && !recalcAll) {
+			const prevPath = this.fileOrder[fromIndex - 1] ?? '';
+			const currPath = this.fileOrder[fromIndex] ?? '';
+			offset += this.gapBetween(prevPath, currPath);
 		}
 
 		for (let i = fromIndex; i < this.fileOrder.length; i++) {
@@ -488,11 +509,8 @@ export class AbsoluteSectionManager {
 			offset += data.height;
 
 			if (i + 1 < this.fileOrder.length) {
-				const nextData = this.sections.get(this.fileOrder[i + 1] ?? '');
-			if (nextData) {
-					offset += (data.endsWithHeading && nextData.startsWithHeading)
-						? HEADING_GAP : this.textGap;
-				}
+				const nextPath = this.fileOrder[i + 1] ?? '';
+				offset += this.gapBetween(path, nextPath);
 			}
 		}
 
