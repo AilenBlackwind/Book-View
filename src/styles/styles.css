@@ -82,14 +82,18 @@
 }
 
 .book-section-absolute .markdown-rendered > :first-child,
-.book-section-absolute .markdown-rendered > :first-child * {
+.book-section-absolute .markdown-rendered > :first-child *,
+.book-section-absolute .markdown-rendered > [class*="el-"]:first-child * {
 	margin-top: 0 !important;
+	margin-block-start: 0 !important;
 	padding-top: 0 !important;
 }
 
 .book-section-absolute .markdown-rendered > :last-child,
-.book-section-absolute .markdown-rendered > :last-child * {
+.book-section-absolute .markdown-rendered > :last-child *,
+.book-section-absolute .markdown-rendered > [class*="el-"]:last-child * {
 	margin-bottom: 0 !important;
+	margin-block-end: 0 !important;
 	padding-bottom: 0 !important;
 }
 

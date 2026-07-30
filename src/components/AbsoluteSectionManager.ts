@@ -473,14 +473,14 @@ export class AbsoluteSectionManager {
 		const prevLevel = AbsoluteSectionManager.getHeaderLevel(prevLast);
 		const currLevel = AbsoluteSectionManager.getHeaderLevel(nextFirst);
 
-		// heading → heading: minimal gap (~4px)
-		if (prevLevel && currLevel) return 4;
+		// heading → heading: 0 (strictly flush)
+		if (prevLevel && currLevel) return 0;
 
-		// text → H1: large section gap (~52px)
-		if (currLevel === 'h1') return 52;
+		// text → H1: large section gap (~48px)
+		if (currLevel === 'h1') return 48;
 
-		// text → H2-H6: medium gap (~34px)
-		if (currLevel) return 34;
+		// text → H2-H6: medium gap (~32px)
+		if (currLevel) return 32;
 
 		// text → text: paragraph spacing (~16px)
 		return 16;
