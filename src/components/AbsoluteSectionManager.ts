@@ -2,8 +2,18 @@ import { App, Component, MarkdownRenderer, TFile } from 'obsidian';
 import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
-const HEADING_GAP = 0;
-const TEXT_GAP = 0;
+
+function resolveCssGap(variable: string, fallback: string): number {
+	const temp = createDiv();
+	document.body.appendChild(temp);
+	temp.style.marginTop = `var(${variable}, ${fallback})`;
+	const value = parseFloat(getComputedStyle(temp).marginTop) || 0;
+	temp.remove();
+	return value;
+}
+
+const HEADING_GAP = resolveCssGap('--heading-spacing', '1.5em');
+const TEXT_GAP = resolveCssGap('--p-spacing', '1rem');
 const OVERSCAN_TOP = 2500;
 const SCROLL_THRESHOLD = 1;
 
