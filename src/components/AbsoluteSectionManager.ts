@@ -466,33 +466,51 @@ export class AbsoluteSectionManager {
 		const nextEl = this.sections.get(nextPath)?.el;
 		if (!prevEl || !nextEl) return 16;
 
-		const prevLast = prevEl.querySelector('.markdown-rendered > :last-child');
-		const nextFirst = nextEl.querySelector('.markdown-rendered > :first-child');
+		const prevLast = AbsoluteSectionManager.getLastContentElement(prevEl);
+		const nextFirst = AbsoluteSectionManager.getFirstContentElement(nextEl);
 		if (!prevLast || !nextFirst) return 16;
 
 		const prevLevel = AbsoluteSectionManager.getHeaderLevel(prevLast);
 		const currLevel = AbsoluteSectionManager.getHeaderLevel(nextFirst);
 
-		// heading → heading: 0 (strictly flush)
-		if (prevLevel && currLevel) return 0;
+		let gap = 16;
 
-		// text → H1: large section gap (~48px)
-		if (currLevel === 'h1') return 48;
+		if (prevLevel && currLevel) {
+			gap = 0;
+		} else if (currLevel === 'h1') {
+			gap = 52;
+		} else if (currLevel) {
+			gap = 34;
+		}
 
-		// text → H2-H6: medium gap (~32px)
-		if (currLevel) return 32;
+		return gap;
+	}
 
-		// text → text: paragraph spacing (~16px)
-		return 16;
+	private static getFirstContentElement(noteEl: HTMLElement): Element | null {
+		const rendered = noteEl.classList.contains('markdown-rendered')
+			? noteEl
+			: (noteEl.querySelector('.markdown-rendered') || noteEl);
+		return rendered.firstElementChild;
+	}
+
+	private static getLastContentElement(noteEl: HTMLElement): Element | null {
+		const rendered = noteEl.classList.contains('markdown-rendered')
+			? noteEl
+			: (noteEl.querySelector('.markdown-rendered') || noteEl);
+		return rendered.lastElementChild;
 	}
 
 	private static getHeaderLevel(el: Element): string | null {
-		if (!el) return null;
-		const heading = el.matches('h1,h2,h3,h4,h5,h6')
-			? el
-			: el.querySelector('h1,h2,h3,h4,h5,h6');
-		if (!heading) return null;
-		return heading.tagName.toLowerCase();
+		if (/^H[1-6]$/i.test(el.tagName)) return el.tagName.toLowerCase();
+
+		for (let i = 1; i <= 6; i++) {
+			if (el.classList.contains(`el-h${i}`)) return `h${i}`;
+		}
+
+		const heading = el.querySelector('h1, h2, h3, h4, h5, h6');
+		if (heading) return heading.tagName.toLowerCase();
+
+		return null;
 	}
 
 	private findAnchorAt(scrollTop: number): { idx: number; anchorOffset: number } | null {
