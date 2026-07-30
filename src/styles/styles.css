@@ -81,7 +81,7 @@
 	margin: 0;
 }
 
-.book-section-placeholder .markdown-preview-view > :last-child {
+.book-section-placeholder .markdown-preview-view :last-child {
 	margin-bottom: 0 !important;
 }
 
