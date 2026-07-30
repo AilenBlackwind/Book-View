@@ -4,7 +4,6 @@ import { ManifestLink } from './ManifestParser';
 export const HEIGHT_PER_LINE = 25;
 
 const HEADING_GAP = 0;
-const TEXT_GAP = 0;
 const OVERSCAN_TOP = 2500;
 const SCROLL_THRESHOLD = 1;
 
@@ -33,6 +32,7 @@ export class AbsoluteSectionManager {
 	private masterFile: TFile;
 	private loadMargin: number;
 	private persistence: HeightPersistence;
+	private textGap: number;
 
 	private sections: Map<string, SectionData> = new Map();
 	private fileOrder: string[] = [];
@@ -85,6 +85,8 @@ export class AbsoluteSectionManager {
 		this.masterFile = masterFile;
 		this.loadMargin = loadMargin;
 		this.persistence = persistence;
+
+		this.textGap = this.resolveTextGap();
 
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
@@ -442,6 +444,25 @@ export class AbsoluteSectionManager {
 		return null;
 	}
 
+	private resolveTextGap(): number {
+		const style = getComputedStyle(this.scrollContainer);
+		const pSpacing = this.parseCssPx(style.getPropertyValue('--p-spacing'), 16);
+		const hSpacing = this.parseCssPx(style.getPropertyValue('--heading-spacing'), 0);
+		return Math.max(pSpacing, hSpacing);
+	}
+
+	private parseCssPx(val: string | undefined, fallback: number): number {
+		if (!val) return fallback;
+		const m = val.trim().match(/^([\d.]+)(px|rem|em)?$/);
+		if (!m) return fallback;
+		const num = parseFloat(m[1] ?? '');
+		const unit = m[2];
+		if (unit === 'rem' || unit === 'em') {
+			return num * parseFloat(getComputedStyle(this.scrollContainer).fontSize);
+		}
+		return num;
+	}
+
 	private recalcOffsets(fromIndex: number): void {
 		let offset = fromIndex > 0
 			? (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.offset ?? 0)
@@ -453,7 +474,7 @@ export class AbsoluteSectionManager {
 			const currData = this.sections.get(this.fileOrder[fromIndex] ?? '');
 			if (prevData && currData) {
 				offset += (prevData.endsWithHeading && currData.startsWithHeading)
-					? HEADING_GAP : TEXT_GAP;
+					? HEADING_GAP : this.textGap;
 			}
 		}
 
@@ -470,7 +491,7 @@ export class AbsoluteSectionManager {
 				const nextData = this.sections.get(this.fileOrder[i + 1] ?? '');
 			if (nextData) {
 					offset += (data.endsWithHeading && nextData.startsWithHeading)
-						? HEADING_GAP : TEXT_GAP;
+						? HEADING_GAP : this.textGap;
 				}
 			}
 		}
