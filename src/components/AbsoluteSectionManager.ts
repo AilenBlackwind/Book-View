@@ -3,7 +3,6 @@ import { ManifestLink } from './ManifestParser';
 
 export const HEIGHT_PER_LINE = 25;
 
-const HEADING_GAP = 0;
 const OVERSCAN_TOP = 2500;
 const SCROLL_THRESHOLD = 1;
 
@@ -32,7 +31,6 @@ export class AbsoluteSectionManager {
 	private masterFile: TFile;
 	private loadMargin: number;
 	private persistence: HeightPersistence;
-	private textGap: number;
 
 	private sections: Map<string, SectionData> = new Map();
 	private fileOrder: string[] = [];
@@ -85,8 +83,6 @@ export class AbsoluteSectionManager {
 		this.masterFile = masterFile;
 		this.loadMargin = loadMargin;
 		this.persistence = persistence;
-
-		this.textGap = 0;
 
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
@@ -237,7 +233,7 @@ export class AbsoluteSectionManager {
 			this.observer.observe(el);
 		}
 
-		this.recalcOffsets(0);
+		this.recalcOffsets();
 		void Promise.allSettled(readPromises).then(() => {
 			this.scheduleUpdate();
 		});
@@ -444,22 +440,10 @@ export class AbsoluteSectionManager {
 		return null;
 	}
 
-	private recalcOffsets(fromIndex: number): void {
-		let offset = fromIndex > 0
-			? (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.offset ?? 0)
-				+ (this.sections.get(this.fileOrder[fromIndex - 1] ?? '')?.height ?? 0)
-			: 0;
+	private recalcOffsets(): void {
+		let offset = 0;
 
-		if (fromIndex > 0) {
-			const prevData = this.sections.get(this.fileOrder[fromIndex - 1] ?? '');
-			const currData = this.sections.get(this.fileOrder[fromIndex] ?? '');
-			if (prevData && currData) {
-				offset += (prevData.endsWithHeading && currData.startsWithHeading)
-					? HEADING_GAP : this.textGap;
-			}
-		}
-
-		for (let i = fromIndex; i < this.fileOrder.length; i++) {
+		for (let i = 0; i < this.fileOrder.length; i++) {
 			const path = this.fileOrder[i] ?? '';
 			const data = this.sections.get(path);
 			if (!data) break;
@@ -469,15 +453,40 @@ export class AbsoluteSectionManager {
 			offset += data.height;
 
 			if (i + 1 < this.fileOrder.length) {
-				const nextData = this.sections.get(this.fileOrder[i + 1] ?? '');
-			if (nextData) {
-					offset += (data.endsWithHeading && nextData.startsWithHeading)
-						? HEADING_GAP : this.textGap;
-				}
+				const nextPath = this.fileOrder[i + 1] ?? '';
+				offset += this.getGapBetweenNotes(path, nextPath);
 			}
 		}
 
 		this.spacerEl.style.height = `${offset}px`;
+	}
+
+	private getGapBetweenNotes(prevPath: string, nextPath: string): number {
+		const prevEl = this.sections.get(prevPath)?.el;
+		const nextEl = this.sections.get(nextPath)?.el;
+		if (!prevEl || !nextEl) return 16;
+
+		const prevLast = prevEl.querySelector('.markdown-rendered > :last-child');
+		const nextFirst = nextEl.querySelector('.markdown-rendered > :first-child');
+		if (!prevLast || !nextFirst) return 16;
+
+		const isPrevHeading = AbsoluteSectionManager.isHeadingElement(prevLast);
+		const isNextHeading = AbsoluteSectionManager.isHeadingElement(nextFirst);
+
+		// heading → heading: 0
+		if (isPrevHeading && isNextHeading) return 0;
+
+		// text → heading: large spacing
+		if (isNextHeading) return 28;
+
+		// text → text or heading → text: paragraph spacing
+		return 16;
+	}
+
+	private static isHeadingElement(el: Element): boolean {
+		if (/^H[1-6]$/.test(el.tagName)) return true;
+		const cls = el.className;
+		return typeof cls === 'string' && /(^|\s)el-h[1-6](\s|$)/.test(cls);
 	}
 
 	private findAnchorAt(scrollTop: number): { idx: number; anchorOffset: number } | null {
@@ -554,7 +563,7 @@ export class AbsoluteSectionManager {
 			this.pendingHeights.clear();
 		}
 
-		this.recalcOffsets(0);
+		this.recalcOffsets();
 		this.restoreScrollAt(anchor, freshScrollTop);
 	}
 
