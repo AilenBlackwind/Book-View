@@ -2,6 +2,10 @@
 
 Renders a sequence of linked notes as a single scrollable document with a table of contents, lazy loading, and a script API for bulk text operations.
 
+## Status
+
+This project is AI-assisted and under active development. It has plenty of minor bugs. Use at your own risk.
+
 ## Features
 
 - Manifest-driven: a frontmatter property `book-view: true` activates the view
@@ -196,7 +200,3 @@ npm run lint    # eslint
 ```
 
 Build artifacts (`main.js`, `styles.css`, `manifest.json`) are copied to the vault plugin folder automatically.
-
-## License
-
-MIT
