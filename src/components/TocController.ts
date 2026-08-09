@@ -3,6 +3,7 @@ import { BookViewSettings } from '../settings';
 import { HEIGHT_PER_LINE } from './AbsoluteSectionManager';
 import type { AbsoluteSectionManager } from './AbsoluteSectionManager';
 import { renderInlineMarkdown, stripMarkdown } from '../utils/renderInlineMarkdown';
+import { pickActiveIndex, computeActivePath, computeHiddenState } from '../utils/toc';
 
 export interface TocEntry {
 	level: number;
@@ -24,6 +25,12 @@ export class TocController {
 	private headingLis: HTMLElement[] = [];
 	private chevronEls: HTMLElement[] = [];
 	private activeHeading: HTMLElement | null = null;
+	/** Lookup from `${path}#${line}` to ToC entry index (built once per build). */
+	private entryByPathLine: Map<string, number> = new Map();
+	/** Measured y-offset of each entry's heading within its section, in spacer
+	 *  coordinates relative to the section top. Unknown (unloaded / fold-hidden)
+	 *  entries fall back to the line-based estimate. */
+	private headingOffsets: Map<number, number> = new Map();
 	onEntryContextMenu: ((entryIndex: number, evt: MouseEvent) => void) | null = null;
 
 	// --- Expand/collapse state ---
@@ -40,13 +47,18 @@ export class TocController {
 	// --- Scroll ---
 	private headingPositions: number[] = [];
 	private scrollHandler: (() => void) | null = null;
-	private scrollRafId = 0;
+	private tickScheduled = false;
 	private highlightEl: HTMLElement | null = null;
 	private fadeTimer = 0;
 	private lastCenterIndex = -1;
 	private scrollCenterTimer = 0;
 	private scrollCenterBlocked = false;
-	private lastScrollTop = 0;
+	/** Cached viewport height; reading clientHeight every scroll frame forces a reflow. */
+	private viewportHeight = 0;
+	private viewportResizeObserver: ResizeObserver | null = null;
+	/** Cached TOC panel height for write-only scroll centering. */
+	private tocViewportHeight = 0;
+	private tocResizeObserver: ResizeObserver | null = null;
 
 	// --- Navigation guard ---
 	private navigating = false;
@@ -131,6 +143,7 @@ export class TocController {
 		this.activePathSet.clear();
 		this.activeEntryIndex = -1;
 		this.isJumping = false;
+		this.headingOffsets.clear();
 
 		this.defaultLevel = this.settings?.tocCollapsedLevel ?? 0;
 
@@ -186,6 +199,13 @@ export class TocController {
 		this.containerEl.addClass('book-toc-relative');
 		this.highlightEl = this.containerEl.createDiv({ cls: 'book-toc-highlight' });
 
+		this.entryByPathLine = new Map<string, number>();
+		for (let i = 0; i < this.entries.length; i++) {
+			const entry = this.entries[i];
+			if (!entry) continue;
+			this.entryByPathLine.set(`${entry.file.path}#${entry.line}`, i);
+		}
+
 		if (this.settings?.tocActiveColor) {
 			this.containerEl.style.setProperty('--bv-toc-active-color', this.settings.tocActiveColor);
 		}
@@ -195,6 +215,20 @@ export class TocController {
 		this.applyVisibility();
 		this.calculatePositions();
 		this.setupScrollSpy();
+
+		this.viewportHeight = this.scrollContainer.clientHeight;
+		this.viewportResizeObserver?.disconnect();
+		this.viewportResizeObserver = new ResizeObserver(() => {
+			this.viewportHeight = this.scrollContainer.clientHeight;
+		});
+		this.viewportResizeObserver.observe(this.scrollContainer);
+
+		this.tocViewportHeight = this.containerEl.clientHeight;
+		this.tocResizeObserver?.disconnect();
+		this.tocResizeObserver = new ResizeObserver(() => {
+			this.tocViewportHeight = this.containerEl.clientHeight;
+		});
+		this.tocResizeObserver.observe(this.containerEl);
 
 		// Bootstrap: highlight first heading after build
 		if (this.entries.length > 0) {
@@ -273,26 +307,7 @@ export class TocController {
 
 	/** Compute the active path: entry `index` (if it has children) + all ancestors */
 	private computeActivePath(index: number): Set<number> {
-		const path = new Set<number>();
-		const entry = this.entries[index];
-		if (!entry) return path;
-
-		// Add current heading if it has children (so its section expands as soon as we arrive)
-		const next = this.entries[index + 1];
-		if (next && next.level > entry.level) {
-			path.add(index);
-		}
-
-		let targetLevel = entry.level;
-		for (let i = index - 1; i >= 0; i--) {
-			const a = this.entries[i];
-			if (!a) break;
-			if (a.level < targetLevel) {
-				path.add(i);
-				targetLevel = a.level;
-			}
-		}
-		return path;
+		return computeActivePath(this.entries, index);
 	}
 
 	private toggleCollapse(index: number): void {
@@ -310,34 +325,22 @@ export class TocController {
 	}
 
 	private applyVisibility(): void {
-		// Phase 1: compute new state
-		const willHide: boolean[] = new Array(this.entries.length).fill(false);
-		for (let i = 0; i < this.entries.length; i++) {
-			let isHidden = false;
-			let targetLevel = this.entries[i]?.level ?? 0;
-			for (let j = i - 1; j >= 0 && targetLevel >= 1; j--) {
-				const ancestor = this.entries[j];
-				if (!ancestor) break;
-				if (ancestor.level < targetLevel) {
-					if (!this.isEntryExpanded(j)) {
-						isHidden = true;
-						break;
-					}
-					targetLevel = ancestor.level;
-				}
-			}
-			willHide[i] = isHidden;
-		}
+		// Phase 1: compute new state in a single forward pass (O(n)) using a
+		// stack of open ancestors instead of a backward scan per entry.
+		const willHide = computeHiddenState(this.entries, (i) => this.isEntryExpanded(i));
 
-		// Phase 2: lock heights for changing items
-		const changed: HTMLElement[] = [];
+		// Phase 2: lock heights for changing items. Read all scroll heights
+		// first (one forced reflow), then write all max-heights.
+		const changed: { li: HTMLElement; index: number; start: number }[] = [];
 		for (let i = 0; i < this.entries.length; i++) {
 			const li = this.headingLis[i];
 			if (!li) continue;
 			const currentlyHidden = li.hasClass('book-toc-collapsed-hidden');
 			if (willHide[i] === currentlyHidden) continue;
-			changed.push(li);
-			li.style.maxHeight = li.scrollHeight + 'px';
+			changed.push({ li, index: i, start: li.scrollHeight });
+		}
+		for (const c of changed) {
+			c.li.style.maxHeight = `${c.start}px`;
 		}
 
 		if (changed.length > 0) void document.body.offsetHeight;
@@ -353,10 +356,8 @@ export class TocController {
 			}
 		}
 
-		for (let i = 0; i < this.entries.length; i++) {
-			const li = this.headingLis[i];
-			if (!li || !changed.includes(li)) continue;
-			li.style.maxHeight = willHide[i] ? '0' : li.scrollHeight + 'px';
+		for (const c of changed) {
+			c.li.style.maxHeight = willHide[c.index] ? '0' : `${c.start}px`;
 		}
 
 		// Phase 4: after transition, clear inline max-height for expanded items
@@ -383,11 +384,21 @@ export class TocController {
 	calculatePositions(): void {
 		if (!this.absoluteManager) return;
 
-		const offsets = this.absoluteManager.getAllOffsets();
-		this.headingPositions = this.entries.map((entry) => {
-			const fileOffset = offsets.get(entry.file.path) ?? 0;
-			return fileOffset + entry.line * HEIGHT_PER_LINE;
-		});
+		const n = this.entries.length;
+		if (this.headingPositions.length !== n) {
+			this.headingPositions = new Array<number>(n);
+		}
+		// Per-entry getOffset avoids allocating a Map for every frame of scroll;
+		// the array is reused to avoid GC churn. Prefer the measured within-
+		// section offset (set by tagHeadings when the section is mounted) over
+		// the line-based estimate.
+		for (let i = 0; i < n; i++) {
+			const entry = this.entries[i];
+			if (!entry) continue;
+			const within = this.headingOffsets.get(i);
+			this.headingPositions[i] = (this.absoluteManager.getOffset(entry.file.path) ?? 0)
+				+ (within ?? entry.line * HEIGHT_PER_LINE);
+		}
 	}
 
 	tagHeadings(path: string, container: HTMLElement): void {
@@ -395,6 +406,15 @@ export class TocController {
 		if (!(file instanceof TFile)) return;
 		const cache = this.app.metadataCache.getFileCache(file);
 		if (!cache?.headings) return;
+
+		const sectionEl = container.parentElement;
+		if (!(sectionEl instanceof HTMLElement)) return;
+
+		// A fresh render means the content may have changed: drop the cached
+		// within-section offsets for this path and re-measure below.
+		for (let k = 0; k < this.entries.length; k++) {
+			if (this.entries[k]?.file.path === path) this.headingOffsets.delete(k);
+		}
 
 		const headingEls = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
 
@@ -404,11 +424,20 @@ export class TocController {
 			const el = headingEls[i];
 			if (!(el instanceof HTMLElement)) continue;
 
-			const tocIndex = this.entries.findIndex(
-				(e) => e.file.path === path && e.line === heading.position.start.line,
-			);
-			if (tocIndex >= 0) {
-				el.setAttribute('data-entry-index', String(tocIndex));
+			const tocIndex = this.entryByPathLine.get(`${path}#${heading.position.start.line}`);
+			if (tocIndex === undefined) continue;
+
+			el.setAttribute('data-entry-index', String(tocIndex));
+
+			// Measure the heading's y within its section so the scroll spy can
+			// use the real position instead of the line*HEIGHT_PER_LINE estimate
+			// (which drifts past images, code blocks, and callouts). Headings
+			// hidden by fold-mode collapse have display:none — their rect is
+			// zeroed, so skip them and keep the line-based fallback.
+			if (el.offsetParent !== null) {
+				const sectionRect = sectionEl.getBoundingClientRect();
+				const headingRect = el.getBoundingClientRect();
+				this.headingOffsets.set(tocIndex, headingRect.top - sectionRect.top);
 			}
 		}
 	}
@@ -419,15 +448,25 @@ export class TocController {
 		if (this.tocItems.length === 0) return;
 
 		this.scrollHandler = () => {
-			if (this.scrollRafId) return;
-			this.scrollRafId = window.requestAnimationFrame(() => {
-				this.scrollRafId = 0;
-				this.onScrollTick();
-			});
+			// No layout read in the scroll event: events can dispatch while the
+			// book layout is dirty (async section loads), and reading scrollTop
+			// would force a full style recalc right here. Instead request one
+			// coalesced frame; the tick reads scrollTop in the rAF, before the
+			// offset writes.
+			if (this.tickScheduled) return;
+			this.tickScheduled = true;
+			this.absoluteManager?.requestFrame();
 		};
 
+		this.absoluteManager?.addFrameCallback(this.onFrameTick);
 		this.scrollContainer.addEventListener('scroll', this.scrollHandler, { passive: true });
 	}
+
+	/** Runs at the start of the shared frame, before position writes. */
+	private onFrameTick = (): void => {
+		this.tickScheduled = false;
+		this.onScrollTick();
+	};
 
 	/** Called once per rAF frame on scroll */
 	private onScrollTick(): void {
@@ -436,18 +475,10 @@ export class TocController {
 		this.calculatePositions();
 
 		const scrollTop = this.scrollContainer.scrollTop;
-		this.lastScrollTop = scrollTop;
 
 		// find active heading by position
-		const viewportHeight = this.scrollContainer.clientHeight;
-		const triggerY = scrollTop + viewportHeight * 0.3;
-		let bestIndex = -1;
-		for (let i = this.headingPositions.length - 1; i >= 0; i--) {
-			if ((this.headingPositions[i] ?? 0) <= triggerY) {
-				bestIndex = i;
-				break;
-			}
-		}
+		const viewportHeight = this.viewportHeight;
+		const bestIndex = pickActiveIndex(this.headingPositions, scrollTop, viewportHeight);
 
 		if (bestIndex < 0) {
 			window.clearTimeout(this.activePathTimer);
@@ -523,25 +554,43 @@ export class TocController {
 		const el = this.tocItems[index];
 		if (!el) return;
 
+		// Only touch the DOM when the active item actually changes; during a
+		// scroll within one heading the active item is stable.
 		if (el !== this.activeHeading) {
 			this.activeHeading?.removeClass('is-active');
 			el.addClass('is-active');
 			this.activeHeading = el;
-		}
 
-		if (this.highlightEl) {
-			this.highlightEl.style.top = `${el.offsetTop}px`;
-			this.highlightEl.style.height = `${el.offsetHeight}px`;
+			// Host the highlight bar inside the active row: it then follows the
+			// item automatically through collapse/expand animations and TOC
+			// reflows, so it can never sit on a stale cached position.
+			if (this.highlightEl) {
+				const li = this.headingLis[index];
+				if (li && this.highlightEl.parentElement !== li) {
+					li.appendChild(this.highlightEl);
+				}
+			}
 		}
 	}
 
-	/** Quiet Outline-style leading-edge debounced scroll centering */
+	/** Quiet Outline-style leading-edge debounced scroll centering.
+	 *  Write-only: computes the target from the active row's offset (the rows'
+	 *  offsetParent is the positioned .book-toc-relative container) and the
+	 *  cached panel height. The scrollTo itself forces layout, so it is
+	 *  deferred to a macrotask: rAF callbacks run before the frame's layout,
+	 *  and a write right after processUpdates dirtied styles would force a
+	 *  reflow. A setTimeout fires after the render, when the layout is clean. */
 	private scrollActiveIntoView(index: number): void {
 		if (this.scrollCenterBlocked || index < 0) return;
 		this.scrollCenterBlocked = true;
 
-		const el = this.tocItems[index];
-		el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+		const li = this.headingLis[index];
+		if (li && this.tocViewportHeight > 0) {
+			const target = Math.max(0, li.offsetTop - (this.tocViewportHeight - li.offsetHeight) / 2);
+			window.setTimeout(() => {
+				this.containerEl.scrollTo({ top: target, behavior: 'smooth' });
+			}, 0);
+		}
 
 		window.clearTimeout(this.scrollCenterTimer);
 		this.scrollCenterTimer = window.setTimeout(() => {
@@ -626,10 +675,8 @@ export class TocController {
 	}
 
 	destroy(): void {
-		if (this.scrollRafId) {
-			window.cancelAnimationFrame(this.scrollRafId);
-			this.scrollRafId = 0;
-		}
+		this.absoluteManager?.removeFrameCallback(this.onFrameTick);
+		this.tickScheduled = false;
 		if (this.scrollHandler) {
 			this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;
@@ -639,6 +686,10 @@ export class TocController {
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
 		window.clearTimeout(this.animCleanupTimer);
+		this.viewportResizeObserver?.disconnect();
+		this.viewportResizeObserver = null;
+		this.tocResizeObserver?.disconnect();
+		this.tocResizeObserver = null;
 		this.highlightEl = null;
 		this.activeHeading = null;
 		this.entries = [];
@@ -646,6 +697,8 @@ export class TocController {
 		this.headingLis = [];
 		this.chevronEls = [];
 		this.headingPositions = [];
+		this.headingOffsets.clear();
+		this.entryByPathLine.clear();
 		this.userCollapsedSet.clear();
 		this.userExpandedSet.clear();
 		this.activePathSet.clear();

@@ -1,5 +1,5 @@
 import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
-import { AbsoluteSectionManager, ThemeSpacings } from './components/AbsoluteSectionManager';
+import { ThemeSpacings, measureThemeSpacings } from './utils/theme';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
 import { getManifestFiles, isBookManifest } from './components/ManifestParser';
 import { WheelAccelerator } from './components/WheelAccelerator';
@@ -40,10 +40,10 @@ export default class BookViewPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		this.themeSpacings = await AbsoluteSectionManager.measureThemeSpacings(this.app);
+		this.themeSpacings = await measureThemeSpacings(this.app);
 		this.registerEvent(
 			this.app.workspace.on('css-change', async () => {
-				this.themeSpacings = await AbsoluteSectionManager.measureThemeSpacings(this.app);
+				this.themeSpacings = await measureThemeSpacings(this.app);
 				this.recalculateBookLayouts();
 			}),
 		);
