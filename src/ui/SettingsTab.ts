@@ -38,15 +38,25 @@ export class BookViewSettingTab extends PluginSettingTab {
 			.setHeading();
 
 		new Setting(containerEl)
-			.setName('Width')
-			.setDesc('Width of the toc panel in pixels.')
-			.addSlider((slider) =>
-				slider
-					.setLimits(150, 500, 10)
-					.setValue(this.plugin.settings.tocWidth)
-					.setDynamicTooltip()
-					.onChange(async (value: number) => {
-						this.plugin.settings.tocWidth = value;
+			.setName('Auto-open for books')
+			.setDesc('Show the table of contents in the right sidebar automatically whenever a book is open. When disabled, the toc opens only via the "toggle book toc in right sidebar" command.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.tocAutoOpen)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.tocAutoOpen = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Focus toc when opening a book')
+			.setDesc('Make the toc panel the active view when switching to a book. When disabled, the panel opens but the book stays active.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.tocFocusOnBook)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.tocFocusOnBook = value;
 						await this.plugin.saveSettings();
 					}),
 			);

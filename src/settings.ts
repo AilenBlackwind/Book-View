@@ -22,13 +22,14 @@ export interface MenuProfile {
 export type AutoExpandMode = 'expand-collapse-default' | 'only-expand' | 'expand-collapse-level' | 'disabled';
 
 export interface BookViewSettings {
-	tocWidth: number;
 	tocShowFileNames: boolean;
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
 	tocActiveColor: string;
 	tocCollapsedLevel: number;
 	autoExpandMode: AutoExpandMode;
+	tocAutoOpen: boolean;
+	tocFocusOnBook: boolean;
 	loadMargin: number;
 	wheelFlickEnabled: boolean;
 	wheelFlickStrength: number;
@@ -38,13 +39,14 @@ export interface BookViewSettings {
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
-	tocWidth: 260,
 	tocShowFileNames: true,
 	tocGuides: true,
 	tocRenderMarkdown: true,
 	tocActiveColor: '',
 	tocCollapsedLevel: 0,
 	autoExpandMode: 'disabled',
+	tocAutoOpen: true,
+	tocFocusOnBook: true,
 	loadMargin: 800,
 	wheelFlickEnabled: true,
 	wheelFlickStrength: 2,

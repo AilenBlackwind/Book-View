@@ -11,6 +11,35 @@ import { DebugLog } from '../utils/debug';
 
 export const HEIGHT_PER_LINE = 25;
 
+// TEMP debug: global main-thread frame counter, independent of the book
+// manager. It shows whether the note tab actually keeps rendering at ~60fps
+// while the user reads a note with the ToC panel open — if a background loop
+// (book manager, ToC smooth scroll, etc.) is hogging the main thread, the
+// rAF callbacks fire less often and the count per second drops.
+let dbgGlobalFrames = 0;
+let dbgGlobalProbeRunning = false;
+function startGlobalFrameProbe(): void {
+	if (dbgGlobalProbeRunning) return;
+	dbgGlobalProbeRunning = true;
+	let last = performance.now();
+	let frames = 0;
+	const loop = (now: number): void => {
+		frames++;
+		dbgGlobalFrames++;
+		const elapsed = now - last;
+		if (elapsed >= 1000) {
+			const fps = Math.round((frames * 1000) / elapsed);
+			frames = 0;
+			last = now;
+			// Report independently of the book manager so low fps is caught
+			// even when the manager itself is idle (no DBG window open).
+			if (fps < 50) DebugLog.log('DBG', '', `fps=${fps}`, 'low-fps', '');
+		}
+		window.requestAnimationFrame(loop);
+	};
+	window.requestAnimationFrame(loop);
+}
+
 export class AbsoluteSectionManager {
 	private scrollContainer: HTMLElement;
 	private spacerEl: HTMLElement;
@@ -50,7 +79,7 @@ export class AbsoluteSectionManager {
 	private renderedDomCache: Map<string, HTMLElement> = new Map();
 	private containerWidthObserver: ResizeObserver;
 	private lastScrollTop = 0;
-	private boundScrollHandler: (() => void) | null = null;
+	private boundScrollHandler: ((evt: Event) => void) | null = null;
 	private boundClickHandler: ((evt: MouseEvent) => void) | null = null;
 	private lastContainerWidth = 0;
 	private pendingHeights: Map<string, number> = new Map();
@@ -62,13 +91,112 @@ export class AbsoluteSectionManager {
 	private frameCallbacks: (() => void)[] = [];
 	private pool: SectionPool;
 
+	// TEMP debug: scroll-source diagnostics (remove after investigation).
+	private dbgFs = 0;
+	private dbgUs = 0;
+	private dbgHs = 0;
+	private dbgSps = 0;
+	private dbgSev = 0;
+	private dbgSevB = 0;
+	private dbgT0 = 0;
+	private dbgSpam = new Map<string, number>();
+	// TEMP debug: scroll writer probe (who sets scrollTop / calls scrollTo).
+	private dbgST = 0;
+	private dbgScrollToCalls = 0;
+	private dbgWriters: string[] = [];
+	private dbgStackCaptured = 0;
+	// TEMP debug: wheel events (user scrolling input) on the book container.
+	private dbgWheel = 0;
+	// TEMP debug: per-second ms spent in the frame, processUpdates, frame
+	// callbacks (ToC tick), and ToC tagHeadings (fed by BookTocView).
+	private dbgFrameMs = 0;
+	private dbgUpdMs = 0;
+	private dbgCbMs = 0;
+	// TEMP debug: isolated reflow-cost probe — one document.body rect read every
+	// few frames, unrelated to book/ToC DOM. If it stays cheap while book rects
+	// cost ~20ms each, the expensive reflow is book-specific (its layout is
+	// being re-dirtied constantly); if it balloons too, the whole page layout
+	// is stuck dirty (something global keeps invalidating it).
+	private dbgProbeMs = 0;
+	private dbgProbeCount = 0;
+	private dbgProbeTick = 0;
+	/** TEMP: accumulated ms spent in TocController.tagHeadings. */
+	static dbgTagMs = 0;
+	/** TEMP: frames rendered by the whole main thread in the last DBG window. */
+	static dbgFps = 0;
+	/** TEMP: number of actual getBoundingClientRect heading measurements done by
+	 *  tagHeadings in the last DBG window (fed by TocController). Distinguishes
+	 *  "each measurement got more expensive" (dirty-layout reflow) from "more
+	 *  measurements ran" (headingOffsets cache is being invalidated). */
+	static dbgTagRects = 0;
+
 	// Thin wrapper keeping call sites readable; logic lives in utils/debug.
-	private dbg(msg: string, path?: string, a?: number | string, b?: number | string, c?: number | string): void {
-		DebugLog.log(msg, path, a, b, c);
+	private dbg(
+		msg: string,
+		path?: string,
+		a?: number | string,
+		b?: number | string,
+		c?: number | string,
+		d?: number | string,
+	): void {
+		DebugLog.log(msg, path, a, b, c, d);
+	}
+
+	// TEMP debug: wraps scrollTop/scrollTo/scrollBy on the book container to
+	// record who writes the scroll position. Native browser adjustments
+	// (scroll anchoring, user input, scrollIntoView) bypass these JS hooks, so
+	// if `top` climbs while st/to are 0 the writer is external.
+	private installScrollWriterProbe(): void {
+		const el = this.scrollContainer;
+		// TEMP debug probe: aliasing `this` is intentional here — the accessor
+		// functions below run with `this` = the element, not the manager.
+		// eslint-disable-next-line @typescript-eslint/no-this-alias -- see above
+		const self = this;
+		const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+		if (desc?.set && desc.get) {
+			// Narrow the descriptor so the probe can re-bind the accessors to
+			// the element instance (kept attached to `sd` for the lint rule).
+			const sd = desc as { get: () => number; set: (v: number) => void };
+			Object.defineProperty(el, 'scrollTop', {
+				configurable: true,
+				get() {
+					return sd.get.call(this);
+				},
+				set(v: number) {
+					self.dbgST++;
+					if (self.dbgStackCaptured < 4) {
+						self.dbgStackCaptured++;
+						self.dbgWriters.push(
+							`scrollTop=${Math.round(v)} ${self.stackLabel()}`,
+						);
+					}
+					sd.set.call(this, v);
+				},
+			});
+		}
+		const wrap = (name: 'scrollTo' | 'scrollBy', original: (...a: unknown[]) => void): void => {
+			(el as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
+				self.dbgScrollToCalls++;
+				if (self.dbgStackCaptured < 4) {
+					self.dbgStackCaptured++;
+					self.dbgWriters.push(`${name} ${self.stackLabel()}`);
+				}
+				original(...args);
+			};
+		};
+		wrap('scrollTo', (el.scrollTo as (...a: unknown[]) => void).bind(el));
+		wrap('scrollBy', (el.scrollBy as (...a: unknown[]) => void).bind(el));
+	}
+
+	private stackLabel(): string {
+		return new Error().stack?.split('\n').slice(2, 5).join(' | ') ?? '';
 	}
 
 	/** Records a measured height delivered by the SectionPool's resize observer. */
 	reportSectionHeight(path: string, newHeight: number): void {
+		this.dbgHs++;
+		const c = (this.dbgSpam.get(path) ?? 0) + 1;
+		this.dbgSpam.set(path, c);
 		this.pendingHeights.set(path, newHeight);
 		if (this.pendingHeights.size > 0) {
 			this.scheduleUpdate();
@@ -77,6 +205,9 @@ export class AbsoluteSectionManager {
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
 	onSectionRendered: ((path: string, container: HTMLElement) => void) | null = null;
+	/** Fired before a section is re-rendered because its content changed
+	 *  (markDirty), as opposed to a churn re-mount of identical content. */
+	onSectionContentChanged: ((path: string) => void) | null = null;
 
 	constructor(
 		scrollContainer: HTMLElement,
@@ -95,6 +226,15 @@ export class AbsoluteSectionManager {
 
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
+		startGlobalFrameProbe();
+		this.installScrollWriterProbe();
+		this.scrollContainer.addEventListener(
+			'wheel',
+			() => {
+				this.dbgWheel++;
+			},
+			{ passive: true, capture: true },
+		);
 
 		this.pool = new SectionPool({
 			sections: this.sections,
@@ -139,6 +279,15 @@ export class AbsoluteSectionManager {
 		this.containerWidthObserver = new ResizeObserver((entries) => {
 			for (const entry of entries) {
 				const newWidth = entry.contentRect.width;
+				// TEMP debug: does the book container collapse to 0 when the tab
+				// is hidden (background tab), faking a real width change?
+				this.dbg('width-resize', '', Math.round(newWidth), Math.round(this.lastContainerWidth));
+				// A hidden tab reports a 0-sized box (display:none). That is not a
+				// real width change: honoring it mass-resets section heights and
+				// re-queues the whole book for prerender while the user reads
+				// another note. Skip 0-sized observations; the visible width is
+				// compared on the next non-zero observation.
+				if (newWidth === 0) continue;
 				if (this.lastContainerWidth !== 0 && Math.abs(newWidth - this.lastContainerWidth) > 2) {
 					this.pendingWidthChange = true;
 					this.scheduleUpdate();
@@ -165,7 +314,16 @@ export class AbsoluteSectionManager {
 			},
 		});
 
-		this.boundScrollHandler = () => {
+		this.boundScrollHandler = (evt: Event) => {
+			// Only react to the book's own scroll: scroll events bubble, so a
+			// nested scrollable inside a section (code block, table, embed)
+			// firing a scroll event would otherwise wake the spy and start a
+			// frame for a scroll that did not move the book.
+			if (evt.target !== this.scrollContainer) {
+				this.dbgSevB++;
+				return;
+			}
+			this.dbgSev++;
 			// No scrollTop read here: a scroll event can be dispatched while
 			// the book layout is still dirty (async height measurements), and
 			// reading it would force a full style recalc. The scroll position
@@ -271,6 +429,7 @@ export class AbsoluteSectionManager {
 
 	/** Request a frame (used by the scroll spy to coalesce its read with updates). */
 	requestFrame(): void {
+		this.dbgSps++;
 		this.scheduleFrame();
 	}
 
@@ -288,12 +447,17 @@ export class AbsoluteSectionManager {
 	}
 
 	private runFrame(): void {
+		this.dbgFs++;
+		const t0 = performance.now();
 		if (this.pool.hasPendingIo()) {
 			this.updateRequested = true;
 		}
 		if (this.updateRequested) {
 			this.updateRequested = false;
+			const t1 = performance.now();
 			this.processUpdates();
+			this.dbgUpdMs += performance.now() - t1;
+			this.dbgUs++;
 		}
 		// Frame callbacks (the scroll spy) run AFTER processUpdates, not
 		// before: they read data.offset values and scrollTop, which are only
@@ -303,12 +467,68 @@ export class AbsoluteSectionManager {
 		// highlight landed on the wrong ToC entry until the next scroll frame.
 		// In the common plain-scroll frame processUpdates is a no-op and the
 		// layout is still clean, so the spy's reads stay cheap.
+		const t2 = performance.now();
 		for (const cb of this.frameCallbacks) {
 			cb();
 		}
+		this.dbgCbMs += performance.now() - t2;
+		this.runProbe();
 		// DOM load/unload is deferred to a macrotask after the render so this
 		// frame never pays the first layout of freshly mounted heavy content.
 		this.pool.scheduleIoWork();
+		this.dbgFrameMs += performance.now() - t0;
+		this.dbgTick();
+	}
+
+	/** TEMP debug: one document.body rect read every few frames, to sample the
+	 *  cost of a geometry read that touches the whole page layout. */
+	private runProbe(): void {
+		if (++this.dbgProbeTick % 4 !== 0) return;
+		const t0 = performance.now();
+		void document.body.getBoundingClientRect();
+		this.dbgProbeMs += performance.now() - t0;
+		this.dbgProbeCount++;
+	}
+
+	// TEMP debug: prints a per-second summary of what keeps the frame loop
+	// alive. `sev` = scroll events whose target is the book container itself,
+	// `sevB` = bubbled scroll events from nested scrollables inside sections.
+	// Remove after investigation.
+	private dbgTick(): void {
+		const now = performance.now();
+		if (!this.dbgT0) this.dbgT0 = now;
+		if (now - this.dbgT0 < 1000) return;
+		const [io, loads, unloads, prerenders] = this.pool.dbgReset();
+		const spam = [...this.dbgSpam.entries()].filter(([, c]) => c >= 3).map(([p, c]) => `${p.split('/').pop()}:${c}`).join(' ');
+		const writers = this.dbgWriters.splice(0).join(' ;; ');
+		this.dbg(
+			'DBG', '',
+			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} w=${this.dbgWheel}`,
+			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders}`,
+			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
+			`fr=${this.dbgFrameMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms cb=${this.dbgCbMs.toFixed(1)}ms tag=${AbsoluteSectionManager.dbgTagMs.toFixed(1)}ms rects=${AbsoluteSectionManager.dbgTagRects} probe=${(this.dbgProbeMs / Math.max(1, this.dbgProbeCount)).toFixed(2)}ms fps=${AbsoluteSectionManager.dbgFps}`,
+		);
+		this.dbgT0 = now;
+		this.dbgFs = 0;
+		this.dbgUs = 0;
+		this.dbgHs = 0;
+		this.dbgSps = 0;
+		this.dbgSev = 0;
+		this.dbgSevB = 0;
+		this.dbgST = 0;
+		this.dbgFrameMs = 0;
+		this.dbgUpdMs = 0;
+		this.dbgCbMs = 0;
+		AbsoluteSectionManager.dbgTagMs = 0;
+		this.dbgScrollToCalls = 0;
+		this.dbgWheel = 0;
+		this.dbgStackCaptured = 0;
+		this.dbgSpam.clear();
+		AbsoluteSectionManager.dbgFps = dbgGlobalFrames;
+		AbsoluteSectionManager.dbgTagRects = 0;
+		this.dbgProbeMs = 0;
+		this.dbgProbeCount = 0;
+		dbgGlobalFrames = 0;
 	}
 
 	private processUpdates(): void {
@@ -330,6 +550,7 @@ export class AbsoluteSectionManager {
 
 		if (this.pendingWidthChange) {
 			this.pendingWidthChange = false;
+			let widthResetCount = 0;
 			for (const [path, data] of this.sections) {
 				if (!data.el.querySelector('.markdown-rendered')) {
 					const content = this.rawContent.get(path);
@@ -338,8 +559,11 @@ export class AbsoluteSectionManager {
 					}
 					this.heightCache.delete(path);
 					data.heightTrusted = false;
+					widthResetCount++;
 				}
 			}
+			// TEMP debug: how many sections lost height trust to this width change.
+			this.dbg('width-reset', '', widthResetCount);
 		}
 
 		if (this.pendingHeights.size > 0) {
@@ -371,6 +595,7 @@ export class AbsoluteSectionManager {
 	}
 
 	markDirty(path: string): void {
+		this.onSectionContentChanged?.(path);
 		this.pool.refreshSection(path);
 	}
 

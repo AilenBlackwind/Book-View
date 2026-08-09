@@ -131,6 +131,12 @@
 	   scroll plugins) may set scroll-behavior:smooth, which would animate
 	   every programmatic scrollTop write into a visible rubber-band glide. */
 	scroll-behavior: auto !important;
+	/* Disable native scroll anchoring on the scroller itself (it was only on
+	   the inner .book-absolute-container before). While sections load/unload
+	   during churn, the browser auto-adjusts scrollTop to keep the anchored
+	   node stable, firing a scroll event per adjustment and re-entering the
+	   layout loop. The plugin restores its own anchor (restoreScrollAt). */
+	overflow-anchor: none !important;
 }
 
 .book-toc-container {
@@ -141,6 +147,15 @@
 	/* Isolate the TOC subtree: internal layout dirt (collapse/expand
 	 * animations, highlight writes) must not force the whole document to
 	 * reflow when the book scroll container is scrolled or measured. */
+	contain: layout;
+}
+
+/* Right-rail ToC (sidebar-toc spike): same styles as the in-book panel, but
+ * the panel itself is the scroll container (Obsidian sizes the sidebar). */
+.book-toc-view-root {
+	overflow-y: auto;
+	padding: 12px;
+	font-size: var(--font-smallest);
 	contain: layout;
 }
 
@@ -235,7 +250,6 @@
 }
 
 .book-heading-highlight {
-	display: inline;
 	animation: book-heading-pulse 1s ease-out forwards;
 }
 

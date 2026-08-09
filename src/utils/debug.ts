@@ -4,7 +4,7 @@
  * the scroll paths never allocate debug strings when disabled.
  */
 export class DebugLog {
-	static readonly ENABLED = false;
+	static readonly ENABLED = true;
 
 	private static readonly MAX = 2000;
 
@@ -15,6 +15,7 @@ export class DebugLog {
 		a?: number | string,
 		b?: number | string,
 		c?: number | string,
+		d?: number | string,
 	): void {
 		if (!DebugLog.ENABLED) return;
 		const w = window as unknown as { __bvLog?: string[] };
@@ -24,6 +25,7 @@ export class DebugLog {
 		if (a !== undefined) line += ` ${a}`;
 		if (b !== undefined) line += ` ${b}`;
 		if (c !== undefined) line += ` ${c}`;
+		if (d !== undefined) line += ` ${d}`;
 		log.push(line);
 		if (log.length > DebugLog.MAX) log.splice(0, log.length - DebugLog.MAX);
 	}

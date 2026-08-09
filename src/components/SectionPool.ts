@@ -79,6 +79,21 @@ export class SectionPool {
 	private idleTimer = 0;
 	private lastUserScrollTimestamp = 0;
 
+	// TEMP debug counters (remove after investigation).
+	dbgIo = 0;
+	dbgLoads = 0;
+	dbgUnloads = 0;
+	dbgPrerenders = 0;
+
+	dbgReset(): [number, number, number, number] {
+		const r: [number, number, number, number] = [this.dbgIo, this.dbgLoads, this.dbgUnloads, this.dbgPrerenders];
+		this.dbgIo = 0;
+		this.dbgLoads = 0;
+		this.dbgUnloads = 0;
+		this.dbgPrerenders = 0;
+		return r;
+	}
+
 	constructor(private host: SectionPoolHost) {
 		this.observer = new IntersectionObserver(
 			(entries) => {
@@ -97,6 +112,7 @@ export class SectionPool {
 					}
 
 					this.ioPending.push({ path, intersecting: entry.isIntersecting });
+					this.dbgIo++;
 				}
 				if (this.ioPending.length > 0) {
 					this.host.scheduleFrame();
@@ -246,6 +262,7 @@ export class SectionPool {
 	unloadSection(path: string): void {
 		const data = this.host.sections.get(path);
 		if (!data || !data.component) return;
+		this.dbgUnloads++;
 
 		this.host.dbg('unload', path);
 		this.sectionResizeObserver.unobserve(data.el);
@@ -329,6 +346,7 @@ export class SectionPool {
 	}
 
 	private async loadSection(path: string): Promise<void> {
+		this.dbgLoads++;
 		const data = this.host.sections.get(path);
 		if (!data || data.component) return;
 
@@ -480,6 +498,7 @@ export class SectionPool {
 		const paths = this.nextPreRenderPaths(PRERENDER_BATCH);
 		if (paths.length === 0) return;
 		for (const path of paths) {
+			this.dbgPrerenders++;
 			this.host.dbg('pre-render', path);
 			void this.loadSection(path).then(() => {
 				window.setTimeout(() => {

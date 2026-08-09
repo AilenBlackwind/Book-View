@@ -1,9 +1,10 @@
-import { ItemView, Menu, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
+import { ItemView, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { TocController, TocEntry } from '../components/TocController';
 import { WheelAccelerator } from '../components/WheelAccelerator';
 import { showScriptMenu } from '../ui/ContextMenu';
+import { DebugLog } from '../utils/debug';
 import type BookViewPlugin from '../main';
 import type { ModifierConfig } from '../settings';
 
@@ -14,13 +15,18 @@ function matchesModifiers(evt: MouseEvent, mod: ModifierConfig): boolean {
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
 
 export class BookView extends ItemView {
+	// TEMP debug: distinguish loadBook calls on the same vs. new instances.
+	private static nextInstanceId = 0;
+	readonly instanceId = ++BookView.nextInstanceId;
 	absoluteManager: AbsoluteSectionManager | null = null;
 	private tocController: TocController | null = null;
 	private contentContainer: HTMLElement | null = null;
 	private wheelAccelerator: WheelAccelerator | null = null;
-	private tocContainer: HTMLElement | null = null;
 	private currentFiles: TFile[] = [];
 	private manifestPaths: Set<string> = new Set();
+	/** Path actually rendered into the view (setState pre-sets filePath, so a
+	 *  separate field is needed to detect duplicate loads of the same book). */
+	private loadedPath = '';
 	private popoutLeaf: WorkspaceLeaf | null = null;
 	private savedScrollTop: number = -1;
 	filePath: string = '';
@@ -32,6 +38,18 @@ export class BookView extends ItemView {
 
 	getViewType(): string {
 		return VIEW_TYPE_BOOK_VIEW;
+	}
+
+	getContentContainer(): HTMLElement | null {
+		return this.contentContainer;
+	}
+
+	getCurrentFiles(): TFile[] {
+		return this.currentFiles;
+	}
+
+	getAbsoluteManager(): AbsoluteSectionManager | null {
+		return this.absoluteManager;
 	}
 
 	getDisplayText(): string {
@@ -69,31 +87,14 @@ export class BookView extends ItemView {
 	}
 
 	protected async onClose(): Promise<void> {
+		this.plugin?.tocCoordinator?.onBookClosed(this);
 		this.cleanup();
 	}
 
 	refreshToc(): void {
-		if (!this.tocContainer || !this.contentContainer || this.currentFiles.length === 0) return;
-
-		const settings = this.plugin?.settings;
-		if (settings) {
-			this.tocContainer.setCssStyles({ width: `${settings.tocWidth}px` });
-		}
-
-		if (this.tocController) {
-			this.tocController.destroy();
-		}
-
-		this.tocController = new TocController(
-			this.tocContainer,
-			this.currentFiles,
-			this.app,
-			this.contentContainer,
-			settings ?? null,
-			this.absoluteManager,
-		);
-		this.tocController.build();
-		this.initTocHeadingsCache();
+		// In-book ToC is disabled for the sidebar-toc spike; settings changes
+		// are applied to the right-rail ToC by the coordinator instead.
+		this.plugin?.tocCoordinator?.sync();
 	}
 
 	getTocEntries(): TocEntry[] {
@@ -107,7 +108,19 @@ export class BookView extends ItemView {
 	}
 
 	private async loadBook(filePath: string): Promise<void> {
+		// TEMP debug: log every loadBook call with its instance id to catch
+		// duplicate loads of the same book (tab/view churn) vs. fresh instances.
+		DebugLog.log('LOAD', String(this.instanceId), filePath);
+		// Obsidian may call onOpen/setState with the same filePath several times
+		// during a tab switch (open → setState → state re-apply). Each loadBook
+		// tears down the whole book, re-renders every section, and force-rebinds
+		// the ToC. Skip the duplicate work when this exact book is rendered.
+		if (this.loadedPath === filePath && this.absoluteManager && this.currentFiles.length > 0) {
+			DebugLog.log('LOAD skip', String(this.instanceId), filePath);
+			return;
+		}
 		this.cleanup();
+		this.loadedPath = filePath;
 		this.filePath = filePath;
 
 		const file = this.app.vault.getFileByPath(filePath);
@@ -127,13 +140,6 @@ export class BookView extends ItemView {
 			};
 		});
 
-		this.tocContainer = this.contentEl.createDiv({ cls: 'book-toc-container' });
-
-		const settings = this.plugin?.settings;
-		if (settings) {
-			this.tocContainer.setCssStyles({ width: `${settings.tocWidth}px` });
-		}
-
 		const links = getManifestLinks(this.app, file);
 		const files = getManifestFiles(this.app, file);
 		if (links.length === 0) {
@@ -143,6 +149,8 @@ export class BookView extends ItemView {
 
 		this.currentFiles = files;
 		this.manifestPaths = new Set(files.map((f) => f.path));
+
+		const settings = this.plugin?.settings;
 
 		this.absoluteManager = new AbsoluteSectionManager(
 			this.contentContainer,
@@ -157,54 +165,10 @@ export class BookView extends ItemView {
 		}
 		this.absoluteManager.render();
 
-		this.tocController = new TocController(
-			this.tocContainer,
-			files,
-			this.app,
-			this.contentContainer,
-			settings ?? null,
-			this.absoluteManager,
-		);
-		this.tocController.build();
-
-		this.absoluteManager.onSectionRendered = (path, container) => {
-			this.tocController?.tagHeadings(path, container);
-		};
-
-		this.tocController.onEntryContextMenu = (entryIndex, evt) => {
-			const masterFile = this.app.vault.getFileByPath(this.filePath);
-			if (!(masterFile instanceof TFile)) return;
-
-			const profiles = this.plugin?.settings.menuProfiles ?? [];
-
-			const menu = new Menu();
-			menu.addItem((item) => {
-				item.setTitle('Create buffer note').onClick(() => {
-					void this.plugin?.bufferManager.createBuffer(
-						masterFile,
-						this.tocController!.getEntries(),
-						entryIndex,
-					);
-				});
-			});
-
-			for (const profile of profiles) {
-				if (profile.scripts.length > 0) {
-					menu.addSeparator();
-					for (const script of profile.scripts) {
-						menu.addItem((item) => {
-							item.setTitle(script.label).onClick(() => {
-								this.plugin?.api?.setContext({ selection: '', entryIndex });
-								(this.app as unknown as { commands: { executeCommandById: (id: string) => void } })
-									.commands.executeCommandById(script.commandId);
-							});
-						});
-					}
-				}
-			}
-
-			menu.showAtMouseEvent(evt);
-		};
+		// In-book ToC is disabled for the sidebar-toc spike. The right-rail
+		// BookTocView owns TocController + tagHeadings via the coordinator,
+		// which rebinds after this book finishes loading.
+		this.plugin?.tocCoordinator?.setCurrentBook(this);
 
 		this.registerDomEvent(this.contentContainer, 'dblclick', (evt: MouseEvent) => {
 			const mod = this.plugin?.settings.editorModifiers;
@@ -333,7 +297,7 @@ export class BookView extends ItemView {
 
 		const timer = window.setTimeout(() => {
 			this.tocRefreshTimers.delete(path);
-			this.tocController?.build();
+			this.plugin?.tocCoordinator?.refresh();
 		}, 500);
 		this.tocRefreshTimers.set(path, timer);
 	}
@@ -345,6 +309,9 @@ export class BookView extends ItemView {
 	}
 
 	private restoreScrollPosition(): void {
+		// TEMP debug: correlate the scroll-event storm with the restore jump
+		// (hypothesis B: spy churns while the position jump settles).
+		DebugLog.log('RESTORE', '', this.savedScrollTop >= 0 ? this.savedScrollTop : -2);
 		if (this.contentContainer && this.savedScrollTop >= 0) {
 			const target = this.savedScrollTop;
 			this.savedScrollTop = -1;

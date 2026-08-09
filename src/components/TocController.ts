@@ -1,9 +1,9 @@
 import { App, TFile, setIcon } from 'obsidian';
 import { BookViewSettings } from '../settings';
-import { HEIGHT_PER_LINE } from './AbsoluteSectionManager';
-import type { AbsoluteSectionManager } from './AbsoluteSectionManager';
+import { AbsoluteSectionManager, HEIGHT_PER_LINE } from './AbsoluteSectionManager';
 import { renderInlineMarkdown, stripMarkdown } from '../utils/renderInlineMarkdown';
 import { pickActiveIndex, computeActivePath, computeHiddenState } from '../utils/toc';
+import { DebugLog } from '../utils/debug';
 
 export interface TocEntry {
 	level: number;
@@ -51,8 +51,8 @@ export class TocController {
 	private highlightEl: HTMLElement | null = null;
 	private fadeTimer = 0;
 	private lastCenterIndex = -1;
-	private scrollCenterTimer = 0;
-	private scrollCenterBlocked = false;
+	/** Trailing-debounce timer for post-settle scroll centering. */
+	private centerScrollTimer = 0;
 	/** Cached viewport height; reading clientHeight every scroll frame forces a reflow. */
 	private viewportHeight = 0;
 	private viewportResizeObserver: ResizeObserver | null = null;
@@ -343,7 +343,11 @@ export class TocController {
 			c.li.style.maxHeight = `${c.start}px`;
 		}
 
-		if (changed.length > 0) void document.body.offsetHeight;
+		// Force the max-height "start" value to be picked up before the target
+		// write. Read the contained panel instead of document.body: the TOC
+		// container has contain:layout, so this reflows only the panel subtree,
+		// not the whole document.
+		if (changed.length > 0) void this.containerEl.offsetHeight;
 
 		// Phase 3: toggle class and set target height
 		for (let i = 0; i < this.entries.length; i++) {
@@ -401,6 +405,20 @@ export class TocController {
 		}
 	}
 
+	/** Drop measured within-section offsets for one path. Called when a file's
+	 *  content is edited (markDirty re-renders the section without a TOC
+	 *  rebuild), so the next render re-measures instead of trusting a stale
+	 *  offset. */
+	invalidatePath(path: string): void {
+		let removed = 0;
+		for (let k = 0; k < this.entries.length; k++) {
+			if (this.entries[k]?.file.path === path && this.headingOffsets.delete(k)) removed++;
+		}
+		// TEMP debug: is the headingOffsets cache being silently evicted by
+		// markDirty (file modify events) while the user is elsewhere?
+		if (removed > 0) DebugLog.log('TOC invalidate', path, removed);
+	}
+
 	tagHeadings(path: string, container: HTMLElement): void {
 		const file = this.app.vault.getFileByPath(path);
 		if (!(file instanceof TFile)) return;
@@ -410,14 +428,15 @@ export class TocController {
 		const sectionEl = container.parentElement;
 		if (!(sectionEl instanceof HTMLElement)) return;
 
-		// A fresh render means the content may have changed: drop the cached
-		// within-section offsets for this path and re-measure below.
-		for (let k = 0; k < this.entries.length; k++) {
-			if (this.entries[k]?.file.path === path) this.headingOffsets.delete(k);
-		}
-
 		const headingEls = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
 
+		// Churn re-mounts of the same file re-render an identical layout, so the
+		// measured within-section offsets stay valid across renders. Only measure
+		// headings without a cached offset: getBoundingClientRect is a forced-
+		// layout read, and re-reading every heading on every re-mount dominates
+		// the per-frame cost while the book scrolls. Content edits invalidate the
+		// cache via invalidatePath, so stale offsets are re-measured there.
+		let sectionRect: DOMRect | null = null;
 		for (let i = 0; i < cache.headings.length; i++) {
 			const heading = cache.headings[i];
 			if (!heading) continue;
@@ -429,16 +448,16 @@ export class TocController {
 
 			el.setAttribute('data-entry-index', String(tocIndex));
 
-			// Measure the heading's y within its section so the scroll spy can
-			// use the real position instead of the line*HEIGHT_PER_LINE estimate
-			// (which drifts past images, code blocks, and callouts). Headings
-			// hidden by fold-mode collapse have display:none — their rect is
-			// zeroed, so skip them and keep the line-based fallback.
-			if (el.offsetParent !== null) {
-				const sectionRect = sectionEl.getBoundingClientRect();
-				const headingRect = el.getBoundingClientRect();
-				this.headingOffsets.set(tocIndex, headingRect.top - sectionRect.top);
-			}
+			if (this.headingOffsets.has(tocIndex)) continue;
+
+			// Headings hidden by fold-mode collapse have display:none — their
+			// rect is zeroed, so skip them and keep the line-based fallback.
+			if (el.offsetParent === null) continue;
+
+			if (!sectionRect) sectionRect = sectionEl.getBoundingClientRect();
+			const headingRect = el.getBoundingClientRect();
+			this.headingOffsets.set(tocIndex, headingRect.top - sectionRect.top);
+			AbsoluteSectionManager.dbgTagRects++;
 		}
 	}
 
@@ -517,10 +536,13 @@ export class TocController {
 
 		this.updateHighlight(highlightIndex);
 
-		// Center active TOC item on change (leading 100ms debounce)
+		// Center the active item once the scroll settles. Centering inside the
+		// scroll frame both forced a layout read (li.offsetTop) and restarted a
+		// smooth scroll on the panel for every active-item change; a single
+		// trailing animation after the wheel rests is one read + one animation.
 		if (this.lastCenterIndex !== bestIndex) {
 			this.lastCenterIndex = bestIndex;
-			this.scrollActiveIntoView(bestIndex);
+			this.scheduleCenterScroll(bestIndex);
 		}
 
 		// Debounce expand/collapse: wait for scroll to settle (30ms)
@@ -573,29 +595,19 @@ export class TocController {
 		}
 	}
 
-	/** Quiet Outline-style leading-edge debounced scroll centering.
-	 *  Write-only: computes the target from the active row's offset (the rows'
-	 *  offsetParent is the positioned .book-toc-relative container) and the
-	 *  cached panel height. The scrollTo itself forces layout, so it is
-	 *  deferred to a macrotask: rAF callbacks run before the frame's layout,
-	 *  and a write right after processUpdates dirtied styles would force a
-	 *  reflow. A setTimeout fires after the render, when the layout is clean. */
-	private scrollActiveIntoView(index: number): void {
-		if (this.scrollCenterBlocked || index < 0) return;
-		this.scrollCenterBlocked = true;
-
-		const li = this.headingLis[index];
-		if (li && this.tocViewportHeight > 0) {
+	/** Write-only scroll centering, run once after the scroll settles. Computes
+	 *  the target from the active row's offset (the rows' offsetParent is the
+	 *  positioned .book-toc-relative container) and the cached panel height.
+	 *  Runs in a macrotask so the layout read/write happens after the frame's
+	 *  render, when the layout is clean. */
+	private scheduleCenterScroll(index: number): void {
+		window.clearTimeout(this.centerScrollTimer);
+		this.centerScrollTimer = window.setTimeout(() => {
+			const li = this.headingLis[index];
+			if (!li || this.tocViewportHeight <= 0) return;
 			const target = Math.max(0, li.offsetTop - (this.tocViewportHeight - li.offsetHeight) / 2);
-			window.setTimeout(() => {
-				this.containerEl.scrollTo({ top: target, behavior: 'smooth' });
-			}, 0);
-		}
-
-		window.clearTimeout(this.scrollCenterTimer);
-		this.scrollCenterTimer = window.setTimeout(() => {
-			this.scrollCenterBlocked = false;
-		}, 100);
+			this.containerEl.scrollTo({ top: target, behavior: 'smooth' });
+		}, 150);
 	}
 
 	async scrollToHeading(entryIndex: number): Promise<void> {
@@ -626,16 +638,7 @@ export class TocController {
 			}
 
 			if (targetHeading) {
-				const headingRect = targetHeading.getBoundingClientRect();
-				const containerRect = this.scrollContainer.getBoundingClientRect();
-				const correctedScroll =
-					this.scrollContainer.scrollTop +
-					(headingRect.top - containerRect.top) -
-					20;
-				this.scrollContainer.scrollTo({
-					top: correctedScroll,
-					behavior: 'auto',
-				});
+				await this.settleScrollToHeading(targetHeading as HTMLElement);
 				this.highlightHeading(targetHeading as HTMLElement);
 			}
 
@@ -654,6 +657,31 @@ export class TocController {
 				this.navigating = false;
 				this.isJumping = false;
 			}, 200);
+		}
+	}
+
+	/**
+	 * The heading rect read right after a section mounts is stale: async
+	 * renders (images, code blocks) and re-mounting of neighbouring sections
+	 * keep shifting the layout for a few frames. Re-measure and re-correct
+	 * the scroll until the heading's on-screen position stabilizes.
+	 */
+	private async settleScrollToHeading(heading: HTMLElement): Promise<void> {
+		for (let attempt = 0; attempt < 30; attempt++) {
+			const headingRect = heading.getBoundingClientRect();
+			const containerRect = this.scrollContainer.getBoundingClientRect();
+			const target =
+				this.scrollContainer.scrollTop +
+				(headingRect.top - containerRect.top) -
+				20;
+			if (Math.abs(this.scrollContainer.scrollTop - target) < 1) break;
+			this.scrollContainer.scrollTo({
+				top: Math.max(0, target),
+				behavior: 'auto',
+			});
+			await new Promise<void>((resolve) =>
+				window.requestAnimationFrame(() => resolve()),
+			);
 		}
 	}
 
@@ -682,7 +710,7 @@ export class TocController {
 			this.scrollHandler = null;
 		}
 		window.clearTimeout(this.fadeTimer);
-		window.clearTimeout(this.scrollCenterTimer);
+		window.clearTimeout(this.centerScrollTimer);
 		window.clearTimeout(this.navigationTimer);
 		window.clearTimeout(this.activePathTimer);
 		window.clearTimeout(this.animCleanupTimer);

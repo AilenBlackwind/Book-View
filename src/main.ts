@@ -1,6 +1,8 @@
 import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { ThemeSpacings, measureThemeSpacings } from './utils/theme';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
+import { BookTocView, VIEW_TYPE_BOOK_TOC } from './views/BookTocView';
+import { TocCoordinator } from './components/TocCoordinator';
 import { getManifestFiles, isBookManifest } from './components/ManifestParser';
 import { WheelAccelerator } from './components/WheelAccelerator';
 import { BookViewSettings, DEFAULT_SETTINGS } from './settings';
@@ -15,6 +17,7 @@ export default class BookViewPlugin extends Plugin {
 	private skipPaths = new Set<string>();
 	heightStore: Record<string, { m: number; h: number }> = {};
 	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
+	tocCoordinator: TocCoordinator | null = null;
 	private saveHeightsTimer = 0;
 
 	getPersistedHeight = (path: string, mtime: number): number | undefined => {
@@ -62,6 +65,7 @@ export default class BookViewPlugin extends Plugin {
 			},
 		);
 		window.BookView = this.api;
+		this.tocCoordinator = new TocCoordinator(this);
 		this.addSettingTab(new BookViewSettingTab(this.app, this));
 
 		// Register the wheel interceptor as early as possible: among capture-phase
@@ -75,6 +79,18 @@ export default class BookViewPlugin extends Plugin {
 			const view = new BookView(leaf);
 			view.plugin = this;
 			return view;
+		});
+
+		this.registerView(VIEW_TYPE_BOOK_TOC, (leaf) => {
+			return new BookTocView(leaf);
+		});
+
+		this.addCommand({
+			id: 'toggle-sidebar-toc',
+			name: 'Toggle book toc in right sidebar',
+			callback: () => {
+				this.tocCoordinator?.toggle();
+			},
 		});
 
 		this.addCommand({
@@ -120,6 +136,7 @@ export default class BookViewPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('active-leaf-change', (leaf) => {
+				this.tocCoordinator?.sync();
 				if (!leaf) return;
 				this.autoActivate(leaf);
 			}),
@@ -139,6 +156,10 @@ export default class BookViewPlugin extends Plugin {
 
 		this.app.workspace.onLayoutReady(() => {
 			this.closeOrphanBookViews();
+
+			// Follow the active leaf from the start: open the ToC if a book is
+			// already active, close it otherwise.
+			this.tocCoordinator?.sync();
 
 			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 			if (activeView?.file) {
@@ -176,6 +197,7 @@ export default class BookViewPlugin extends Plugin {
 				leaf.view.refreshToc();
 			}
 		}
+		this.tocCoordinator?.refresh();
 	}
 
 	recalculateBookLayouts() {
