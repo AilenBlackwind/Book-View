@@ -1,34 +1,15 @@
-import { App, Component, MarkdownRenderer, TFile } from 'obsidian';
+import { App, TFile } from 'obsidian';
 import { ManifestLink } from './ManifestParser';
+import type { HeadingNode } from '../utils/fold';
+import { FoldController } from './FoldController';
+import { SectionPool } from './SectionPool';
+import type { SectionData, HeightPersistence } from './SectionPool';
+import { SectionLayout } from './SectionLayout';
+import { estimateHeight } from '../utils/content';
+import type { ThemeSpacings } from '../utils/theme';
+import { DebugLog } from '../utils/debug';
 
 export const HEIGHT_PER_LINE = 25;
-
-const OVERSCAN_TOP = 2500;
-const SCROLL_THRESHOLD = 1;
-
-export interface ThemeSpacings {
-	h1TopGap: number;
-	h2TopGap: number;
-	headerToHeaderGap: number;
-	textGap: number;
-}
-
-interface SectionData {
-	el: HTMLElement;
-	component: Component | null;
-	offset: number;
-	height: number;
-	startsWithHeading: boolean;
-	endsWithHeading: boolean;
-	renderGen: number;
-	mtime: number;
-	heightTrusted: boolean;
-}
-
-interface HeightPersistence {
-	get?: (path: string, mtime: number) => number | undefined;
-	put?: (path: string, mtime: number, height: number) => void;
-}
 
 export class AbsoluteSectionManager {
 	private scrollContainer: HTMLElement;
@@ -39,40 +20,59 @@ export class AbsoluteSectionManager {
 	private loadMargin: number;
 	private persistence: HeightPersistence;
 
-	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
+	/** Theme-derived vertical gaps, owned by the SectionLayout. */
+	get themeSpacings(): ThemeSpacings {
+		return this.layout.themeSpacings;
+	}
+
+	set themeSpacings(value: ThemeSpacings) {
+		this.layout.applyThemeSpacings(value);
+	}
+
+	private fold: FoldController;
+	private layout: SectionLayout;
+
+	/** Directly-folded heading ids, owned by the FoldController. */
+	get foldedHeadings(): Set<string> {
+		return this.fold.foldedHeadings;
+	}
 
 	private sections: Map<string, SectionData> = new Map();
 	private fileOrder: string[] = [];
 	private rawContent: Map<string, string> = new Map();
+	private headingIndex: HeadingNode[] = [];
+	/** Precomputed lookup maps to keep fold-mode checks allocation-free. */
+	private headingIndexById: Map<string, HeadingNode> = new Map();
+	private firstHeadingByPath: Map<string, HeadingNode> = new Map();
+	private headingsByPath: Map<string, HeadingNode[]> = new Map();
+	private updateRequested = false;
 	private heightCache: Map<string, number> = new Map();
 	private renderedDomCache: Map<string, HTMLElement> = new Map();
-	private observer: IntersectionObserver;
-	private sectionResizeObserver: ResizeObserver;
 	private containerWidthObserver: ResizeObserver;
-	private prevScrollTop = 0;
-	private boundScrollHandler: (() => void) | null = null;
-	private renderQueue: string[] = [];
-	private activeRenderCount = 0;
-	private maxConcurrent = 1;
-	private coldStartTimer: number = 0;
 	private lastScrollTop = 0;
+	private boundScrollHandler: (() => void) | null = null;
+	private boundClickHandler: ((evt: MouseEvent) => void) | null = null;
 	private lastContainerWidth = 0;
-	private isAdjustingScroll = false;
 	private pendingHeights: Map<string, number> = new Map();
 	private pendingWidthChange = false;
 	private rafId = 0;
 	private destroyed = false;
-	private idleTimer = 0;
-	private lastUserScrollAt = 0;
+	/** Frame callbacks run at the start of the frame, before processUpdates
+	 *  writes section positions, so their layout reads see a clean layout. */
+	private frameCallbacks: (() => void)[] = [];
+	private pool: SectionPool;
 
-	private static readonly DEBUG = true;
+	// Thin wrapper keeping call sites readable; logic lives in utils/debug.
+	private dbg(msg: string, path?: string, a?: number | string, b?: number | string, c?: number | string): void {
+		DebugLog.log(msg, path, a, b, c);
+	}
 
-	private dbg(msg: string, ...args: unknown[]): void {
-		if (!AbsoluteSectionManager.DEBUG) return;
-		const w = window as unknown as { __bvLog?: string[] };
-		const log = w.__bvLog ?? (w.__bvLog = []);
-		log.push(`${new Date().toISOString().slice(11, 23)} ${msg} ${args.join(' ')}`);
-		if (log.length > 2000) log.splice(0, log.length - 2000);
+	/** Records a measured height delivered by the SectionPool's resize observer. */
+	reportSectionHeight(path: string, newHeight: number): void {
+		this.pendingHeights.set(path, newHeight);
+		if (this.pendingHeights.size > 0) {
+			this.scheduleUpdate();
+		}
 	}
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;
@@ -96,52 +96,44 @@ export class AbsoluteSectionManager {
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
 
-		this.observer = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					const el = entry.target as HTMLElement;
-					const path = el.dataset.path;
-					if (!path) continue;
+		this.pool = new SectionPool({
+			sections: this.sections,
+			rawContent: this.rawContent,
+			heightCache: this.heightCache,
+			renderedDomCache: this.renderedDomCache,
+			fileOrder: this.fileOrder,
+			scrollContainer: this.scrollContainer,
+			spacerEl: this.spacerEl,
+			app: this.app,
+			loadMargin: this.loadMargin,
+			persistence: this.persistence,
+			isDestroyed: () => this.destroyed,
+			getFoldMode: (path) => this.fold.getFoldMode(path),
+			foldSectionNeedsFoldStub: (path) => this.fold.sectionNeedsFoldStub(path),
+			foldScheduleHeightMeasure: (path) => this.fold.scheduleFoldHeightMeasure(path),
+			foldTagSection: (path, el) => this.fold.tagFoldIds(path, el),
+			findAnchorAt: (scrollTop) => this.layout.findAnchorAt(scrollTop),
+			getOnSectionRendered: () => this.onSectionRendered,
+			reportSectionHeight: (path, newHeight) => this.reportSectionHeight(path, newHeight),
+			scheduleUpdate: () => this.scheduleUpdate(),
+			scheduleFrame: () => this.scheduleFrame(),
+			dbg: (msg, path, a, b, c) => this.dbg(msg, path, a, b, c),
+		});
 
-					if (entry.isIntersecting) {
-						this.enqueueRender(path);
-					} else {
-						this.unloadSection(path);
-					}
-				}
-			},
-			{
-				root: this.scrollContainer,
-				rootMargin: `${OVERSCAN_TOP}px 0px ${this.loadMargin}px 0px`,
-				threshold: 0,
-			},
-		);
-
-		this.sectionResizeObserver = new ResizeObserver((entries) => {
-			const containerTop = this.scrollContainer.getBoundingClientRect().top;
-			for (const entry of entries) {
-				const el = entry.target as HTMLElement;
-				const path = el.dataset.path;
-				if (!path) continue;
-
-				const newHeight = entry.borderBoxSize?.[0]?.blockSize ?? el.offsetHeight;
-				if (newHeight <= 0) continue;
-
-				const data = this.sections.get(path);
-				if (!data) continue;
-				// Ignore stale notifications delivered after unload.
-				if (!data.component) continue;
-				// Ignore sub-pixel churn: fractional fluctuations still trigger
-				// scrollTop writes, and each write cancels an in-flight wheel tick.
-				if (Math.abs(newHeight - data.height) < 2) continue;
-
-				const relTop = el.getBoundingClientRect().top - containerTop;
-				this.dbg('height-change', path.split('/').pop(), `${Math.round(data.height)} -> ${Math.round(newHeight)}`, relTop < 0 ? 'above' : 'below');
-				this.pendingHeights.set(path, newHeight);
-			}
-			if (this.pendingHeights.size > 0) {
-				this.scheduleUpdate();
-			}
+		this.layout = new SectionLayout({
+			sections: this.sections,
+			fileOrder: this.fileOrder,
+			scrollContainer: this.scrollContainer,
+			spacerEl: this.spacerEl,
+			loadMargin: this.loadMargin,
+			isDestroyed: () => this.destroyed,
+			getFoldMode: (path) => this.fold.getFoldMode(path),
+			foldNextVisibleIndex: (start) => this.fold.nextVisibleIndex(start),
+			foldScheduleHeightMeasure: (path) => this.fold.scheduleFoldHeightMeasure(path),
+			foldApplyPendingRetags: () => this.fold.applyPendingRetags(),
+			enqueueRender: (path) => this.pool.enqueueRender(path),
+			unloadSection: (path) => this.pool.unloadSection(path),
+			dbg: (msg, path, a, b, c) => this.dbg(msg, path, a, b, c),
 		});
 
 		this.containerWidthObserver = new ResizeObserver((entries) => {
@@ -156,511 +148,185 @@ export class AbsoluteSectionManager {
 		});
 		this.containerWidthObserver.observe(this.scrollContainer);
 
-		this.boundScrollHandler = () => {
-			const newTop = this.scrollContainer.scrollTop;
-			if (this.isAdjustingScroll) {
-				this.isAdjustingScroll = false;
-				this.dbg('adjust-consumed', Math.round(newTop));
-			} else {
-				this.lastUserScrollAt = Date.now();
-			}
-			const delta = Math.abs(newTop - this.lastScrollTop);
-			if (delta > 2000) {
-				this.renderQueue = this.renderQueue.filter((p) => {
-					const d = this.sections.get(p);
-					if (!d || d.component) return false;
-					const rect = d.el.getBoundingClientRect();
-					return Math.abs(rect.top) < 4000;
-				});
-			}
-			this.lastScrollTop = newTop;
-			this.prevScrollTop = newTop;
-		};
-		this.scrollContainer.addEventListener('scroll', this.boundScrollHandler, { passive: true });
-
-		this.coldStartTimer = window.setTimeout(() => {
-			this.maxConcurrent = 2;
-			this.drainQueue();
-		}, 200);
-	}
-
-	render(): void {
-		const readPromises: Promise<void>[] = [];
-		for (const link of this.links) {
-			if (link.type === 'broken') {
-				const el = this.spacerEl.createDiv({ cls: 'book-section-warning' });
-				el.createSpan({ text: '❌ ' });
-				el.createSpan({ cls: 'book-warning-text', text: `Note not found: ${link.display}` });
-				continue;
-			}
-
-			if (link.type === 'empty') {
-				const el = this.spacerEl.createDiv({ cls: 'book-section-warning' });
-				el.createSpan({ text: '⚠️ ' });
-				el.createSpan({ cls: 'book-warning-text', text: `Empty note: ${link.file.path}` });
-				continue;
-			}
-
-			const file = link.file;
-			const path = file.path;
-
-			const el = this.spacerEl.createDiv({
-				cls: 'book-section-placeholder book-section-absolute',
-				attr: { 'data-path': path },
-			});
-
-			const mtime = file.stat.mtime;
-			const cached = this.heightCache.get(path) ?? this.persistence.get?.(path, mtime);
-			const estimated = cached ?? 35;
-
-		const data: SectionData = {
-			el,
-			component: null,
-			offset: 0,
-			height: estimated,
-			startsWithHeading: false,
-			endsWithHeading: false,
-			renderGen: 0,
-			mtime,
-			heightTrusted: cached !== undefined,
-		};
-			this.sections.set(path, data);
-			this.fileOrder.push(path);
-
-			const p = this.app.vault.cachedRead(file).then((content) => {
-				this.rawContent.set(path, content);
-				const est = cached ?? this.estimateHeight(content);
-				data.height = est;
-				if (!cached) {
-					this.heightCache.set(path, est);
-				}
-				data.startsWithHeading = AbsoluteSectionManager.startsWithHeading(content);
-				data.endsWithHeading = AbsoluteSectionManager.endsWithHeading(content);
-			});
-			readPromises.push(p);
-
-			this.observer.observe(el);
-		}
-
-		this.recalcOffsets();
-		void Promise.allSettled(readPromises).then(() => {
-			this.scheduleUpdate();
-		});
-		this.schedulePreRender();
-	}
-
-	private estimateHeight(text: string): number {
-		let estimated = 16; // trailing paragraph margin
-		const lines = text.split('\n');
-		let inCode = false;
-
-		for (const line of lines) {
-			const trimmed = line.trim();
-			if (/^```/.test(trimmed)) {
-				inCode = !inCode;
-				estimated += 22;
-				continue;
-			}
-			if (trimmed.length === 0) {
-				estimated += 16; // rendered paragraph margin
-				continue;
-			}
-			if (inCode) {
-				estimated += 22;
-				continue;
-			}
-			const heading = /^(#{1,6})\s/.exec(trimmed);
-			if (heading) {
-				estimated += 48 - (heading[1]?.length ?? 1) * 2;
-				continue;
-			}
-			if (/^>\s?\[!/.test(trimmed)) {
-				estimated += 48; // callout header
-				continue;
-			}
-			if (/^(-|\*|\+|\d+\.)\s/.test(trimmed) || trimmed.startsWith('>')) {
-				estimated += 26;
-				continue;
-			}
-			if (/!\[.*?\]\(.*?\)|!\[\[.*?\]\]/.test(trimmed)) {
-				estimated += 300;
-				continue;
-			}
-			estimated += Math.ceil(trimmed.length / 85) * 24;
-		}
-
-		return Math.max(35, estimated);
-	}
-
-	private static startsWithHeading(text: string): boolean {
-		for (const line of text.split('\n')) {
-			const trimmed = line.trim();
-			if (trimmed.length === 0) continue;
-			return /^#{1,6}\s/.test(trimmed);
-		}
-		return false;
-	}
-
-	private static endsWithHeading(text: string): boolean {
-		const lines = text.split('\n');
-		for (let i = lines.length - 1; i >= 0; i--) {
-			const trimmed = lines[i]?.trim() ?? '';
-			if (trimmed.length === 0) continue;
-			return /^#{1,6}\s/.test(trimmed);
-		}
-		return false;
-	}
-
-	private async loadSection(path: string): Promise<void> {
-		const data = this.sections.get(path);
-		if (!data || data.component) return;
-
-		const cachedDom = this.renderedDomCache.get(path);
-		if (cachedDom) {
-			this.dbg('load-cached', path.split('/').pop());
-			this.renderedDomCache.delete(path);
-			data.el.appendChild(cachedDom);
-			data.component = new Component();
-			this.sectionResizeObserver.observe(data.el);
-			return;
-		}
-
-		const file = this.app.vault.getFileByPath(path);
-		if (!(file instanceof TFile)) return;
-
-		const gen = data.renderGen + 1;
-		data.renderGen = gen;
-		this.dbg('load-fresh', path.split('/').pop());
-
-		const content = this.rawContent.get(path) ?? await this.app.vault.cachedRead(file);
-		if (this.destroyed || data.renderGen !== gen) return;
-
-		data.startsWithHeading = AbsoluteSectionManager.startsWithHeading(content);
-		data.endsWithHeading = AbsoluteSectionManager.endsWithHeading(content);
-
-		// Render into a detached container: partial output is never visible
-		// and unloadSection cannot cache half-rendered DOM mid-flight.
-		const renderContainer = createDiv({
-			cls: 'markdown-rendered markdown-preview-view',
-		});
-
-		const component = new Component();
-		data.component = component;
-		await MarkdownRenderer.render(this.app, content, renderContainer, path, component);
-
-		if (this.destroyed || data.renderGen !== gen || data.component !== component) return;
-
-		data.el.empty();
-		data.el.appendChild(renderContainer);
-		this.sectionResizeObserver.observe(data.el);
-		this.onSectionRendered?.(path, renderContainer);
-		this.scheduleUpdate();
-	}
-
-	private unloadSection(path: string): void {
-		const data = this.sections.get(path);
-		if (!data || !data.component) return;
-
-		this.dbg('unload', path.split('/').pop());
-		this.sectionResizeObserver.unobserve(data.el);
-
-		const rendered = data.el.querySelector('.markdown-rendered');
-		if (rendered) {
-			this.renderedDomCache.set(path, rendered as HTMLElement);
-		}
-
-		data.component.unload();
-		data.component = null;
-		// Invalidate any in-flight render for this section.
-		data.renderGen++;
-		data.el.empty();
-	}
-
-	private enqueueRender(path: string): void {
-		if (this.destroyed) return;
-		const data = this.sections.get(path);
-		if (!data || data.component) return;
-		if (this.renderQueue.includes(path)) return;
-		this.renderQueue.push(path);
-		this.drainQueue();
-	}
-
-	private drainQueue(): void {
-		if (this.destroyed) return;
-		while (this.activeRenderCount < this.maxConcurrent && this.renderQueue.length > 0) {
-			const path = this.renderQueue.shift()!;
-			this.activeRenderCount++;
-			void this.loadSection(path).finally(() => {
-				this.activeRenderCount--;
-				this.drainQueue();
-			});
-		}
-	}
-
-	private schedulePreRender(): void {
-		if (this.destroyed) return;
-		window.clearTimeout(this.idleTimer);
-		this.idleTimer = window.setTimeout(() => void this.preRenderNext(), 60);
-	}
-
-	private preRenderNext(): void {
-		if (this.destroyed) return;
-		// Never pre-measure while the user is actively scrolling: the resulting
-		// height corrections would land in the middle of wheel/touch gestures.
-		if (Date.now() - this.lastUserScrollAt < 300) {
-			this.schedulePreRender();
-			return;
-		}
-		const path = this.nextPreRenderPath();
-		if (!path) return;
-		this.dbg('pre-render', path.split('/').pop());
-		void this.loadSection(path).then(() => {
-			window.setTimeout(() => {
-				if (this.destroyed) return;
-				const data = this.sections.get(path);
-				if (data?.component) {
-					const rect = data.el.getBoundingClientRect();
-					const crect = this.scrollContainer.getBoundingClientRect();
-					const inZone = rect.bottom > crect.top - OVERSCAN_TOP && rect.top < crect.bottom + this.loadMargin;
-					// Park the measured DOM in the cache so memory stays bounded.
-					if (!inZone) this.unloadSection(path);
-				}
-				this.schedulePreRender();
-			}, 80);
-		});
-	}
-
-	private nextPreRenderPath(): string | null {
-		const anchor = this.findAnchorAt(this.scrollContainer.scrollTop);
-		const center = anchor?.idx ?? 0;
-		for (let step = 0; step < this.fileOrder.length; step++) {
-			const candidates = [center - step, center + step];
-			for (const idx of candidates) {
-				if (idx < 0 || idx >= this.fileOrder.length) continue;
-				const path = this.fileOrder[idx];
-				if (!path) continue;
-				const data = this.sections.get(path);
-				if (!data || data.component) continue;
-				if (data.heightTrusted) continue;
-				if (this.renderedDomCache.has(path)) continue;
-				return path;
-			}
-		}
-		return null;
-	}
-
-	private recalcOffsets(): void {
-		let offset = 0;
-
-		for (let i = 0; i < this.fileOrder.length; i++) {
-			const path = this.fileOrder[i] ?? '';
-			const data = this.sections.get(path);
-			if (!data) break;
-
-			data.offset = offset;
-			data.el.style.top = `${offset}px`;
-			offset += data.height;
-
-			if (i + 1 < this.fileOrder.length) {
-				const nextPath = this.fileOrder[i + 1] ?? '';
-				offset += this.getGapBetweenNotes(path, nextPath);
-			}
-		}
-
-		this.spacerEl.style.height = `${offset}px`;
-	}
-
-	private getGapBetweenNotes(prevPath: string, nextPath: string): number {
-		const prevEl = this.sections.get(prevPath)?.el;
-		const nextEl = this.sections.get(nextPath)?.el;
-		if (!prevEl || !nextEl) return this.themeSpacings.textGap;
-
-		const prevLast = this.getLastContentElement(prevEl);
-		const nextFirst = this.getFirstContentElement(nextEl);
-		if (!prevLast || !nextFirst) return this.themeSpacings.textGap;
-
-		const prevLevel = AbsoluteSectionManager.getHeaderLevel(prevLast);
-		const currLevel = AbsoluteSectionManager.getHeaderLevel(nextFirst);
-
-		const s = this.themeSpacings;
-
-		if (prevLevel && currLevel) {
-			return Math.max(0, s.headerToHeaderGap);
-		} else if (currLevel === 'h1') {
-			return s.h1TopGap;
-		} else if (currLevel) {
-			return s.h2TopGap;
-		}
-
-		return s.textGap;
-	}
-
-	private isIgnoredElement(el: Element): boolean {
-		if (el.tagName === 'PRE' && el.classList.contains('frontmatter')) return true;
-		if (el.classList.contains('frontmatter-container')) return true;
-		if (el.classList.contains('metadata-container')) return true;
-		if (el.classList.contains('mod-header')) return true;
-		if ((el as HTMLElement).style.display === 'none') return true;
-		return false;
-	}
-
-	private getFirstContentElement(noteEl: HTMLElement): Element | null {
-		const rendered = noteEl.classList.contains('markdown-rendered')
-			? noteEl
-			: (noteEl.querySelector('.markdown-rendered') || noteEl);
-		for (const child of Array.from(rendered.children)) {
-			if (this.isIgnoredElement(child)) continue;
-			return child;
-		}
-		return null;
-	}
-
-	private getLastContentElement(noteEl: HTMLElement): Element | null {
-		const rendered = noteEl.classList.contains('markdown-rendered')
-			? noteEl
-			: (noteEl.querySelector('.markdown-rendered') || noteEl);
-		const children = Array.from(rendered.children);
-		for (let i = children.length - 1; i >= 0; i--) {
-			const child = children[i];
-			if (!child) continue;
-			if (this.isIgnoredElement(child)) continue;
-			return child;
-		}
-		return null;
-	}
-
-	static async measureThemeSpacings(app: App): Promise<ThemeSpacings> {
-		const probe = document.body.createDiv({
-			cls: 'book-view-probe markdown-rendered',
-			attr: {
-				style: 'position: absolute !important; visibility: hidden !important; pointer-events: none !important; left: -9999px !important; top: -9999px !important; width: 800px !important;',
+		this.fold = new FoldController({
+			headingIndex: this.headingIndex,
+			headingIndexById: this.headingIndexById,
+			firstHeadingByPath: this.firstHeadingByPath,
+			fileOrder: this.fileOrder,
+			sections: this.sections,
+			headingsByPath: this.headingsByPath,
+			isDestroyed: () => this.destroyed,
+			getLastUserScrollAt: () => this.pool.lastUserScrollAt,
+			captureAnchor: () => {
+				this.layout.captureAnchor();
+			},
+			scheduleUpdate: () => {
+				this.scheduleUpdate();
 			},
 		});
 
-		const testMarkdown = 'Тест 1\n\n# Заголовок 1\n\n## Заголовок 2\n\nТест 2';
-		const spacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
-
-		try {
-			const component = new Component();
-			await MarkdownRenderer.render(app, testMarkdown, probe, '', component);
-
-			const blocks = Array.from(probe.children).filter((el) => {
-				if (el.tagName === 'PRE' && el.classList.contains('frontmatter')) return false;
-				if (el.classList.contains('frontmatter-container')) return false;
-				if (el.classList.contains('metadata-container')) return false;
-				return true;
-			});
-
-			const p1Block = blocks.find(
-				(el) => el.querySelector('p, .el-p') || el.classList.contains('el-p'),
-			);
-			const h1Block = blocks.find(
-				(el) => el.querySelector('h1') || el.classList.contains('el-h1'),
-			);
-			const h2Block = blocks.find(
-				(el) => el.querySelector('h2') || el.classList.contains('el-h2'),
-			);
-			const p2Block = [...blocks].reverse().find(
-				(el) => el.querySelector('p, .el-p') || el.classList.contains('el-p'),
-			);
-
-			if (p1Block && h1Block) {
-				spacings.h1TopGap = Math.round(
-					h1Block.getBoundingClientRect().top - p1Block.getBoundingClientRect().bottom,
-				);
-			}
-			if (h1Block && h2Block) {
-				spacings.headerToHeaderGap = Math.round(
-					h2Block.getBoundingClientRect().top - h1Block.getBoundingClientRect().bottom,
-				);
-			}
-			if (p1Block && h2Block) {
-				spacings.h2TopGap = Math.round(
-					h2Block.getBoundingClientRect().top - p1Block.getBoundingClientRect().bottom,
-				);
-			}
-			if (p1Block && p2Block) {
-				const textGap = Math.round(
-					p2Block.getBoundingClientRect().top - p1Block.getBoundingClientRect().bottom,
-				);
-				if (textGap >= 0) spacings.textGap = textGap;
-			}
-
-			component.unload();
-		} catch (e) {
-			console.warn('BookView: theme probe failed, using defaults', e);
-		} finally {
-			probe.remove();
+		this.boundScrollHandler = () => {
+			// No scrollTop read here: a scroll event can be dispatched while
+			// the book layout is still dirty (async height measurements), and
+			// reading it would force a full style recalc. The scroll position
+			// is read once per frame in processUpdates, before its own writes.
+		if (!this.layout.consumeAdjustingScroll()) {
+			this.pool.noteUserScroll();
+			// Unloads are deferred while scrolling (see processIoPending);
+			// reclaim far sections once the gesture settles.
+			this.pool.scheduleIdleUnload();
 		}
+		};
+		this.scrollContainer.addEventListener('scroll', this.boundScrollHandler, { passive: true });
 
-		return spacings;
+		this.boundClickHandler = (evt: MouseEvent) => {
+			const target = evt.target as HTMLElement;
+			const chevron = target.closest('.book-fold-chevron') as HTMLElement | null;
+			if (!chevron) return;
+			const foldId = chevron.dataset.foldId;
+			if (!foldId) return;
+			evt.stopPropagation();
+			this.toggleFold(foldId);
+		};
+		this.scrollContainer.addEventListener('click', this.boundClickHandler);
 	}
 
-	private static getHeaderLevel(el: Element): string | null {
-		if (/^H[1-6]$/i.test(el.tagName)) return el.tagName.toLowerCase();
-
-		for (let i = 1; i <= 6; i++) {
-			if (el.classList.contains(`el-h${i}`)) return `h${i}`;
-		}
-
-		const heading = el.querySelector('h1, h2, h3, h4, h5, h6');
-		if (heading) return heading.tagName.toLowerCase();
-
-		return null;
+	render(): void {
+		const readPromises = this.pool.render(this.links);
+		this.layout.recalcOffsets();
+		void Promise.allSettled(readPromises).then(() => {
+			this.buildHeadingIndex();
+			// Re-tag any sections that were loaded before the heading index existed
+			for (const [p, d] of this.sections) {
+				if (d.component) {
+					this.fold.tagFoldIds(p, d.el);
+				}
+			}
+			this.scheduleUpdate();
+		});
 	}
 
-	private findAnchorAt(scrollTop: number): { idx: number; anchorOffset: number } | null {
-		let lastIdx = -1;
-		for (let i = 0; i < this.fileOrder.length; i++) {
-			const data = this.sections.get(this.fileOrder[i] ?? '');
-			if (!data) continue;
-			lastIdx = i;
-			if (data.offset + data.height > scrollTop) {
-				// Either inside this section or in the gap right above it
-				// (negative anchorOffset). Gaps are constant across a recalc,
-				// so relative compensation stays exact.
-				return { idx: i, anchorOffset: scrollTop - data.offset };
+	private buildHeadingIndex(): void {
+		this.headingIndex.length = 0;
+		this.headingIndexById.clear();
+		this.firstHeadingByPath.clear();
+		this.headingsByPath.clear();
+
+		for (let fi = 0; fi < this.fileOrder.length; fi++) {
+			const path = this.fileOrder[fi] ?? '';
+			const content = this.rawContent.get(path);
+			if (!content) continue;
+
+			const lines = content.split('\n');
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i];
+				if (!line) continue;
+				const match = line.trim().match(/^(#{1,6})\s+(.+)/);
+				if (match) {
+					const node: HeadingNode = {
+						id: `${path}#L${i}`,
+						path,
+						level: (match[1] as string).length,
+						text: (match[2] as string).trim(),
+						idx: this.headingIndex.length,
+						fileIdx: fi,
+					};
+					this.headingIndex.push(node);
+					this.headingIndexById.set(node.id, node);
+					if (!this.firstHeadingByPath.has(path)) {
+						this.firstHeadingByPath.set(path, node);
+					}
+					let list = this.headingsByPath.get(path);
+					if (!list) {
+						list = [];
+						this.headingsByPath.set(path, list);
+					}
+					list.push(node);
+				}
 			}
 		}
-		if (lastIdx >= 0) {
-			const data = this.sections.get(this.fileOrder[lastIdx] ?? '');
-			if (data) {
-				return { idx: lastIdx, anchorOffset: scrollTop - data.offset };
-			}
-		}
-		return null;
 	}
 
-	private restoreScrollAt(anchor: { idx: number; anchorOffset: number } | null, currentScrollTop: number): void {
-		if (!anchor) return;
-		const data = this.sections.get(this.fileOrder[anchor.idx] ?? '');
-		if (!data) return;
-		const target = data.offset + anchor.anchorOffset;
-		const delta = Math.abs(target - currentScrollTop);
-		if (delta > SCROLL_THRESHOLD) {
-			this.isAdjustingScroll = true;
-			this.dbg('compensate', `${Math.round(currentScrollTop)} -> ${Math.round(target)}`, `delta=${Math.round(target - currentScrollTop)}`);
-			this.scrollContainer.scrollTop = target;
-		}
+	toggleFold(id: string): void {
+		this.fold.toggleFold(id);
+	}
+
+	isFolded(id: string): boolean {
+		return this.fold.isFolded(id);
 	}
 
 	applyThemeSpacings(spacings: ThemeSpacings): void {
-		this.themeSpacings = spacings;
+		this.layout.applyThemeSpacings(spacings);
 		this.scheduleUpdate();
 	}
 
+	addFrameCallback(cb: () => void): void {
+		if (!this.frameCallbacks.includes(cb)) this.frameCallbacks.push(cb);
+	}
+
+	removeFrameCallback(cb: () => void): void {
+		const i = this.frameCallbacks.indexOf(cb);
+		if (i >= 0) this.frameCallbacks.splice(i, 1);
+	}
+
+	/** Request a frame (used by the scroll spy to coalesce its read with updates). */
+	requestFrame(): void {
+		this.scheduleFrame();
+	}
+
 	scheduleUpdate(): void {
+		this.updateRequested = true;
+		this.scheduleFrame();
+	}
+
+	private scheduleFrame(): void {
 		if (this.rafId) return;
 		this.rafId = window.requestAnimationFrame(() => {
 			this.rafId = 0;
-			this.processUpdates();
+			this.runFrame();
 		});
+	}
+
+	private runFrame(): void {
+		if (this.pool.hasPendingIo()) {
+			this.updateRequested = true;
+		}
+		if (this.updateRequested) {
+			this.updateRequested = false;
+			this.processUpdates();
+		}
+		// Frame callbacks (the scroll spy) run AFTER processUpdates, not
+		// before: they read data.offset values and scrollTop, which are only
+		// meaningful once height corrections, folds, and width changes were
+		// applied. Running the spy first made it compute the active heading
+		// from stale offsets, so right after a section resized/folded the
+		// highlight landed on the wrong ToC entry until the next scroll frame.
+		// In the common plain-scroll frame processUpdates is a no-op and the
+		// layout is still clean, so the spy's reads stay cheap.
+		for (const cb of this.frameCallbacks) {
+			cb();
+		}
+		// DOM load/unload is deferred to a macrotask after the render so this
+		// frame never pays the first layout of freshly mounted heavy content.
+		this.pool.scheduleIoWork();
 	}
 
 	private processUpdates(): void {
 		const freshScrollTop = this.scrollContainer.scrollTop;
-		const anchor = this.findAnchorAt(freshScrollTop);
-		this.dbg('update', `pending=${this.pendingHeights.size}`, anchor ? `anchor=${anchor.idx}@${Math.round(anchor.anchorOffset)}` : 'anchor=null', `scrollTop=${Math.round(freshScrollTop)}`);
+		// Jump detection moved out of the scroll handler: it now runs once per
+		// frame right before the offset writes, where the read is cheap.
+		const delta = Math.abs(freshScrollTop - this.lastScrollTop);
+		this.lastScrollTop = freshScrollTop;
+		if (delta > 2000) {
+			this.pool.pruneRenderQueue((p) => {
+				const d = this.sections.get(p);
+				if (!d || d.component) return false;
+				const rect = d.el.getBoundingClientRect();
+				return Math.abs(rect.top) < 4000;
+			});
+		}
+		const anchor = this.layout.takeAnchor(freshScrollTop);
+		this.dbg('update', '', this.pendingHeights.size, anchor ? anchor.idx : -1, anchor ? Math.round(anchor.anchorOffset) : -1);
 
 		if (this.pendingWidthChange) {
 			this.pendingWidthChange = false;
@@ -668,7 +334,7 @@ export class AbsoluteSectionManager {
 				if (!data.el.querySelector('.markdown-rendered')) {
 					const content = this.rawContent.get(path);
 					if (content) {
-						data.height = this.estimateHeight(content);
+						data.height = estimateHeight(content);
 					}
 					this.heightCache.delete(path);
 					data.heightTrusted = false;
@@ -688,66 +354,43 @@ export class AbsoluteSectionManager {
 			this.pendingHeights.clear();
 		}
 
-		this.recalcOffsets();
-		this.restoreScrollAt(anchor, freshScrollTop);
+		this.layout.recalcOffsets();
+		this.layout.restoreScrollAt(anchor, freshScrollTop);
 	}
 
 	getOffset(path: string): number {
-		return this.sections.get(path)?.offset ?? 0;
+		return this.layout.getOffset(path);
 	}
 
 	getAllOffsets(): Map<string, number> {
-		const result = new Map<string, number>();
-		for (const [path, data] of this.sections) {
-			result.set(path, data.offset);
-		}
-		return result;
+		return this.layout.getAllOffsets();
 	}
 
 	refreshSection(path: string): void {
-		const data = this.sections.get(path);
-		if (!data) return;
-
-		this.sectionResizeObserver.unobserve(data.el);
-
-		if (data.component) {
-			data.component.unload();
-			data.component = null;
-		}
-
-		this.rawContent.delete(path);
-		this.renderedDomCache.delete(path);
-		const file = this.app.vault.getFileByPath(path);
-		if (file instanceof TFile) {
-			data.mtime = file.stat.mtime;
-		}
-		// Keep the last measured height and heading flags until the re-render
-		// produces new measurements: collapsing the height here would shift
-		// everything below without any scroll compensation.
-		data.renderGen++;
-		data.el.empty();
-		void this.loadSection(path);
+		this.pool.refreshSection(path);
 	}
 
 	markDirty(path: string): void {
-		this.refreshSection(path);
+		this.pool.refreshSection(path);
 	}
 
 	destroy(): void {
 		this.destroyed = true;
-		this.renderQueue.length = 0;
+		this.frameCallbacks.length = 0;
 		if (this.rafId) {
 			cancelAnimationFrame(this.rafId);
 			this.rafId = 0;
 		}
-		this.observer.disconnect();
-		this.sectionResizeObserver.disconnect();
 		this.containerWidthObserver.disconnect();
 		if (this.boundScrollHandler) {
 			this.scrollContainer.removeEventListener('scroll', this.boundScrollHandler);
 		}
-		window.clearTimeout(this.coldStartTimer);
-		window.clearTimeout(this.idleTimer);
+		if (this.boundClickHandler) {
+			this.scrollContainer.removeEventListener('click', this.boundClickHandler);
+		}
+		this.fold.destroy();
+		this.pool.destroy();
+		this.layout.destroy();
 		for (const [, data] of this.sections) {
 			data.component?.unload();
 		}
