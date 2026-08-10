@@ -544,12 +544,25 @@ export class AbsoluteSectionManager {
 		if (!this.dbgT0) this.dbgT0 = now;
 		if (now - this.dbgT0 < 1000) return;
 		const [io, loads, unloads, prerenders] = this.pool.dbgReset();
+		// Live-mounted metric: number of sections with a rendered component and
+		// the total height they occupy. Compares directly against the fixed IO
+		// window (OVERSCAN_TOP + loadMargin + viewport): if mounted count/area is
+		// higher on the big book, the win-px window holds more DOM/layers there,
+		// which is what shows up as extra Painting/Layout.
+		let mounts = 0;
+		let mountH = 0;
+		for (const [, d] of this.sections) {
+			if (d.component) {
+				mounts++;
+				mountH += d.height;
+			}
+		}
 		const spam = [...this.dbgSpam.entries()].filter(([, c]) => c >= 3).map(([p, c]) => `${p.split('/').pop()}:${c}`).join(' ');
 		const writers = this.dbgWriters.splice(0).join(' ;; ');
 		this.dbg(
 			'DBG', '',
 			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} w=${this.dbgWheel}`,
-			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders}`,
+			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} mounts=${mounts} mh=${Math.round(mountH)}`,
 			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
 			`fr=${this.dbgFrameMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms cb=${this.dbgCbMs.toFixed(1)}ms tag=${AbsoluteSectionManager.dbgTagMs.toFixed(1)}ms rects=${AbsoluteSectionManager.dbgTagRects} fps=${AbsoluteSectionManager.dbgFps}`,
 		);
