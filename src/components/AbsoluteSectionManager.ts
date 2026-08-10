@@ -131,6 +131,12 @@ export class AbsoluteSectionManager {
 	private dbgFrameMs = 0;
 	private dbgUpdMs = 0;
 	private dbgCbMs = 0;
+	// Debug: processUpdates sub-step breakdown (anchor lookup, height apply,
+	// offset recalc, scroll restore) — pinpoints where per-update ms go.
+	private dbgAnchorMs = 0;
+	private dbgApplyMs = 0;
+	private dbgRecalcMs = 0;
+	private dbgRestoreMs = 0;
 	/** Debug: accumulated ms spent in TocController.tagHeadings. */
 	static dbgTagMs = 0;
 	/** Debug: frames rendered by the whole main thread in the last DBG window. */
@@ -564,7 +570,7 @@ export class AbsoluteSectionManager {
 			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} w=${this.dbgWheel}`,
 			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} mounts=${mounts} mh=${Math.round(mountH)}`,
 			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
-			`fr=${this.dbgFrameMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms cb=${this.dbgCbMs.toFixed(1)}ms tag=${AbsoluteSectionManager.dbgTagMs.toFixed(1)}ms rects=${AbsoluteSectionManager.dbgTagRects} fps=${AbsoluteSectionManager.dbgFps}`,
+			`fr=${this.dbgFrameMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${AbsoluteSectionManager.dbgTagMs.toFixed(1)}ms rects=${AbsoluteSectionManager.dbgTagRects} fps=${AbsoluteSectionManager.dbgFps}`,
 		);
 		this.dbgT0 = now;
 		this.dbgFs = 0;
@@ -577,6 +583,10 @@ export class AbsoluteSectionManager {
 		this.dbgFrameMs = 0;
 		this.dbgUpdMs = 0;
 		this.dbgCbMs = 0;
+		this.dbgAnchorMs = 0;
+		this.dbgApplyMs = 0;
+		this.dbgRecalcMs = 0;
+		this.dbgRestoreMs = 0;
 		AbsoluteSectionManager.dbgTagMs = 0;
 		this.dbgScrollToCalls = 0;
 		this.dbgWheel = 0;
@@ -588,11 +598,14 @@ export class AbsoluteSectionManager {
 	}
 
 	private processUpdates(scrollTop: number): void {
+		let t = performance.now();
 		// Anchor snapshot for the scroll compensation after the layout shifts.
 		// Jump detection (lastScrollTop / pruneRenderQueue) now lives in
 		// runFrame so it runs even on pure-spy frames.
 		const anchor = this.layout.takeAnchor(scrollTop);
+		this.dbgAnchorMs += performance.now() - t;
 		this.dbg('update', '', this.pendingHeights.size, anchor ? anchor.idx : -1, anchor ? Math.round(anchor.anchorOffset) : -1);
+		t = performance.now();
 
 		if (this.pendingWidthChange) {
 			this.pendingWidthChange = false;
@@ -623,10 +636,15 @@ export class AbsoluteSectionManager {
 			}
 			this.pendingHeights.clear();
 		}
+		this.dbgApplyMs += performance.now() - t;
+		t = performance.now();
 
 		this.layout.recalcOffsets(scrollTop, this.lastClientHeight);
+		this.dbgRecalcMs += performance.now() - t;
+		t = performance.now();
 		this.layoutVersion++;
 		this.layout.restoreScrollAt(anchor, scrollTop);
+		this.dbgRestoreMs += performance.now() - t;
 	}
 
 	getOffset(path: string): number {
