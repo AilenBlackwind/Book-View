@@ -375,7 +375,7 @@ export class AbsoluteSectionManager {
 
 	render(): void {
 		const readPromises = this.pool.render(this.links);
-		this.layout.recalcOffsets();
+		this.layout.recalcOffsets(this.scrollContainer.scrollTop, this.scrollContainer.clientHeight);
 		this.layoutVersion++;
 		void Promise.allSettled(readPromises).then(() => {
 			this.buildHeadingIndex();
@@ -503,7 +503,7 @@ export class AbsoluteSectionManager {
 		if (this.updateRequested) {
 			this.updateRequested = false;
 			const t1 = performance.now();
-			this.processUpdates();
+			this.processUpdates(scrollTop);
 			this.dbgUpdMs += performance.now() - t1;
 			this.dbgUs++;
 		}
@@ -574,12 +574,11 @@ export class AbsoluteSectionManager {
 		dbgGlobalFrames = 0;
 	}
 
-	private processUpdates(): void {
-		const freshScrollTop = this.scrollContainer.scrollTop;
+	private processUpdates(scrollTop: number): void {
 		// Anchor snapshot for the scroll compensation after the layout shifts.
 		// Jump detection (lastScrollTop / pruneRenderQueue) now lives in
 		// runFrame so it runs even on pure-spy frames.
-		const anchor = this.layout.takeAnchor(freshScrollTop);
+		const anchor = this.layout.takeAnchor(scrollTop);
 		this.dbg('update', '', this.pendingHeights.size, anchor ? anchor.idx : -1, anchor ? Math.round(anchor.anchorOffset) : -1);
 
 		if (this.pendingWidthChange) {
@@ -612,9 +611,9 @@ export class AbsoluteSectionManager {
 			this.pendingHeights.clear();
 		}
 
-		this.layout.recalcOffsets();
+		this.layout.recalcOffsets(scrollTop, this.lastClientHeight);
 		this.layoutVersion++;
-		this.layout.restoreScrollAt(anchor, freshScrollTop);
+		this.layout.restoreScrollAt(anchor, scrollTop);
 	}
 
 	getOffset(path: string): number {

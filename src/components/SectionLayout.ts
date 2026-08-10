@@ -123,10 +123,11 @@ export class SectionLayout {
 		this.pendingAnchor = null;
 	}
 
-	recalcOffsets(): void {
+	recalcOffsets(scrollTop: number, viewport: number): void {
 		let offset = 0;
-		const scrollTop = this.host.scrollContainer.scrollTop;
-		const viewport = this.host.scrollContainer.clientHeight;
+		// scrollTop/viewport are passed in from the single frame read instead of
+		// re-read here: every extra geometry read after a fresh section mount
+		// forces a full style recalc + layout flush inside the update task.
 		// Only rewrite transforms inside a window around the viewport: writing
 		// ~2000 transforms forces a 100-200ms synchronous style recalc, which
 		// is what made every height correction a multi-hundred-ms long task.
@@ -188,9 +189,11 @@ export class SectionLayout {
 				data.el.classList.add('book-section-folded');
 				if (data.component) this.host.unloadSection(path);
 			} else {
-				const transitioned = data.wasHidden;
+			const transitioned = data.wasHidden;
+			if (data.el.classList.contains('book-section-folded') || data.el.classList.contains('book-section-heading-folded')) {
 				data.el.classList.remove('book-section-folded', 'book-section-heading-folded');
-				// Chevron rotation/tooltips are owned by updateFoldChevrons
+			}
+			// Chevron rotation/tooltips are owned by updateFoldChevrons
 				// (run on mount and fold toggles); clearing them here would
 				// un-rotate low-level fold chevrons on every unrelated recalc.
 				offset += data.height;
