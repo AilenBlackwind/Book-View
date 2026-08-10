@@ -1,4 +1,4 @@
-import { Component, setIcon } from 'obsidian';
+import { Component } from 'obsidian';
 import {
 	computeHeadingFoldState,
 	getFoldMode,
@@ -40,6 +40,7 @@ export interface FoldControllerHost {
 	 *  post-update layout restores against the pre-fold geometry. */
 	captureAnchor(): void;
 	scheduleUpdate(): void;
+	dbg(msg: string, path?: string, a?: number | string, b?: number | string, c?: number | string, d?: number | string): void;
 }
 
 /** Owns the heading-fold state and its DOM effects: fold toggles, the folded
@@ -133,10 +134,20 @@ export class FoldController {
 	 *  its own subtree — every block after it until the next heading of the
 	 *  same or a higher level. Runs on every (re)mount and after fold toggles. */
 	private applyFoldVisibility(path: string, container: HTMLElement): void {
+		// Fast path: with no folded headings there is nothing to hide, so
+		// heading-dense sections mount without a DOM scan. The one exception is
+		// right after a toggle removed the last fold — pendingFoldRetag must
+		// still run to clear stale classes.
+		if (this.foldedHeadings.size === 0 && !this.pendingFoldRetag.includes(path)) return;
 		const mode = this.getFoldMode(path);
 		const rendered = container.querySelector('.markdown-rendered');
-		if (!rendered) return;
+		if (!rendered) {
+			this.host.dbg('fold-norend', path, mode, this.foldedHeadings.size, this.pendingFoldRetag.includes(path) ? 1 : 0);
+			return;
+		}
 		const blocks = Array.from(rendered.children) as HTMLElement[];
+		const taggedCount = container.querySelectorAll('[data-fold-id]').length;
+		this.host.dbg('fold-run', path, mode, blocks.length, taggedCount, this.foldedHeadings.size);
 		for (const block of blocks) {
 			block.classList.remove('book-fold-hidden');
 		}
@@ -144,15 +155,23 @@ export class FoldController {
 
 		if (mode === 'heading') {
 			// Keep the first heading block (and anything before it); hide every
-			// block that follows it.
+			// block that follows it. The heading can be the block itself (a bare
+			// h* direct child of .markdown-rendered) or wrapped (themed .el-hX
+			// containers) — normalize like the 'none' branch below, because
+			// block.querySelector alone misses the bare-heading case and then no
+			// block is hidden, leaving the section text visible under the stub.
 			let seenHeading = false;
+			let hideCount = 0;
 			for (const block of blocks) {
 				if (!seenHeading) {
-					if (block.querySelector('[data-fold-id]')) seenHeading = true;
+					const direct = block.matches('[data-fold-id]') ? block : null;
+					if (direct ?? block.querySelector('[data-fold-id]')) seenHeading = true;
 					continue;
 				}
 				block.classList.add('book-fold-hidden');
+				hideCount++;
 			}
+			this.host.dbg('fold-heading', path, seenHeading ? 1 : 0, hideCount, blocks.length);
 			this.updateFoldChevrons(container);
 			return;
 		}
@@ -213,19 +232,24 @@ export class FoldController {
 	 *  current direct fold state of its heading; chevrons whose heading is
 	 *  hidden by an ancestor fold are hidden so they don't float over content. */
 	private updateFoldChevrons(container: HTMLElement): void {
-		const chevrons = container.querySelectorAll('.book-fold-chevron[data-fold-id]');
-		for (const chEl of Array.from(chevrons)) {
-			const id = (chEl as HTMLElement).dataset.foldId;
+		// The chevron is a CSS pseudo-element on the tagged heading; only the
+		// fold classes/title live here.
+		const headings = container.querySelectorAll<HTMLElement>('[data-fold-id]');
+		for (const h of Array.from(headings)) {
+			const id = h.dataset.foldId;
 			if (!id) continue;
 			const folded = this.foldedHeadings.has(id);
-			chEl.classList.toggle('is-folded', folded);
-			chEl.classList.toggle('book-fold-chevron-hidden', !folded && this.isFoldedSubtree(id));
-			(chEl as HTMLElement).title = folded ? 'Expand section' : 'Collapse section';
+			h.classList.toggle('is-folded', folded);
+			h.classList.toggle('book-fold-chevron-hidden', !folded && this.isFoldedSubtree(id));
+			const title = folded ? 'Expand section' : 'Collapse section';
+			if (h.title !== title) h.title = title;
 		}
 	}
 
-	/** Tag every rendered heading in the section with its data-fold-id and
-	 *  attach a fold chevron inside that heading. Runs on every (re)mount. */
+	/** Tag every rendered heading in the section with its data-fold-id. The
+	 *  chevron itself is drawn by CSS (a pseudo-element on the tagged heading),
+	 *  so heading-dense notes mount with no per-heading DOM nodes. Runs on
+	 *  every (re)mount. */
 	tagFoldIds(path: string, container: HTMLElement): void {
 		const pathHeadings = this.host.headingsByPath.get(path) ?? [];
 		const bareHeadings = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
@@ -238,22 +262,6 @@ export class FoldController {
 			if (!match) break;
 			const h = el as HTMLElement;
 			h.dataset.foldId = match.id;
-			// The chevron lives inside its heading so CSS can center it and
-			// reveal it on heading hover without JS measuring stale offsets
-			// (a JS top can drift from the heading after a fold shifts the
-			// content, and detached sections measured a bogus top of 0 that
-			// stacked every chevron over the first heading).
-			if (!h.querySelector('.book-fold-chevron')) {
-				const ch = document.createElement('span');
-				ch.className = 'book-fold-chevron';
-				ch.dataset.foldId = match.id;
-				ch.title = this.isFolded(match.id) ? 'Expand section' : 'Collapse section';
-				const icon = document.createElement('span');
-				icon.className = 'book-fold-chevron-icon';
-				setIcon(icon, 'chevron-right');
-				ch.appendChild(icon);
-				h.appendChild(ch);
-			}
 			idx++;
 		}
 		this.applyFoldVisibility(path, container);
@@ -309,8 +317,10 @@ export class FoldController {
 	/** Re-apply DOM-level fold hiding for sections queued by toggleFold. */
 	applyPendingRetags(): void {
 		if (this.pendingFoldRetag.length === 0) return;
+		this.host.dbg('fold-retag', '', this.pendingFoldRetag.length);
 		for (const path of this.pendingFoldRetag) {
 			const data = this.host.sections.get(path);
+			this.host.dbg('fold-retag-one', path, data?.component ? 1 : 0, data?.el.querySelector('.markdown-rendered') ? 1 : 0);
 			if (data?.component) {
 				this.applyFoldVisibility(path, data.el);
 			}

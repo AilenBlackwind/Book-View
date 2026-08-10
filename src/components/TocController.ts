@@ -46,6 +46,10 @@ export class TocController {
 
 	// --- Scroll ---
 	private headingPositions: number[] = [];
+	/** Entry positions only change when section offsets or measured heading
+	 *  offsets change, never on scroll; the tick recomputes them lazily. */
+	private lastLayoutVersion = -1;
+	private positionsDirty = true;
 	private scrollHandler: (() => void) | null = null;
 	private tickScheduled = false;
 	private highlightEl: HTMLElement | null = null;
@@ -370,7 +374,7 @@ export class TocController {
 			for (let i = 0; i < this.entries.length; i++) {
 				const li = this.headingLis[i];
 				if (!li || willHide[i]) continue;
-				li.style.maxHeight = '';
+				li.style.removeProperty('max-height');
 			}
 		}, 160);
 
@@ -383,6 +387,18 @@ export class TocController {
 				chevron.addClass('book-toc-chevron-closed');
 			}
 		}
+	}
+
+	/** Recompute entry positions only when something that feeds them changed:
+	 *  section offsets (layout version) or measured heading offsets (dirty
+	 *  flag). Plain scroll frames keep the last array — positions do not depend
+	 *  on scrollTop, so recomputing them was pure O(entries) waste per frame. */
+	private updatePositionsIfDirty(): void {
+		const layoutVersion = this.absoluteManager?.getLayoutVersion() ?? -1;
+		if (!this.positionsDirty && layoutVersion === this.lastLayoutVersion) return;
+		this.positionsDirty = false;
+		this.lastLayoutVersion = layoutVersion;
+		this.calculatePositions();
 	}
 
 	calculatePositions(): void {
@@ -414,9 +430,12 @@ export class TocController {
 		for (let k = 0; k < this.entries.length; k++) {
 			if (this.entries[k]?.file.path === path && this.headingOffsets.delete(k)) removed++;
 		}
-		// TEMP debug: is the headingOffsets cache being silently evicted by
+		// Debug: is the headingOffsets cache being silently evicted by
 		// markDirty (file modify events) while the user is elsewhere?
-		if (removed > 0) DebugLog.log('TOC invalidate', path, removed);
+		if (removed > 0) {
+			this.positionsDirty = true;
+			DebugLog.log('TOC invalidate', path, removed);
+		}
 	}
 
 	tagHeadings(path: string, container: HTMLElement): void {
@@ -457,6 +476,7 @@ export class TocController {
 			if (!sectionRect) sectionRect = sectionEl.getBoundingClientRect();
 			const headingRect = el.getBoundingClientRect();
 			this.headingOffsets.set(tocIndex, headingRect.top - sectionRect.top);
+			this.positionsDirty = true;
 			AbsoluteSectionManager.dbgTagRects++;
 		}
 	}
@@ -491,7 +511,7 @@ export class TocController {
 	private onScrollTick(): void {
 		if (this.isJumping) return;
 
-		this.calculatePositions();
+		this.updatePositionsIfDirty();
 
 		const scrollTop = this.scrollContainer.scrollTop;
 

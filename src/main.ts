@@ -9,6 +9,8 @@ import { BookViewSettings, DEFAULT_SETTINGS } from './settings';
 import { BookViewSettingTab } from './ui/SettingsTab';
 import { BufferManager } from './BufferManager';
 import { BookViewAPI } from './BookViewAPI';
+import { DebugLog } from './utils/debug';
+import { ensureGlobalFrameProbe } from './components/AbsoluteSectionManager';
 
 export default class BookViewPlugin extends Plugin {
 	settings: BookViewSettings = DEFAULT_SETTINGS;
@@ -132,6 +134,19 @@ export default class BookViewPlugin extends Plugin {
 			callback: () => {
 				void this.collectManuscript();
 			},
+		});
+
+		this.addCommand({
+			id: 'toggle-debug-logging',
+			name: 'Toggle debug logging',
+			callback: () => {
+				const on = DebugLog.toggle();
+				if (on) ensureGlobalFrameProbe();
+				new Notice(on ? 'Book View: debug logging on' : 'Book View: debug logging off');
+			},
+		});
+		DebugLog.onChange((enabled) => {
+			if (enabled) ensureGlobalFrameProbe();
 		});
 
 		this.registerEvent(

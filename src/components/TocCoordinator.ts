@@ -101,7 +101,7 @@ export class TocCoordinator {
 			return;
 		}
 
-		// TEMP debug: track bind/rebind timing vs the scroll storm.
+		// Debug: track bind/rebind timing vs the scroll storm.
 		DebugLog.log('COORD sync', active.filePath || '', tocActiveNow ? 1 : 0, cameFromToc ? 1 : 0);
 		this.lastBook = active;
 
@@ -120,7 +120,7 @@ export class TocCoordinator {
 	 *  rebind so a new book loaded into the same BookView instance rebuilds
 	 *  the ToC instead of being swallowed by the bound-book guard. */
 	setCurrentBook(book: BookView): void {
-		// TEMP debug: the book finished loading; the coordinator rebinds the ToC.
+		// Debug: the book finished loading; the coordinator rebinds the ToC.
 		DebugLog.log('COORD setCurrentBook', book.filePath || '', book.instanceId);
 		this.lastBook = book;
 		const view = this.getTocView();
@@ -150,7 +150,7 @@ export class TocCoordinator {
 	}
 
 	private bindToLastBook(): void {
-		// TEMP debug: how often does the ToC get (re)bound on tab switches?
+		// Debug: how often does the ToC get (re)bound on tab switches?
 		DebugLog.log('COORD bindToLastBook', this.lastBook?.filePath || '');
 		const view = this.getTocView();
 		if (view && this.lastBook) view.bind(this.lastBook);

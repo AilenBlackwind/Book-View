@@ -79,7 +79,7 @@ export class SectionPool {
 	private idleTimer = 0;
 	private lastUserScrollTimestamp = 0;
 
-	// TEMP debug counters (remove after investigation).
+	// Debug counters (live in the togglable debug layer).
 	dbgIo = 0;
 	dbgLoads = 0;
 	dbgUnloads = 0;

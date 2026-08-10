@@ -14,7 +14,7 @@ export const VIEW_TYPE_BOOK_TOC = 'book-toc-view';
 export class BookTocView extends ItemView {
 	private tocController: TocController | null = null;
 	private boundBook: BookView | null = null;
-	// TEMP debug: cumulative bind counter.
+	// Debug: cumulative bind counter.
 	private dbgBinds = 0;
 
 	constructor(leaf: WorkspaceLeaf) {
@@ -46,7 +46,7 @@ export class BookTocView extends ItemView {
 	}
 
 	bind(book: BookView, force = false): void {
-		// TEMP debug: bind/rebind spam hypothesis.
+		// Debug: bind/rebind spam hypothesis.
 		this.dbgBinds++;
 		DebugLog.log('TOC bind', book.filePath || '', force ? 1 : 0, this.boundBook === book ? 1 : 0, this.dbgBinds);
 		if (book === this.boundBook && !force) return;
@@ -84,7 +84,7 @@ export class BookTocView extends ItemView {
 	}
 
 	unbind(): void {
-		// TEMP debug.
+		// Debug.
 		DebugLog.log('TOC unbind', this.boundBook?.filePath || '');
 		this.tocController?.destroy();
 		this.tocController = null;

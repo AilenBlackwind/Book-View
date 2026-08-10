@@ -7,7 +7,10 @@
 /** Index of the ToC entry that should be highlighted for a given scroll
  *  position. Returns the last entry whose heading top is above the trigger
  *  line (30% down the viewport by default), or -1 when scrolled above the
- *  first heading. */
+ *  first heading. Positions are monotonically non-decreasing (file offsets
+ *  cascade in order and within-section offsets grow with document order), so
+ *  the last match is found with a binary search instead of an O(n) scan —
+ *  the scan ran over the whole array on every scroll frame. */
 export function pickActiveIndex(
 	positions: readonly (number | undefined)[],
 	scrollTop: number,
@@ -15,10 +18,19 @@ export function pickActiveIndex(
 	triggerRatio = 0.3,
 ): number {
 	const triggerY = scrollTop + viewportHeight * triggerRatio;
-	for (let i = positions.length - 1; i >= 0; i--) {
-		if ((positions[i] ?? 0) <= triggerY) return i;
+	let lo = 0;
+	let hi = positions.length - 1;
+	let result = -1;
+	while (lo <= hi) {
+		const mid = (lo + hi) >> 1;
+		if ((positions[mid] ?? 0) <= triggerY) {
+			result = mid;
+			lo = mid + 1;
+		} else {
+			hi = mid - 1;
+		}
 	}
-	return -1;
+	return result;
 }
 
 /** Ancestors of entry `index` (plus the entry itself when it has children),

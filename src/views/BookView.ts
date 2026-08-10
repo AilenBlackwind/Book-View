@@ -15,7 +15,7 @@ function matchesModifiers(evt: MouseEvent, mod: ModifierConfig): boolean {
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
 
 export class BookView extends ItemView {
-	// TEMP debug: distinguish loadBook calls on the same vs. new instances.
+	// Debug: distinguish loadBook calls on the same vs. new instances.
 	private static nextInstanceId = 0;
 	readonly instanceId = ++BookView.nextInstanceId;
 	absoluteManager: AbsoluteSectionManager | null = null;
@@ -108,7 +108,7 @@ export class BookView extends ItemView {
 	}
 
 	private async loadBook(filePath: string): Promise<void> {
-		// TEMP debug: log every loadBook call with its instance id to catch
+		// Debug: log every loadBook call with its instance id to catch
 		// duplicate loads of the same book (tab/view churn) vs. fresh instances.
 		DebugLog.log('LOAD', String(this.instanceId), filePath);
 		// Obsidian may call onOpen/setState with the same filePath several times
@@ -309,7 +309,7 @@ export class BookView extends ItemView {
 	}
 
 	private restoreScrollPosition(): void {
-		// TEMP debug: correlate the scroll-event storm with the restore jump
+		// Debug: correlate the scroll-event storm with the restore jump
 		// (hypothesis B: spy churns while the position jump settles).
 		DebugLog.log('RESTORE', '', this.savedScrollTop >= 0 ? this.savedScrollTop : -2);
 		if (this.contentContainer && this.savedScrollTop >= 0) {

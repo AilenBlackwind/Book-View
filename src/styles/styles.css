@@ -54,10 +54,12 @@
 	display: none !important;
 }
 
-/* Fold chevrons are appended inside their heading: the heading becomes their
-   containing block, CSS centers them, and only the hovered heading's chevron
-   is revealed (an earlier `:has([data-fold-id]:hover)` rule lit up every
-   chevron in the section on any heading hover). */
+/* Fold chevrons are drawn as a pure CSS pseudo-element on the tagged heading:
+   no per-heading span/SVG DOM nodes, so heading-dense notes (thousands of
+   headings) mount without building an icon node per heading. The heading
+   itself is the fold click target, matching Obsidian's own reading-mode fold.
+   Only the hovered heading's chevron is revealed (an earlier `:has(...:hover)`
+   rule lit up every chevron in the section on any heading hover). */
 .book-section-absolute h1,
 .book-section-absolute h2,
 .book-section-absolute h3,
@@ -67,59 +69,38 @@
 	position: relative;
 }
 
-.book-fold-chevron {
+.book-section-absolute [data-fold-id]::before {
+	content: '';
 	position: absolute;
 	left: -19px;
 	top: 50%;
-	/* Positioning only — the rotate lives on the inner icon wrapper. Keeping
-	   translateY(-50%) off the rotating element stops the chevron from
-	   drifting up/sideways when it folds (a translate on a rotated element is
-	   applied in the rotated coordinate frame). */
-	transform: translateY(-50%);
-	color: var(--text-muted);
+	width: 16px;
+	height: 16px;
+	/* Chevron-right rotated down = section is open (content visible), like
+	   Obsidian's fold indicator and the plugin's own ToC chevrons. translateY
+	   first, then rotate: rotating a translated element would pivot around the
+	   translated origin and drift it off-center. */
+	transform: translateY(-50%) rotate(90deg);
+	background-color: var(--text-muted);
+	-webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 18 15 12 9 6'/></svg>") center / contain no-repeat;
+	mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 18 15 12 9 6'/></svg>") center / contain no-repeat;
 	opacity: 0;
 	cursor: pointer;
 	transition: opacity 150ms ease;
 }
 
-.book-fold-chevron-icon {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	/* Chevron-right rotated down = section is open (content visible), like
-	   Obsidian's fold indicator and the plugin's own ToC chevrons. */
-	transform: rotate(90deg);
-}
-
-/* Shrink the icon toward Obsidian's native fold indicator size. The scale
-   applies to the SVG only, so the span's ::after hit zone keeps its size. */
-.book-fold-chevron svg {
-	transform: scale(var(--book-fold-chevron-scale, 0.8));
-}
-
-/* Extend chevron's hit zone rightward to bridge the gap to the heading */
-.book-fold-chevron::after {
-	content: '';
-	position: absolute;
-	left: 100%;
-	top: -4px;
-	width: 14px;
-	height: calc(100% + 8px);
-}
-
-.book-fold-chevron:hover,
-.book-fold-chevron.is-folded,
-.book-section-absolute [data-fold-id]:hover > .book-fold-chevron {
+.book-section-absolute [data-fold-id]:hover::before,
+.book-section-absolute [data-fold-id].is-folded::before {
 	opacity: 0.8;
 }
 
-.book-fold-chevron.is-folded .book-fold-chevron-icon {
-	transform: rotate(0deg);
+.book-section-absolute [data-fold-id].is-folded::before {
+	transform: translateY(-50%) rotate(0deg);
 }
 
 /* Chevron for a heading hidden by an ancestor fold: hide it so it doesn't
    float over unrelated content at its stale position. */
-.book-fold-chevron-hidden {
+.book-section-absolute [data-fold-id].book-fold-chevron-hidden::before {
 	visibility: hidden;
 }
 
