@@ -16,7 +16,7 @@ const FAR_UNLOAD_MARGIN = 2000;
 // How far past the load window pre-render may measure heights. Sections beyond
 // it get parked/unloaded immediately (parkIfOutOfZone), so measuring them early
 // just churns the renderer: mount + measure + full recalc + unload for nothing.
-const PRERENDER_WINDOW = 3000;
+export const PRERENDER_WINDOW = 3000;
 
 export interface SectionData {
 	el: HTMLElement;
@@ -350,6 +350,19 @@ export class SectionPool {
 		window.clearTimeout(this.ioWorkTimer);
 	}
 
+	/** Re-apply the placeholder transform from the always-current offset. The
+	 *  layout only rewrites transforms inside a window around the viewport, so
+	 *  a section that was far away when its offset changed must fix its own
+	 *  position when it (re)mounts. */
+	private applyTransform(path: string): void {
+		const data = this.host.sections.get(path);
+		if (!data) return;
+		const transform = `translateY(${data.offset}px)`;
+		if (data.el.style.transform !== transform) {
+			data.el.style.transform = transform;
+		}
+	}
+
 	private async loadSection(path: string): Promise<void> {
 		this.dbgLoads++;
 		const data = this.host.sections.get(path);
@@ -360,6 +373,7 @@ export class SectionPool {
 			this.host.dbg('load-cached', path);
 			this.host.renderedDomCache.delete(path);
 			data.el.appendChild(cachedDom);
+			this.applyTransform(path);
 			this.host.foldTagSection(path, data.el);
 			// data.firstType/lastType persist across unload (set at render time
 			// or on the fresh render), and the cached DOM is immutable — no need
@@ -399,6 +413,7 @@ export class SectionPool {
 
 		data.el.empty();
 		data.el.appendChild(renderContainer);
+		this.applyTransform(path);
 		this.host.foldTagSection(path, data.el);
 		const firstType = this.getFirstType(data.el);
 		const lastType = this.getLastType(data.el);

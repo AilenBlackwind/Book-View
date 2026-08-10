@@ -11,11 +11,6 @@ import { DebugLog } from '../utils/debug';
 
 export const HEIGHT_PER_LINE = 25;
 
-// How long after the last user scroll a deferred geometry recalc may run.
-// Height corrections during a fast scroll are batched up and applied in one
-// recalc once the scroll settles (see runFrame / scheduleDeferredUpdate).
-const UPDATE_SCROLL_SETTLE_MS = 200;
-
 // Debug: global main-thread frame counter, independent of the book manager.
 // It shows whether the note tab actually keeps rendering at ~60fps while the
 // user reads a note with the ToC panel open — if a background loop (book
@@ -94,7 +89,6 @@ export class AbsoluteSectionManager {
 	private firstHeadingByPath: Map<string, HeadingNode> = new Map();
 	private headingsByPath: Map<string, HeadingNode[]> = new Map();
 	private updateRequested = false;
-	private deferredUpdateTimer = 0;
 	private heightCache: Map<string, number> = new Map();
 	private renderedDomCache: Map<string, HTMLElement> = new Map();
 	private containerWidthObserver: ResizeObserver;
@@ -469,29 +463,6 @@ export class AbsoluteSectionManager {
 		this.scheduleFrame();
 	}
 
-	/** True while the user is actively scrolling (scroll events keep arriving).
-	 *  Geometry recalc is deferred during this window so height corrections do
-	 *  not turn every scroll frame into a full-book recalc + style recalc. */
-	private isUserScrolling(): boolean {
-		return Date.now() - this.pool.lastUserScrollAt < UPDATE_SCROLL_SETTLE_MS;
-	}
-
-	/** One-shot settle timer: runs the pending update (via a frame) once the
-	 *  scroll has been still for UPDATE_SCROLL_SETTLE_MS, rescheduling while
-	 *  the user keeps scrolling so corrections never pile up unboundedly. */
-	private scheduleDeferredUpdate(): void {
-		if (this.deferredUpdateTimer) return;
-		this.deferredUpdateTimer = window.setTimeout(() => {
-			this.deferredUpdateTimer = 0;
-			if (this.destroyed) return;
-			if (this.isUserScrolling()) {
-				this.scheduleDeferredUpdate();
-			} else {
-				this.scheduleFrame();
-			}
-		}, UPDATE_SCROLL_SETTLE_MS);
-	}
-
 	private scheduleFrame(): void {
 		if (this.rafId) return;
 		this.rafId = window.requestAnimationFrame(() => {
@@ -525,26 +496,16 @@ export class AbsoluteSectionManager {
 		// firstType/lastType changes after a re-render). Every scheduleUpdate
 		// caller signals one of those; pure-IO frames now skip the offset
 		// cascade, the layoutVersion bump, and the anchor lookup entirely.
+		// Corrections are applied immediately (never batched until the scroll
+		// settles): recalcOffsets only rewrites transforms in a window around
+		// the viewport, so the per-frame cost is a few milliseconds and nothing
+		// accumulates into a big layout shift once the user stops scrolling.
 		if (this.updateRequested) {
-			// While the user is actively scrolling, defer the recalc: each
-			// height correction recomputes offsets over all 2000 sections and
-			// rewrites ~2000 transforms, and the IntersectionObserver's next
-			// layout pass then pays a 100-200ms synchronous style recalc. Run
-			// per frame during a fast gesture that turns every frame into a
-			// multi-hundred-ms long task. Accumulate the pending corrections
-			// instead and apply them in one combined recalc once the scroll
-			// settles; the scroll-spy keeps working off the stale (but
-			// consistent) offsets in the meantime, so nothing visually jumps
-			// mid-scroll.
-			if (this.isUserScrolling()) {
-				this.scheduleDeferredUpdate();
-			} else {
-				this.updateRequested = false;
-				const t1 = performance.now();
-				this.processUpdates();
-				this.dbgUpdMs += performance.now() - t1;
-				this.dbgUs++;
-			}
+			this.updateRequested = false;
+			const t1 = performance.now();
+			this.processUpdates();
+			this.dbgUpdMs += performance.now() - t1;
+			this.dbgUs++;
 		}
 		// Frame callbacks (the scroll spy) run AFTER processUpdates, not
 		// before: they read data.offset values and scrollTop, which are only
@@ -677,8 +638,6 @@ export class AbsoluteSectionManager {
 	destroy(): void {
 		this.destroyed = true;
 		this.frameCallbacks.length = 0;
-		window.clearTimeout(this.deferredUpdateTimer);
-		this.deferredUpdateTimer = 0;
 		if (this.rafId) {
 			cancelAnimationFrame(this.rafId);
 			this.rafId = 0;

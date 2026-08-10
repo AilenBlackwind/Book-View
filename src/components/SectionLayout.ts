@@ -1,6 +1,6 @@
 import type { FoldMode } from '../utils/fold';
 import type { SectionData } from './SectionPool';
-import { OVERSCAN_TOP } from './SectionPool';
+import { OVERSCAN_TOP, PRERENDER_WINDOW } from './SectionPool';
 import { FALLBACK_FOLD_HEADING_HEIGHT } from './FoldController';
 import type { ThemeSpacings } from '../utils/theme';
 import { DEFAULT_THEME_SPACINGS } from '../utils/theme';
@@ -89,6 +89,17 @@ export class SectionLayout {
 
 	recalcOffsets(): void {
 		let offset = 0;
+		const scrollTop = this.host.scrollContainer.scrollTop;
+		const viewport = this.host.scrollContainer.clientHeight;
+		// Only rewrite transforms inside a window around the viewport: writing
+		// ~2000 transforms forces a 100-200ms synchronous style recalc, which
+		// is what made every height correction a multi-hundred-ms long task.
+		// The window (IO range = OVERSCAN_TOP above, loadMargin below, plus the
+		// prerender lookahead) covers everything that can mount next; sections
+		// farther out keep a stale transform that applyTransform() fixes on
+		// (re)mount, and data.offset is always kept current in JS regardless.
+		const winTop = scrollTop - OVERSCAN_TOP - this.host.loadMargin;
+		const winBottom = scrollTop + viewport + this.host.loadMargin + PRERENDER_WINDOW;
 
 		for (let i = 0; i < this.host.fileOrder.length; i++) {
 			const path = this.host.fileOrder[i] ?? '';
@@ -103,9 +114,13 @@ export class SectionLayout {
 			// height correction the whole cascade of following sections is
 			// re-styled and re-laid-out in one frame. translateY only moves the
 			// composited layer, so unchanged sections never dirty the renderer.
-			const transform = `translateY(${offset}px)`;
-			if (data.el.style.transform !== transform) {
-				data.el.style.transform = transform;
+			// Loaded sections are always written (they hold live DOM); unloaded
+			// placeholders only inside the window.
+			if (data.component || (offset <= winBottom && offset + data.height >= winTop)) {
+				const transform = `translateY(${offset}px)`;
+				if (data.el.style.transform !== transform) {
+					data.el.style.transform = transform;
+				}
 			}
 
 			if (foldMode === 'heading') {

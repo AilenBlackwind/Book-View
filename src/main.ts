@@ -24,7 +24,9 @@ export default class BookViewPlugin extends Plugin {
 
 	getPersistedHeight = (path: string, mtime: number, width: number): number | undefined => {
 		const rec = this.heightStore[path];
-		return rec && rec.m === mtime && Math.abs(rec.w - width) <= 2 ? rec.h : undefined;
+		// Legacy entries (w === -1) predate width-keying: their height was
+		// measured at some width, which is closer to reality than an estimate.
+		return rec && rec.m === mtime && (rec.w === -1 || Math.abs(rec.w - width) <= 2) ? rec.h : undefined;
 	};
 
 	persistHeight = (path: string, mtime: number, width: number, height: number): void => {
@@ -193,8 +195,12 @@ export default class BookViewPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.heightStore = {};
 		for (const [path, rec] of Object.entries(data?.measuredHeights ?? {})) {
-			if (rec && typeof rec.m === 'number' && typeof rec.h === 'number' && typeof rec.w === 'number') {
-				this.heightStore[path] = rec as { m: number; h: number; w: number };
+			if (rec && typeof rec.m === 'number' && typeof rec.h === 'number') {
+				// Records saved before width-keying carry no width; tag them -1
+				// (match any width) so they keep working until re-measured.
+				this.heightStore[path] = typeof rec.w === 'number'
+					? rec as { m: number; h: number; w: number }
+					: { m: rec.m, h: rec.h, w: -1 };
 			}
 		}
 
