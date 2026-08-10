@@ -83,6 +83,42 @@ export class SectionLayout {
 		return result;
 	}
 
+	/** Rewrites placeholder transforms inside the viewport window from the
+	 *  always-current data.offset. recalcOffsets keeps this fresh at recalc
+	 *  time, but a section whose offset changed while it sat outside the window
+	 *  keeps a stale DOM transform afterwards — and plain scrolling never
+	 *  triggers a recalc, so a stale placeholder can sit where the IO never
+	 *  fires, leaving a blank gap. Called every frame; cheap because it binary
+	 *  searches to the window and only writes changed transforms. Loaded
+	 *  sections are skipped (recalcOffsets writes them unconditionally). */
+	refreshWindowTransforms(scrollTop: number, viewport: number): void {
+		const winTop = scrollTop - OVERSCAN_TOP - this.host.loadMargin;
+		const winBottom = scrollTop + viewport + this.host.loadMargin + PRERENDER_WINDOW;
+		const order = this.host.fileOrder;
+		// Offsets are non-decreasing, so binary search the first section that
+		// can touch the window, then scan forward until past its bottom edge.
+		let lo = 0;
+		let hi = order.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			const data = this.host.sections.get(order[mid] ?? '');
+			const off = data ? data.offset : Number.MAX_SAFE_INTEGER;
+			if (off < winTop) lo = mid + 1;
+			else hi = mid;
+		}
+		for (let i = Math.max(0, lo - 1); i < order.length; i++) {
+			const data = this.host.sections.get(order[i] ?? '');
+			if (!data) break;
+			if (data.offset > winBottom) break;
+			if (data.component) continue;
+			if (data.offset + data.height < winTop) continue;
+			const transform = `translateY(${data.offset}px)`;
+			if (data.el.style.transform !== transform) {
+				data.el.style.transform = transform;
+			}
+		}
+	}
+
 	destroy(): void {
 		this.pendingAnchor = null;
 	}

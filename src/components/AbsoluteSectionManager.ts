@@ -507,6 +507,13 @@ export class AbsoluteSectionManager {
 			this.dbgUpdMs += performance.now() - t1;
 			this.dbgUs++;
 		}
+		// Placeholder transforms in the viewport window can go stale when a
+		// section's offset changed while it sat far below — and plain scrolling
+		// alone never triggers a recalc, so a stale placeholder stays where the
+		// IO never fires and the section never loads (blank area without text).
+		// Refresh the window every frame using the always-current data.offset:
+		// cheap (binary search to the window, writes only changed transforms).
+		this.layout.refreshWindowTransforms(scrollTop, this.lastClientHeight);
 		// Frame callbacks (the scroll spy) run AFTER processUpdates, not
 		// before: they read data.offset values and scrollTop, which are only
 		// meaningful once height corrections, folds, and width changes were
