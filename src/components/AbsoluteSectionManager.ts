@@ -277,6 +277,7 @@ export class AbsoluteSectionManager {
 			getOnSectionRendered: () => this.onSectionRendered,
 			getScrollTop: () => this.getScrollTop(),
 			getClientHeight: () => this.getClientHeight(),
+			getContainerWidth: () => this.lastContainerWidth,
 			reportSectionHeight: (path, newHeight) => this.reportSectionHeight(path, newHeight),
 			scheduleUpdate: () => this.scheduleUpdate(),
 			scheduleFrame: () => this.scheduleFrame(),
@@ -637,7 +638,7 @@ export class AbsoluteSectionManager {
 				if (!data) continue;
 				data.height = newHeight;
 				this.heightCache.set(path, newHeight);
-				this.persistence.put?.(path, data.mtime, newHeight);
+				this.persistence.put?.(path, data.mtime, this.lastContainerWidth, newHeight);
 				data.heightTrusted = true;
 			}
 			this.pendingHeights.clear();

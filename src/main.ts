@@ -17,20 +17,20 @@ export default class BookViewPlugin extends Plugin {
 	bufferManager: BufferManager = null as unknown as BufferManager;
 	api: BookViewAPI | null = null;
 	private skipPaths = new Set<string>();
-	heightStore: Record<string, { m: number; h: number }> = {};
+	heightStore: Record<string, { m: number; h: number; w: number }> = {};
 	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
 	tocCoordinator: TocCoordinator | null = null;
 	private saveHeightsTimer = 0;
 
-	getPersistedHeight = (path: string, mtime: number): number | undefined => {
+	getPersistedHeight = (path: string, mtime: number, width: number): number | undefined => {
 		const rec = this.heightStore[path];
-		return rec && rec.m === mtime ? rec.h : undefined;
+		return rec && rec.m === mtime && Math.abs(rec.w - width) <= 2 ? rec.h : undefined;
 	};
 
-	persistHeight = (path: string, mtime: number, height: number): void => {
+	persistHeight = (path: string, mtime: number, width: number, height: number): void => {
 		const rec = this.heightStore[path];
-		if (rec && rec.m === mtime && Math.abs(rec.h - height) < 1) return;
-		this.heightStore[path] = { m: mtime, h: height };
+		if (rec && rec.m === mtime && rec.w === width && Math.abs(rec.h - height) < 1) return;
+		this.heightStore[path] = { m: mtime, h: height, w: width };
 		const keys = Object.keys(this.heightStore);
 		if (keys.length > 1000) {
 			const oldest = keys[0];
@@ -189,9 +189,14 @@ export default class BookViewPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		const data = await this.loadData() as (Partial<BookViewSettings> & { measuredHeights?: Record<string, { m: number; h: number }>; tocAutoCollapse?: boolean }) | null;
+		const data = await this.loadData() as (Partial<BookViewSettings> & { measuredHeights?: Record<string, { m: number; h: number; w?: number }>; tocAutoCollapse?: boolean }) | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
-		this.heightStore = data?.measuredHeights ?? {};
+		this.heightStore = {};
+		for (const [path, rec] of Object.entries(data?.measuredHeights ?? {})) {
+			if (rec && typeof rec.m === 'number' && typeof rec.h === 'number' && typeof rec.w === 'number') {
+				this.heightStore[path] = rec as { m: number; h: number; w: number };
+			}
+		}
 
 		if (data?.tocAutoCollapse !== undefined && data.autoExpandMode === undefined) {
 			this.settings.autoExpandMode = data.tocAutoCollapse ? 'expand-collapse-level' : 'disabled';

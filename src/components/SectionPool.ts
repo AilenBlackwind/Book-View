@@ -35,8 +35,8 @@ export interface SectionData {
 }
 
 export interface HeightPersistence {
-	get?: (path: string, mtime: number) => number | undefined;
-	put?: (path: string, mtime: number, height: number) => void;
+	get?: (path: string, mtime: number, width: number) => number | undefined;
+	put?: (path: string, mtime: number, width: number, height: number) => void;
 }
 
 export interface SectionPoolHost {
@@ -61,6 +61,7 @@ export interface SectionPoolHost {
 	 *  IO macrotask, where the freshly mounted DOM would force a reflow). */
 	getScrollTop(): number;
 	getClientHeight(): number;
+	getContainerWidth(): number;
 	reportSectionHeight(path: string, newHeight: number): void;
 	scheduleUpdate(): void;
 	scheduleFrame(): void;
@@ -212,7 +213,7 @@ export class SectionPool {
 			});
 
 			const mtime = file.stat.mtime;
-			const cached = this.host.heightCache.get(path) ?? this.host.persistence.get?.(path, mtime);
+			const cached = this.host.heightCache.get(path) ?? this.host.persistence.get?.(path, mtime, this.host.getContainerWidth());
 			const estimated = cached ?? 35;
 
 			const data: SectionData = {
