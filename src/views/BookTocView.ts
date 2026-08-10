@@ -1,6 +1,5 @@
 import { ItemView, WorkspaceLeaf } from 'obsidian';
 import { TocController } from '../components/TocController';
-import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { DebugLog } from '../utils/debug';
 import type { BookView } from './BookView';
 
@@ -74,9 +73,9 @@ export class BookTocView extends ItemView {
 		this.tocController.build();
 
 		manager.onSectionRendered = (path, sectionContainer) => {
-			const t0 = performance.now();
+			// Measurement is deferred to the manager frame (onTagFrame); only
+			// the cheap data-entry-index writes run here synchronously.
 			this.tocController?.tagHeadings(path, sectionContainer);
-			AbsoluteSectionManager.dbgTagMs += performance.now() - t0;
 		};
 		manager.onSectionContentChanged = (path) => {
 			this.tocController?.invalidatePath(path);

@@ -52,6 +52,13 @@ export class TocController {
 	private positionsDirty = true;
 	private scrollHandler: (() => void) | null = null;
 	private tickScheduled = false;
+	/** Sections queued for deferred heading-offset measurement. tagHeadings sets
+	 *  the cheap data-entry-index attributes synchronously, then queues the
+	 *  rect reads here; they run in the next frame (coalesced) instead of inside
+	 *  the IO macrotask that mounted the section, where a getBoundingClientRect
+	 *  right after the mount forces a full layout flush of freshly attached DOM. */
+	private pendingTagHeadings: { sectionEl: HTMLElement; toMeasure: { el: HTMLElement; tocIndex: number }[] }[] = [];
+	private tagFrameRequested = false;
 	private highlightEl: HTMLElement | null = null;
 	private fadeTimer = 0;
 	private lastCenterIndex = -1;
@@ -234,11 +241,11 @@ export class TocController {
 		});
 		this.tocResizeObserver.observe(this.containerEl);
 
-		// Bootstrap: highlight first heading after build
+		// Bootstrap: highlight first heading after build. Route through the
+		// manager frame so onScrollTick's cached scrollTop read is fresh (the
+		// frame refreshes lastScrollTop before the callbacks run).
 		if (this.entries.length > 0) {
-			window.requestAnimationFrame(() => {
-				this.onScrollTick();
-			});
+			this.absoluteManager?.requestFrame();
 		}
 	}
 
@@ -449,13 +456,9 @@ export class TocController {
 
 		const headingEls = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
 
-		// Churn re-mounts of the same file re-render an identical layout, so the
-		// measured within-section offsets stay valid across renders. Only measure
-		// headings without a cached offset: getBoundingClientRect is a forced-
-		// layout read, and re-reading every heading on every re-mount dominates
-		// the per-frame cost while the book scrolls. Content edits invalidate the
-		// cache via invalidatePath, so stale offsets are re-measured there.
-		let sectionRect: DOMRect | null = null;
+		// Cheap part, kept synchronous: tag each heading with its ToC entry so
+		// context menus can map a heading back to an entry. No layout reads.
+		const toMeasure: { el: HTMLElement; tocIndex: number }[] = [];
 		for (let i = 0; i < cache.headings.length; i++) {
 			const heading = cache.headings[i];
 			if (!heading) continue;
@@ -467,19 +470,58 @@ export class TocController {
 
 			el.setAttribute('data-entry-index', String(tocIndex));
 
+			// Churn re-mounts of the same file re-render an identical layout, so
+			// the measured within-section offsets stay valid across renders. Only
+			// measure headings without a cached offset. Content edits invalidate
+			// the cache via invalidatePath, so stale offsets are re-measured
+			// there.
 			if (this.headingOffsets.has(tocIndex)) continue;
+			toMeasure.push({ el, tocIndex });
+		}
+		if (toMeasure.length === 0) return;
 
-			// Headings hidden by fold-mode collapse have display:none — their
-			// rect is zeroed, so skip them and keep the line-based fallback.
-			if (el.offsetParent === null) continue;
-
-			if (!sectionRect) sectionRect = sectionEl.getBoundingClientRect();
-			const headingRect = el.getBoundingClientRect();
-			this.headingOffsets.set(tocIndex, headingRect.top - sectionRect.top);
-			this.positionsDirty = true;
-			AbsoluteSectionManager.dbgTagRects++;
+		// Defer the rect reads to the next frame: tagHeadings runs inside the
+		// IO macrotask right after the section's DOM mounted, and reading
+		// getBoundingClientRect there forces a fresh layout flush of that
+		// subtree on every section load. Batching all pending measurements into
+		// one frame pass shares a single layout flush (with the spy's scrollTop
+		// read) instead of one flush per section.
+		this.pendingTagHeadings.push({ sectionEl, toMeasure });
+		if (!this.tagFrameRequested) {
+			this.tagFrameRequested = true;
+			this.absoluteManager?.requestFrame();
 		}
 	}
+
+	/** Frame callback (registered in setupScrollSpy, runs after processUpdates):
+	 *  drains the deferred heading measurements in one coalesced pass. */
+	private onTagFrame = (): void => {
+		this.tagFrameRequested = false;
+		if (this.pendingTagHeadings.length === 0) return;
+		const pending = this.pendingTagHeadings;
+		this.pendingTagHeadings = [];
+		const t0 = performance.now();
+		for (const p of pending) {
+			const { sectionEl, toMeasure } = p;
+			// Section unloaded before the frame arrived — skip; the line-based
+			// fallback covers it until a future render re-queues the measure.
+			if (!sectionEl.isConnected) continue;
+			let sectionRect: DOMRect | null = null;
+			for (const item of toMeasure) {
+				if (!item.el.isConnected) continue;
+				// Headings hidden by fold-mode collapse have display:none —
+				// their rect is zeroed, so skip them and keep the line-based
+				// fallback.
+				if (item.el.offsetParent === null) continue;
+				if (!sectionRect) sectionRect = sectionEl.getBoundingClientRect();
+				const headingRect = item.el.getBoundingClientRect();
+				this.headingOffsets.set(item.tocIndex, headingRect.top - sectionRect.top);
+				this.positionsDirty = true;
+				AbsoluteSectionManager.dbgTagRects++;
+			}
+		}
+		AbsoluteSectionManager.dbgTagMs += performance.now() - t0;
+	};
 
 	// --- Scroll spy ---
 
@@ -497,6 +539,7 @@ export class TocController {
 			this.absoluteManager?.requestFrame();
 		};
 
+		this.absoluteManager?.addFrameCallback(this.onTagFrame);
 		this.absoluteManager?.addFrameCallback(this.onFrameTick);
 		this.scrollContainer.addEventListener('scroll', this.scrollHandler, { passive: true });
 	}
@@ -513,7 +556,12 @@ export class TocController {
 
 		this.updatePositionsIfDirty();
 
-		const scrollTop = this.scrollContainer.scrollTop;
+		// Use the manager's per-frame viewport snapshot instead of reading
+		// scrollTop here: the manager already read it in runFrame (next to its
+		// own writes), and a second read in the same frame forces a second
+		// layout flush — including on frames where processUpdates just dirtied
+		// the layout. The snapshot is from this same frame, so it is exact.
+		const scrollTop = this.absoluteManager?.getScrollTop() ?? this.scrollContainer.scrollTop;
 
 		// find active heading by position
 		const viewportHeight = this.viewportHeight;
@@ -724,7 +772,10 @@ export class TocController {
 
 	destroy(): void {
 		this.absoluteManager?.removeFrameCallback(this.onFrameTick);
+		this.absoluteManager?.removeFrameCallback(this.onTagFrame);
 		this.tickScheduled = false;
+		this.pendingTagHeadings = [];
+		this.tagFrameRequested = false;
 		if (this.scrollHandler) {
 			this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;

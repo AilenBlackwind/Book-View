@@ -50,6 +50,7 @@ export class WheelAccelerator {
 	private lastNotchAt = 0;
 	private rafId = 0;
 	private destroyed = false;
+	private cachedMaxScroll = 0;
 
 	constructor(
 		private readonly container: HTMLElement,
@@ -89,6 +90,7 @@ export class WheelAccelerator {
 		// Edge chaining: at the boundary in the flick direction, let the event
 		// propagate natively so parent scrollers can take over.
 		const maxScroll = this.container.scrollHeight - this.container.clientHeight;
+		this.cachedMaxScroll = maxScroll;
 		const atTop = this.container.scrollTop <= 0;
 		const atBottom = this.container.scrollTop >= maxScroll - 1;
 		if ((dy < 0 && atTop && this.velocity <= 0) || (dy > 0 && atBottom && this.velocity >= 0)) return;
@@ -137,7 +139,15 @@ export class WheelAccelerator {
 		this.rafId = 0;
 		if (this.destroyed) return;
 		const c = this.container;
-		const maxScroll = Math.max(0, c.scrollHeight - c.clientHeight);
+		// Cache maxScroll across frames: reading scrollHeight flushes a dirty
+		// layout, and a long flick would otherwise pay that forced recalc on
+		// every frame. Refresh only when approaching the cached bottom bound or
+		// when the cache is empty (content heights can change mid-glide).
+		let maxScroll = this.cachedMaxScroll;
+		if (maxScroll <= 0 || c.scrollTop >= maxScroll - LINE_HEIGHT_PX) {
+			maxScroll = Math.max(0, c.scrollHeight - c.clientHeight);
+			this.cachedMaxScroll = maxScroll;
+		}
 		const next = Math.min(Math.max(c.scrollTop + this.velocity, 0), maxScroll);
 		c.scrollTop = next;
 		this.velocity *= this.getConfig().friction;

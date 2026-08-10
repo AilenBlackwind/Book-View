@@ -13,6 +13,10 @@ const PRERENDER_PARK_DELAY = 80;
 const COLD_START_DELAY = 200;
 const IDLE_UNLOAD_DELAY = 500;
 const FAR_UNLOAD_MARGIN = 2000;
+// How far past the load window pre-render may measure heights. Sections beyond
+// it get parked/unloaded immediately (parkIfOutOfZone), so measuring them early
+// just churns the renderer: mount + measure + full recalc + unload for nothing.
+const PRERENDER_WINDOW = 3000;
 
 export interface SectionData {
 	el: HTMLElement;
@@ -53,6 +57,10 @@ export interface SectionPoolHost {
 	foldTagSection(path: string, el: HTMLElement): void;
 	findAnchorAt(scrollTop: number): { idx: number; anchorOffset: number } | null;
 	getOnSectionRendered(): ((path: string, container: HTMLElement) => void) | null;
+	/** Viewport snapshot from the last frame (avoid re-reading geometry in the
+	 *  IO macrotask, where the freshly mounted DOM would force a reflow). */
+	getScrollTop(): number;
+	getClientHeight(): number;
 	reportSectionHeight(path: string, newHeight: number): void;
 	scheduleUpdate(): void;
 	scheduleFrame(): void;
@@ -176,10 +184,6 @@ export class SectionPool {
 
 	get lastUserScrollAt(): number {
 		return this.lastUserScrollTimestamp;
-	}
-
-	hasPendingIo(): boolean {
-		return this.ioPending.length > 0;
 	}
 
 	render(links: ManifestLink[]): Promise<void>[] {
@@ -395,8 +399,11 @@ export class SectionPool {
 		data.el.empty();
 		data.el.appendChild(renderContainer);
 		this.host.foldTagSection(path, data.el);
-		data.firstType = this.getFirstType(data.el);
-		data.lastType = this.getLastType(data.el);
+		const firstType = this.getFirstType(data.el);
+		const lastType = this.getLastType(data.el);
+		const typeChanged = firstType !== data.firstType || lastType !== data.lastType;
+		data.firstType = firstType;
+		data.lastType = lastType;
 		// Fresh render may have changed the heading; invalidate. Re-measure at
 		// idle time only when a folded stub actually needs the height.
 		data.foldHeadingHeight = 0;
@@ -405,7 +412,18 @@ export class SectionPool {
 		}
 		this.sectionResizeObserver.observe(data.el);
 		this.host.getOnSectionRendered()?.(path, renderContainer);
-		this.host.scheduleUpdate();
+		// Recalculate only when something that affects the layout actually
+		// changed: the heading flags (which drive the gaps), or a fold mode
+		// ('full' sections must be unmounted, 'heading' stubs measured). A
+		// render that matches the estimate, or a re-render of identical
+		// content, needs no recalc — offsets stay correct and the height
+		// correction arrives separately through reportSectionHeight. Without
+		// this gate every section load forced a full recalcOffsets over the
+		// whole book (~25ms on 2000 notes, visible as the pendingHeights=0
+		// 'update' lines in the debug log).
+		if (typeChanged || this.host.getFoldMode(path) !== 'none') {
+			this.host.scheduleUpdate();
+		}
 	}
 
 	private drainQueue(): void {
@@ -415,9 +433,14 @@ export class SectionPool {
 		// fast gesture fills it. By drain time most entries are already far past
 		// the viewport; rendering them is wasted main-thread work that keeps the
 		// app janky for seconds after the scroll settles. Read the window once
-		// and drop entries that drifted outside it.
-		const scrollTop = this.host.scrollContainer.scrollTop;
-		const viewportBottom = scrollTop + this.host.scrollContainer.clientHeight;
+		// and drop entries that drifted outside it. Uses the manager's last-frame
+		// viewport snapshot instead of reading scrollTop/clientHeight here:
+		// sections loaded earlier in this IO batch just mounted their DOM, and a
+		// geometry read right after would force a full reflow (recalculate style
+		// + layout) for every queued batch. The snapshot is at most one frame
+		// stale, well inside the overscan margin (OVERSCAN_TOP + loadMargin).
+		const scrollTop = this.host.getScrollTop();
+		const viewportBottom = scrollTop + this.host.getClientHeight();
 		const margin = OVERSCAN_TOP + this.host.loadMargin;
 		while (this.activeRenderCount < this.maxConcurrent && this.renderQueue.length > 0) {
 			const path = this.renderQueue.shift()!;
@@ -529,6 +552,10 @@ export class SectionPool {
 	private nextPreRenderPaths(count: number): string[] {
 		const anchor = this.host.findAnchorAt(this.host.scrollContainer.scrollTop);
 		const center = anchor?.idx ?? 0;
+		const scrollTop = this.host.scrollContainer.scrollTop;
+		const viewport = this.host.scrollContainer.clientHeight;
+		const windowTop = scrollTop - OVERSCAN_TOP - this.host.loadMargin;
+		const windowBottom = scrollTop + viewport + this.host.loadMargin + PRERENDER_WINDOW;
 		const result: string[] = [];
 		for (let step = 0; step < this.host.fileOrder.length && result.length < count; step++) {
 			const candidates = [center - step, center + step];
@@ -541,6 +568,15 @@ export class SectionPool {
 				if (!data || data.component) continue;
 				if (data.heightTrusted) continue;
 				if (this.host.renderedDomCache.has(path)) continue;
+				// Pre-render only inside a window around the viewport. When the
+				// near field is fully trusted+mounted the walk used to skip
+				// ~thousands of entries and land on the first unmeasured note
+				// (e.g. Note_1055 while the viewport sat at Note_0003); that
+				// batch was then thrown away by parkIfOutOfZone after a full
+				// mount + measure + recalc, and the recalc spiked every batch
+				// straight into the user's scroll frames.
+				const end = data.offset + data.height;
+				if (end < windowTop || data.offset > windowBottom) continue;
 				result.push(path);
 			}
 		}

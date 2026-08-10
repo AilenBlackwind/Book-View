@@ -32,14 +32,12 @@ export interface SectionLayoutHost {
  * Owns the geometry of the book: the absolute offset cascade (recalcOffsets),
  * the fold-aware anchor lookup, and scroll restoration after the layout
  * shifts. It is purely reactive — it never schedules frames, reads or writes
- * scrollTop (except the deferred compensation write it owns) or mutates the
- * section lifecycle; the manager drives it from the update loop.
+ *  scrollTop (except the compensation write it owns) or mutates the
+ *  section lifecycle; the manager drives it from the update loop.
  */
 export class SectionLayout {
 	private spacings: ThemeSpacings = { ...DEFAULT_THEME_SPACINGS };
 	private pendingAnchor: Anchor | null = null;
-	private pendingScrollTop: number | null = null;
-	private scrollCompensationTimer = 0;
 	private isAdjustingScroll = false;
 
 	constructor(private host: SectionLayoutHost) {}
@@ -86,8 +84,7 @@ export class SectionLayout {
 	}
 
 	destroy(): void {
-		window.clearTimeout(this.scrollCompensationTimer);
-		this.pendingScrollTop = null;
+		this.pendingAnchor = null;
 	}
 
 	recalcOffsets(): void {
@@ -253,22 +250,16 @@ export class SectionLayout {
 		if (delta > SCROLL_THRESHOLD) {
 			this.isAdjustingScroll = true;
 			this.host.dbg('compensate', '', Math.round(currentScrollTop), '->', Math.round(target));
-			this.scheduleScrollCompensation(target);
+			// Write scrollTop synchronously, in the same task that just rewrote
+			// the section transforms: the browser batches the dirty styles and
+			// the scroll write into ONE layout pass and ONE paint, so the view
+			// settles directly at the corrected position. Deferring the write to
+			// a macrotask painted the intermediate pre-compensation position
+			// first, which flickered the whole viewport up/down for a frame
+			// right after the scroll stopped. The synchronous reflow is paid
+			// once per settle update — acceptable now that updates are deferred
+			// while the user is actively scrolling.
+			this.host.scrollContainer.scrollTop = target;
 		}
-	}
-
-	private scheduleScrollCompensation(target: number): void {
-		this.pendingScrollTop = target;
-		if (this.scrollCompensationTimer) return;
-		// recalcOffsets dirtied the layout in this frame; writing scrollTop
-		// right after that forces a full reflow. A macrotask fires after the
-		// frame's render, when the layout is clean, so the scroll write is cheap.
-		this.scrollCompensationTimer = window.setTimeout(() => {
-			this.scrollCompensationTimer = 0;
-			const t = this.pendingScrollTop;
-			this.pendingScrollTop = null;
-			if (t === null || this.host.isDestroyed()) return;
-			this.host.scrollContainer.scrollTop = t;
-		}, 0);
 	}
 }

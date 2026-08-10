@@ -11,6 +11,11 @@ import { DebugLog } from '../utils/debug';
 
 export const HEIGHT_PER_LINE = 25;
 
+// How long after the last user scroll a deferred geometry recalc may run.
+// Height corrections during a fast scroll are batched up and applied in one
+// recalc once the scroll settles (see runFrame / scheduleDeferredUpdate).
+const UPDATE_SCROLL_SETTLE_MS = 200;
+
 // Debug: global main-thread frame counter, independent of the book manager.
 // It shows whether the note tab actually keeps rendering at ~60fps while the
 // user reads a note with the ToC panel open — if a background loop (book
@@ -89,10 +94,16 @@ export class AbsoluteSectionManager {
 	private firstHeadingByPath: Map<string, HeadingNode> = new Map();
 	private headingsByPath: Map<string, HeadingNode[]> = new Map();
 	private updateRequested = false;
+	private deferredUpdateTimer = 0;
 	private heightCache: Map<string, number> = new Map();
 	private renderedDomCache: Map<string, HTMLElement> = new Map();
 	private containerWidthObserver: ResizeObserver;
+	// Viewport snapshot from the last frame. Read once per frame in runFrame
+	// (next to the scrollTop read, so it shares the same layout flush) and
+	// handed to the pool: reading scrollTop/clientHeight inside the IO
+	// macrotask would force a reflow of the DOM the section loads just mounted.
 	private lastScrollTop = 0;
+	private lastClientHeight = 0;
 	private boundScrollHandler: ((evt: Event) => void) | null = null;
 	private boundClickHandler: ((evt: MouseEvent) => void) | null = null;
 	private lastContainerWidth = 0;
@@ -264,6 +275,8 @@ export class AbsoluteSectionManager {
 			foldTagSection: (path, el) => this.fold.tagFoldIds(path, el),
 			findAnchorAt: (scrollTop) => this.layout.findAnchorAt(scrollTop),
 			getOnSectionRendered: () => this.onSectionRendered,
+			getScrollTop: () => this.getScrollTop(),
+			getClientHeight: () => this.getClientHeight(),
 			reportSectionHeight: (path, newHeight) => this.reportSectionHeight(path, newHeight),
 			scheduleUpdate: () => this.scheduleUpdate(),
 			scheduleFrame: () => this.scheduleFrame(),
@@ -455,6 +468,29 @@ export class AbsoluteSectionManager {
 		this.scheduleFrame();
 	}
 
+	/** True while the user is actively scrolling (scroll events keep arriving).
+	 *  Geometry recalc is deferred during this window so height corrections do
+	 *  not turn every scroll frame into a full-book recalc + style recalc. */
+	private isUserScrolling(): boolean {
+		return Date.now() - this.pool.lastUserScrollAt < UPDATE_SCROLL_SETTLE_MS;
+	}
+
+	/** One-shot settle timer: runs the pending update (via a frame) once the
+	 *  scroll has been still for UPDATE_SCROLL_SETTLE_MS, rescheduling while
+	 *  the user keeps scrolling so corrections never pile up unboundedly. */
+	private scheduleDeferredUpdate(): void {
+		if (this.deferredUpdateTimer) return;
+		this.deferredUpdateTimer = window.setTimeout(() => {
+			this.deferredUpdateTimer = 0;
+			if (this.destroyed) return;
+			if (this.isUserScrolling()) {
+				this.scheduleDeferredUpdate();
+			} else {
+				this.scheduleFrame();
+			}
+		}, UPDATE_SCROLL_SETTLE_MS);
+	}
+
 	private scheduleFrame(): void {
 		if (this.rafId) return;
 		this.rafId = window.requestAnimationFrame(() => {
@@ -466,15 +502,48 @@ export class AbsoluteSectionManager {
 	private runFrame(): void {
 		this.dbgFs++;
 		const t0 = performance.now();
-		if (this.pool.hasPendingIo()) {
-			this.updateRequested = true;
+		// Jump detection runs on every frame, not only update frames: a large
+		// scroll delta must prune stale render-queue entries even when the
+		// frame's only job is the scroll spy. One scrollTop read plus a compare
+		// is cheap; the expensive prune only runs on >2000px jumps.
+		const scrollTop = this.scrollContainer.scrollTop;
+		const delta = Math.abs(scrollTop - this.lastScrollTop);
+		this.lastScrollTop = scrollTop;
+		this.lastClientHeight = this.scrollContainer.clientHeight;
+		if (delta > 2000) {
+			this.pool.pruneRenderQueue((p) => {
+				const d = this.sections.get(p);
+				if (!d || d.component) return false;
+				const rect = d.el.getBoundingClientRect();
+				return Math.abs(rect.top) < 4000;
+			});
 		}
+		// IO (section load/unload) never changes offsets, so it no longer forces
+		// an update: recalcOffsets runs only when geometry actually changed
+		// (height measurements, width resets, fold toggles, theme spacings, or
+		// firstType/lastType changes after a re-render). Every scheduleUpdate
+		// caller signals one of those; pure-IO frames now skip the offset
+		// cascade, the layoutVersion bump, and the anchor lookup entirely.
 		if (this.updateRequested) {
-			this.updateRequested = false;
-			const t1 = performance.now();
-			this.processUpdates();
-			this.dbgUpdMs += performance.now() - t1;
-			this.dbgUs++;
+			// While the user is actively scrolling, defer the recalc: each
+			// height correction recomputes offsets over all 2000 sections and
+			// rewrites ~2000 transforms, and the IntersectionObserver's next
+			// layout pass then pays a 100-200ms synchronous style recalc. Run
+			// per frame during a fast gesture that turns every frame into a
+			// multi-hundred-ms long task. Accumulate the pending corrections
+			// instead and apply them in one combined recalc once the scroll
+			// settles; the scroll-spy keeps working off the stale (but
+			// consistent) offsets in the meantime, so nothing visually jumps
+			// mid-scroll.
+			if (this.isUserScrolling()) {
+				this.scheduleDeferredUpdate();
+			} else {
+				this.updateRequested = false;
+				const t1 = performance.now();
+				this.processUpdates();
+				this.dbgUpdMs += performance.now() - t1;
+				this.dbgUs++;
+			}
 		}
 		// Frame callbacks (the scroll spy) run AFTER processUpdates, not
 		// before: they read data.offset values and scrollTop, which are only
@@ -538,18 +607,9 @@ export class AbsoluteSectionManager {
 
 	private processUpdates(): void {
 		const freshScrollTop = this.scrollContainer.scrollTop;
-		// Jump detection moved out of the scroll handler: it now runs once per
-		// frame right before the offset writes, where the read is cheap.
-		const delta = Math.abs(freshScrollTop - this.lastScrollTop);
-		this.lastScrollTop = freshScrollTop;
-		if (delta > 2000) {
-			this.pool.pruneRenderQueue((p) => {
-				const d = this.sections.get(p);
-				if (!d || d.component) return false;
-				const rect = d.el.getBoundingClientRect();
-				return Math.abs(rect.top) < 4000;
-			});
-		}
+		// Anchor snapshot for the scroll compensation after the layout shifts.
+		// Jump detection (lastScrollTop / pruneRenderQueue) now lives in
+		// runFrame so it runs even on pure-spy frames.
 		const anchor = this.layout.takeAnchor(freshScrollTop);
 		this.dbg('update', '', this.pendingHeights.size, anchor ? anchor.idx : -1, anchor ? Math.round(anchor.anchorOffset) : -1);
 
@@ -592,6 +652,14 @@ export class AbsoluteSectionManager {
 		return this.layout.getOffset(path);
 	}
 
+	getScrollTop(): number {
+		return this.lastScrollTop;
+	}
+
+	getClientHeight(): number {
+		return this.lastClientHeight;
+	}
+
 	getAllOffsets(): Map<string, number> {
 		return this.layout.getAllOffsets();
 	}
@@ -608,6 +676,8 @@ export class AbsoluteSectionManager {
 	destroy(): void {
 		this.destroyed = true;
 		this.frameCallbacks.length = 0;
+		window.clearTimeout(this.deferredUpdateTimer);
+		this.deferredUpdateTimer = 0;
 		if (this.rafId) {
 			cancelAnimationFrame(this.rafId);
 			this.rafId = 0;
