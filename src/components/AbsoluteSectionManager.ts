@@ -513,6 +513,14 @@ export class AbsoluteSectionManager {
 			this.dbgUpdMs += performance.now() - t1;
 			this.dbgUs++;
 		}
+		// IO is the fast-path enqueue signal but can go stale: a section whose
+		// offset moved (neighbor height correction, width reset) or whose render
+		// was aborted mid-flight by a fast scroll is visible yet never
+		// re-enqueued (no crossing left to fire the observer). Reconcile the
+		// load window against fresh offsets every frame so any visible-but-
+		// unmounted section always has a render queued. scrollTop here is the
+		// frame's own read, so this costs no extra layout flush.
+		this.pool.reconcileVisibleSections(scrollTop, this.lastClientHeight);
 		// Placeholder transforms in the viewport window can go stale when a
 		// section's offset changed while it sat far below — and plain scrolling
 		// alone never triggers a recalc, so a stale placeholder stays where the

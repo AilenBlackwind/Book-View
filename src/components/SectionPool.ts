@@ -18,6 +18,85 @@ const FAR_UNLOAD_MARGIN = 2000;
 // just churns the renderer: mount + measure + full recalc + unload for nothing.
 export const PRERENDER_WINDOW = 3000;
 
+// How long a live scrollTop read stays valid across drainQueue calls. The read
+// only runs when a queued section is out of band under the IO-dispatch
+// position; refreshing it on every such batch during a fast scroll would force
+// a layout flush (freshly mounted DOM) on the main thread mid-gesture. A short
+// TTL keeps the at-rest correction (the case that matters for correctness)
+// exact while bounding the flush rate during churn.
+const LIVE_READ_TTL = 100;
+
+/**
+ * Decides whether a queued section is so far from the viewport that rendering
+ * it now would be wasted churn. Section at [offset, offset+height) must fall
+ * within [scrollTop - margin, viewportBottom + margin] to be worth mounting;
+ * margin = OVERSCAN_TOP + loadMargin keeps the drop window wider than the IO
+ * window so entries that legitimately crossed into the overscan survive.
+ *
+ * scrollTop must be the CURRENT scroll position: judged against a stale (deep)
+ * snapshot, a section that just entered the top overscan during a fast scroll
+ * up looks far away, gets dropped here, and — being already intersecting — the
+ * IO never re-enqueues it, leaving a blank gap until the user scrolls again.
+ */
+export function isStaleRender(
+	offset: number,
+	height: number,
+	scrollTop: number,
+	viewportBottom: number,
+	margin: number,
+): boolean {
+	const end = offset + height;
+	return end < scrollTop - margin || offset > viewportBottom + margin;
+}
+
+/**
+ * Two-position stale check: a queued section is dropped only when it is out
+ * of band under BOTH the primary (IO-dispatch) scroll position AND a current
+ * live read. The primary alone misjudges a fast scroll-up: it is a single
+ * value overwritten by every IO dispatch, so by the time the queue drains it
+ * can be far past a section that entered the window mid-gesture and that the
+ * user now rests on. Already intersecting, the IO never re-enqueues that
+ * section, so dropping on the primary alone leaves a blank section (worst for
+ * a very tall one, which blanks a huge region). The live read grounds the
+ * decision in where the user actually is; sections genuinely far in both are
+ * still dropped, so the down-scroll churn guard holds.
+ */
+export function isStaleForDrain(
+	offset: number,
+	height: number,
+	primaryScrollTop: number,
+	primaryViewportBottom: number,
+	liveScrollTop: number,
+	liveViewportBottom: number,
+	margin: number,
+): boolean {
+	return isStaleRender(offset, height, primaryScrollTop, primaryViewportBottom, margin)
+		&& isStaleRender(offset, height, liveScrollTop, liveViewportBottom, margin);
+}
+
+/**
+ * True when a section's rendered extent [offset, offset+height) overlaps the
+ * IO load window [scrollTop - overscanTop, scrollTop + clientHeight +
+ * loadMargin]. The IntersectionObserver watches the zero-height placeholder,
+ * so it only ever sees the section's top point: a section whose top has left
+ * the window while its content is still in view (a tall note) or whose offset
+ * moved under a stale IO state never re-enqueues through the observer — only
+ * this extent check keeps it loaded. The drain's two-position stale check
+ * still drops anything this over-enqueues, so judging against the estimate
+ * height of unloaded sections is safe.
+ */
+export function isSectionInWindow(
+	offset: number,
+	height: number,
+	scrollTop: number,
+	clientHeight: number,
+	overscanTop: number,
+	loadMargin: number,
+): boolean {
+	return offset + height >= scrollTop - overscanTop
+		&& offset <= scrollTop + clientHeight + loadMargin;
+}
+
 export interface SectionData {
 	el: HTMLElement;
 	component: Component | null;
@@ -79,6 +158,15 @@ export class SectionPool {
 	private ioPending: { path: string; intersecting: boolean }[] = [];
 	private idleUnloadTimer = 0;
 	private ioWorkTimer = 0;
+	/** Scroll position captured at the last IntersectionObserver dispatch.
+	 *  Fresher than the manager's rAF snapshot (getScrollTop), which lags IO
+	 *  delivery by up to a frame — on a heavy book, by more, because the IO
+	 *  fires in its own task while the rAF callback is starved behind layout.
+	 *  drainQueue uses this as the primary drop-window position; a live read
+	 *  (readLiveScrollTop) corrects it when it drifted past the current spot. */
+	private ioScrollTop: number | null = null;
+	private liveScrollTop: number | null = null;
+	private liveScrollAt = 0;
 	private observer: IntersectionObserver;
 	private sectionResizeObserver: ResizeObserver;
 	private renderQueue: string[] = [];
@@ -110,6 +198,14 @@ export class SectionPool {
 				// boundary and let the next frame do the DOM work batched with
 				// the scroll-spy read. Loads/unloads here ran markdown renders
 				// and attach/detach churn synchronously inside the IO event.
+				// Capture the dispatch-time scroll position too. The browser has
+				// just computed the intersections, so its layout is clean and
+				// this read costs no reflow — unlike reading it later in
+				// drainQueue, after the mounts this batch may trigger. The frame
+				// snapshot (host.getScrollTop) can be stale when the main thread
+				// is busy, and judging the drop window against it drops sections
+				// entering the top overscan on a fast scroll-up.
+				this.ioScrollTop = this.host.scrollContainer.scrollTop;
 				for (const entry of entries) {
 					const el = entry.target as HTMLElement;
 					const path = el.dataset.path;
@@ -321,9 +417,66 @@ export class SectionPool {
 		this.ioWorkTimer = window.setTimeout(() => {
 			this.ioWorkTimer = 0;
 			if (this.host.isDestroyed()) return;
+			const hadPending = this.ioPending.length > 0;
 			this.processIoPending();
+			if (hadPending) {
+				// processIoPending may have unloaded a section mid-render (a
+				// fast scroll firing IO false while its markdown render is in
+				// flight) or acted on a stale IO state. One more frame
+				// reconciles the load window against fresh offsets/scrollTop
+				// so a section the user now stands on is re-enqueued instead
+				// of staying blank. No-op when a frame is already scheduled.
+				this.host.scheduleFrame();
+			}
 			this.drainQueue();
 		}, 0);
+	}
+
+	/**
+	 * Reconciliation pass: enqueue every unloaded section whose extent
+	 * overlaps the load window, regardless of what the IntersectionObserver
+	 * last reported. The IO is the fast-path enqueue signal, but it can
+	 * disagree with the actual geometry: a section whose offset moved (neighbor
+	 * height correction, width reset, fold transition) or whose render was
+	 * aborted mid-flight by a fast scroll ends up visible-but-unmounted with
+	 * no crossing left to fire the IO again — a permanent blank until the user
+	 * scrolls. Offsets are the authority, so this walk (binary search to the
+	 * window, scan forward) closes those gaps every frame and after each IO
+	 * batch. The drain's stale check filters whatever this over-enqueues, so
+	 * it never renders far-down churn.
+	 */
+	reconcileVisibleSections(scrollTop: number, clientHeight: number): void {
+		if (this.host.isDestroyed()) return;
+		const order = this.host.fileOrder;
+		if (order.length === 0) return;
+		const winTop = scrollTop - OVERSCAN_TOP;
+		const winBottom = scrollTop + clientHeight + this.host.loadMargin;
+		// Offsets are non-decreasing, so binary search the first section that
+		// can touch the window, then scan forward until past its bottom edge.
+		let lo = 0;
+		let hi = order.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			const data = this.host.sections.get(order[mid] ?? '');
+			const off = data ? data.offset : Number.MAX_SAFE_INTEGER;
+			if (off < winTop) lo = mid + 1;
+			else hi = mid;
+		}
+		for (let i = Math.max(0, lo - 1); i < order.length; i++) {
+			const path = order[i] ?? '';
+			const data = this.host.sections.get(path);
+			if (!data) break;
+			if (data.offset > winBottom) break;
+			if (!isSectionInWindow(data.offset, data.height, scrollTop, clientHeight, OVERSCAN_TOP, this.host.loadMargin)) continue;
+			// Mirror the IO callback: hidden-by-fold sections are never
+			// rendered or unrendered; heading stubs (book-section-heading-folded)
+			// are not hidden and still need their stub mounted.
+			if (data.component) continue;
+			if (data.el.classList.contains('book-section-folded')) continue;
+			if (this.renderQueue.includes(path)) continue;
+			this.host.dbg('reconcile', path);
+			this.enqueueRender(path);
+		}
 	}
 
 	scheduleIdleUnload(): void {
@@ -442,6 +595,18 @@ export class SectionPool {
 		}
 	}
 
+	/** Current scroll position, read live at most once per LIVE_READ_TTL.
+	 *  The IO-dispatch position (ioScrollTop) can drift past a section that
+	 *  entered the window mid-gesture; this read grounds the drop decision in
+	 *  where the user actually is. Called only for out-of-band candidates. */
+	private readLiveScrollTop(): number {
+		if (this.liveScrollTop === null || Date.now() - this.liveScrollAt > LIVE_READ_TTL) {
+			this.liveScrollTop = this.host.scrollContainer.scrollTop;
+			this.liveScrollAt = Date.now();
+		}
+		return this.liveScrollTop;
+	}
+
 	private drainQueue(): void {
 		if (this.host.isDestroyed()) return;
 		// Fast scroll enqueues every section that crossed the overscan window,
@@ -449,23 +614,33 @@ export class SectionPool {
 		// fast gesture fills it. By drain time most entries are already far past
 		// the viewport; rendering them is wasted main-thread work that keeps the
 		// app janky for seconds after the scroll settles. Read the window once
-		// and drop entries that drifted outside it. Uses the manager's last-frame
-		// viewport snapshot instead of reading scrollTop/clientHeight here:
-		// sections loaded earlier in this IO batch just mounted their DOM, and a
-		// geometry read right after would force a full reflow (recalculate style
-		// + layout) for every queued batch. The snapshot is at most one frame
-		// stale, well inside the overscan margin (OVERSCAN_TOP + loadMargin).
-		const scrollTop = this.host.getScrollTop();
-		const viewportBottom = scrollTop + this.host.getClientHeight();
+		// and drop entries that drifted outside it.
+		//
+		// The primary position is the one captured at the IO dispatch, not the
+		// manager's frame snapshot: the snapshot lags IO delivery (the IO fires
+		// in its own task while the rAF callback can be starved). But a single
+		// dispatch position can itself drift far past a section that entered
+		// the window mid-gesture and that the user now rests on — dropping it
+		// there would blank a section the IO never re-enqueues (already
+		// intersecting). So a drop is only final after a live read agrees the
+		// section is far from where the user actually is. The live read is
+		// TTL-cached: the common settled case (sections in window, no drops)
+		// never pays it, and during churn it runs at most once per window.
+		const primary = this.ioScrollTop ?? this.host.getScrollTop();
+		const clientHeight = this.host.getClientHeight();
 		const margin = OVERSCAN_TOP + this.host.loadMargin;
+		const primaryBottom = primary + clientHeight;
 		while (this.activeRenderCount < this.maxConcurrent && this.renderQueue.length > 0) {
 			const path = this.renderQueue.shift()!;
 			const data = this.host.sections.get(path);
 			if (!data || data.component) continue;
-			const end = data.offset + data.height;
-			if (end < scrollTop - margin || data.offset > viewportBottom + margin) {
-				this.host.dbg('drop-stale-render', path);
-				continue;
+			if (isStaleRender(data.offset, data.height, primary, primaryBottom, margin)) {
+				// Only an out-of-band candidate pays for the live read.
+				const live = this.readLiveScrollTop();
+				if (isStaleForDrain(data.offset, data.height, primary, primaryBottom, live, live + clientHeight, margin)) {
+					this.host.dbg('drop-stale-render', path);
+					continue;
+				}
 			}
 			this.activeRenderCount++;
 			void this.loadSection(path).finally(() => {
