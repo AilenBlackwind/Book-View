@@ -15,6 +15,7 @@ export default defineConfig(
 		'package-lock.json',
 		'tsconfig.json',
 		'copy-to-main.cjs',
+		'vitest.config.ts',
 	]),
 	{
 		languageOptions: {

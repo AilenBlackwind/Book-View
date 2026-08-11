@@ -255,33 +255,60 @@ export class SectionLayout {
 	}
 
 	findAnchorAt(scrollTop: number): Anchor | null {
-		let lastIdx = -1;
-		for (let i = 0; i < this.host.fileOrder.length; i++) {
-			const path = this.host.fileOrder[i] ?? '';
-			const data = this.host.sections.get(path);
-			if (!data) continue;
-			const foldMode = this.host.getFoldMode(path);
-			// Fully hidden sections occupy no space, but heading stubs do:
-			// they keep the folded heading on screen and must stay anchorable,
-			// otherwise folding/unfolding a heading whose section is below it
-			// anchors to the next visible section and the view flies away.
-			if (foldMode === 'full') continue;
-			lastIdx = i;
-			const h = foldMode === 'heading'
-				? (data.foldHeadingHeight > 0 ? data.foldHeadingHeight : FALLBACK_FOLD_HEADING_HEIGHT)
-				: data.height;
-			if (data.offset + h > scrollTop) {
+		const order = this.host.fileOrder;
+		const N = order.length;
+		if (N === 0) return null;
+
+		// Offsets accumulate non-negative heights and gaps, so a section's
+		// visible end (offset + rendered height) is monotonically non-decreasing
+		// along fileOrder — a 'full' section contributes zero height, making its
+		// end equal to the next section's start. Binary search the first section
+		// whose end crosses scrollTop instead of scanning all N per lookup
+		// (findAnchorAt runs on every scroll frame).
+		let lo = 0;
+		let hi = N;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (this.anchorEnd(mid) > scrollTop) hi = mid;
+			else lo = mid + 1;
+		}
+
+		// Every section at or after lo has an end above scrollTop, so the anchor
+		// is the first non-hidden section from lo onward. Fully hidden sections
+		// occupy no space, but heading stubs do: they keep the folded heading on
+		// screen and must stay anchorable, otherwise folding/unfolding a heading
+		// whose section is below it anchors to the next visible section and the
+		// view flies away.
+		for (let i = lo; i < N; i++) {
+			const data = this.host.sections.get(order[i] ?? '');
+			if (data && this.host.getFoldMode(order[i] ?? '') !== 'full') {
 				return { idx: i, anchorOffset: scrollTop - data.offset };
 			}
 		}
-		if (lastIdx >= 0) {
-			const path = this.host.fileOrder[lastIdx] ?? '';
-			const data = this.host.sections.get(path);
-			if (data) {
-				return { idx: lastIdx, anchorOffset: scrollTop - data.offset };
+
+		// Nothing crossed scrollTop (scrolled past the end of the book): anchor
+		// to the last visible section, matching the linear scan's fallback.
+		for (let i = N - 1; i >= 0; i--) {
+			const data = this.host.sections.get(order[i] ?? '');
+			if (data && this.host.getFoldMode(order[i] ?? '') !== 'full') {
+				return { idx: i, anchorOffset: scrollTop - data.offset };
 			}
 		}
+
 		return null;
+	}
+
+	/** Visible end (offset + rendered height) of the section at index i. */
+	private anchorEnd(i: number): number {
+		const path = this.host.fileOrder[i] ?? '';
+		const data = this.host.sections.get(path);
+		if (!data) return Number.MAX_SAFE_INTEGER;
+		const foldMode = this.host.getFoldMode(path);
+		if (foldMode === 'full') return data.offset;
+		const h = foldMode === 'heading'
+			? (data.foldHeadingHeight > 0 ? data.foldHeadingHeight : FALLBACK_FOLD_HEADING_HEIGHT)
+			: data.height;
+		return data.offset + h;
 	}
 
 	restoreScrollAt(anchor: Anchor | null, currentScrollTop: number): void {
