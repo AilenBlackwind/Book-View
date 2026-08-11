@@ -101,6 +101,32 @@ describe('isFoldedSubtree', () => {
 	it('returns false for an unknown heading id', () => {
 		expect(isFoldedSubtree('zzz', ctx)).toBe(false);
 	});
+
+	it('short-circuits when no heading is folded at all', () => {
+		// Mirrors the stress-book shape (every section starts with an h1, no
+		// folds): previously every call scanned back to index 0, making a
+		// recalcOffsets pass over N sections O(N²).
+		const headings = Array.from({ length: 1000 }, (_, i) => ({ id: `h${i}`, path: 'f1', level: 1 }));
+		const c = makeCtx({ fileOrder: ['f1'], headings });
+		expect(isFoldedSubtree('h999', c)).toBe(false);
+	});
+
+	it('does not scan past the top-level heading when folds exist', () => {
+		// 'c' is an h1 under other h1s; folding 'd' (h2 below it) must not hide
+		// 'c', and the scan must stop at the h1 instead of walking to index 0.
+		const c = makeCtx({
+			fileOrder: ['f1'],
+			headings: [
+				{ id: 'a', path: 'f1', level: 1 },
+				{ id: 'b', path: 'f1', level: 1 },
+				{ id: 'c', path: 'f1', level: 1 },
+				{ id: 'd', path: 'f1', level: 2 },
+			],
+			folded: ['d'],
+		});
+		expect(isFoldedSubtree('c', c)).toBe(false);
+		expect(isFoldedSubtree('d', c)).toBe(true);
+	});
 });
 
 describe('isSectionHidden', () => {

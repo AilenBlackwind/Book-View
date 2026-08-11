@@ -41,18 +41,26 @@ export interface FoldContext {
  *  heading is directly folded). */
 export function isFoldedSubtree(headingId: string, ctx: FoldContext): boolean {
 	if (ctx.foldedHeadings.has(headingId)) return true;
+	// No folded headings at all → no heading sits in a folded subtree. Without
+	// this, getFoldMode calls this on every section during recalcOffsets and
+	// the backward scan below turns the layout pass into an O(N²) walk (a
+	// level-1 heading never finds a shallower ancestor, so it scans back to
+	// index 0 on every call).
+	if (ctx.foldedHeadings.size === 0) return false;
 
 	const info = ctx.headingIndexById.get(headingId);
 	if (!info) return false;
 
 	let currentLevel = info.level;
-	for (let i = info.idx - 1; i >= 0; i--) {
+	// Stop as soon as the top (h1) is reached: no heading shallower than
+	// level 1 can exist, so scanning further back is pure overhead. This also
+	// makes level-1 headings O(1) even when folds are present.
+	for (let i = info.idx - 1; i >= 0 && currentLevel > 1; i--) {
 		const entry = ctx.headingIndex[i];
 		if (!entry) continue;
 		if (entry.level < currentLevel) {
 			if (ctx.foldedHeadings.has(entry.id)) return true;
 			currentLevel = entry.level;
-			if (currentLevel <= 1) break;
 		}
 	}
 	return false;
