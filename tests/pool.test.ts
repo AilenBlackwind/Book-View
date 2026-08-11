@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isStaleRender, isStaleForDrain, isSectionInWindow, OVERSCAN_TOP } from '../src/components/SectionPool';
+import { isStaleRender, isStaleForDrain, isSectionInWindow, isHeavyContent, buildPlaceholderContent, OVERSCAN_TOP } from '../src/components/SectionPool';
 
 // Mirrors the manager's default loadMargin (AbsoluteSectionManager ctor).
 const LOAD_MARGIN = 800;
@@ -138,5 +138,117 @@ describe('isSectionInWindow', () => {
 		expect(isSectionInWindow(scrollTop - OVERSCAN_TOP - 500, 500, scrollTop, clientHeight, OVERSCAN_TOP, LOAD_MARGIN)).toBe(true);
 		// Top point flush with the bottom edge.
 		expect(isSectionInWindow(scrollTop + clientHeight + LOAD_MARGIN, 0, scrollTop, clientHeight, OVERSCAN_TOP, LOAD_MARGIN)).toBe(true);
+	});
+});
+
+describe('isHeavyContent', () => {
+	it('flags block math $$ blocks', () => {
+		expect(isHeavyContent('some text\n$$\na^2 + b^2 = c^2\n$$')).toBe(true);
+	});
+
+	it('flags mermaid fenced blocks', () => {
+		expect(isHeavyContent('## Diagram\n```mermaid\ngraph TD;\nA-->B;\n```')).toBe(true);
+	});
+
+	it('does not flag inline math ($...$ is too common to be a signal)', () => {
+		expect(isHeavyContent('The area is $\\pi r^2$.')).toBe(false);
+	});
+
+	it('does not flag tables, callouts, or code fences', () => {
+		expect(isHeavyContent('| a | b |\n|---|---|\n| 1 | 2 |')).toBe(false);
+		expect(isHeavyContent('> [!note] Callout\n> body')).toBe(false);
+		expect(isHeavyContent('```js\nconst x = 1;\n```')).toBe(false);
+	});
+
+	it('does not flag plain prose', () => {
+		expect(isHeavyContent('# Heading\n\nSome paragraph with **bold** and [a link](https://x.example).')).toBe(false);
+	});
+});
+
+describe('buildPlaceholderContent', () => {
+	it('replaces a multiline $$ block with a math placeholder and keeps surrounding text', () => {
+		const src = '# Title\n\nIntro.\n\n$$\nE = mc^2\n$$\n\nOutro.';
+		const out = buildPlaceholderContent(src);
+		expect(out).toContain('# Title');
+		expect(out).toContain('Intro.');
+		expect(out).toContain('Outro.');
+		expect(out).not.toContain('$$');
+		expect(out).toContain('class="book-view-ph book-view-ph-math"');
+	});
+
+	it('replaces a single-line $$...$$ block', () => {
+		const out = buildPlaceholderContent('$$\nx^2 + y^2 = 1\n$$\n\nMore.');
+		expect(out).not.toContain('$$');
+		expect(out).toContain('book-view-ph-math');
+		expect(out).toContain('More.');
+	});
+
+	it('replaces a mermaid fence with a mermaid placeholder', () => {
+		const out = buildPlaceholderContent('## Flow\n```mermaid\ngraph TD;\nA-->B;\nB-->C;\n```');
+		expect(out).not.toContain('```');
+		expect(out).not.toContain('graph TD;');
+		expect(out).toContain('## Flow');
+		expect(out).toContain('class="book-view-ph book-view-ph-mermaid"');
+	});
+
+	it('keeps a normal code fence intact', () => {
+		const src = '```js\nconst x = 1;\n```';
+		const out = buildPlaceholderContent(src);
+		expect(out).toContain('```js');
+		expect(out).toContain('const x = 1;');
+		expect(out).toContain('```');
+		expect(out).not.toContain('book-view-ph');
+	});
+
+	it('keeps inline $...$ math untouched', () => {
+		const src = 'The area is $\\pi r^2$ and the radius is $r$.';
+		expect(buildPlaceholderContent(src)).toBe(src);
+	});
+
+	it('keeps tables, callouts and headings untouched', () => {
+		const src = '| a | b |\n|---|---|\n| 1 | 2 |\n\n> [!note] Callout\n> body\n\n## Heading';
+		expect(buildPlaceholderContent(src)).toBe(src);
+	});
+
+	it('handles a begin/end style block that opens on a content line', () => {
+		const src = '$$\n\\begin{aligned}\nx + y &= 1 \\\\\nx - y &= 3\n\\end{aligned}\n$$';
+		const out = buildPlaceholderContent(src);
+		expect(out).not.toContain('$$');
+		expect(out).not.toContain('\\begin');
+		expect(out).toContain('book-view-ph-math');
+	});
+
+	it('strips display math from a mixed line but keeps the text', () => {
+		const out = buildPlaceholderContent('Now solve $$x^2=4$$ for x.');
+		expect(out).not.toContain('$$');
+		expect(out).toContain('Now solve');
+		expect(out).toContain('for x.');
+		expect(out).toContain('book-view-ph-math');
+	});
+
+	it('sizes the placeholder from the block: taller math gets a taller estimate', () => {
+		const small = buildPlaceholderContent('$$\na=b\n$$');
+		const tall = buildPlaceholderContent('$$\na=b\n\nc=d\n\ne=f\n\n$$');
+		const h = (s: string) => Number(/height:(\d+)px/.exec(s)?.[1] ?? 0);
+		expect(h(tall)).toBeGreaterThan(h(small));
+	});
+
+	it('bounds a long note to a leading excerpt and drops the far tail', () => {
+		const longLine = 'x'.repeat(60);
+		const src = '# Title\n\nLead paragraph.\n\n$$\nE = mc^2\n$$\n\n'.concat(Array.from({ length: 30 }, () => longLine).join('\n'));
+		const out = buildPlaceholderContent(src);
+		expect(out).toContain('# Title');
+		expect(out).toContain('Lead paragraph.');
+		expect(out).not.toContain('$$');
+		expect(out).toContain('book-view-ph-math');
+		expect(out.length).toBeLessThan(700);
+	});
+
+	it('strips a math block that straddles the excerpt cut', () => {
+		const src = '# T\n\n$$\n'.concat('a'.repeat(120).concat('\n').repeat(12)).concat('$$\n\nTail.');
+		const out = buildPlaceholderContent(src);
+		expect(out).not.toContain('$$');
+		expect(out).not.toContain('Tail.');
+		expect(out).toContain('# T');
 	});
 });

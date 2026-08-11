@@ -557,7 +557,7 @@ export class AbsoluteSectionManager {
 		const now = performance.now();
 		if (!this.dbgT0) this.dbgT0 = now;
 		if (now - this.dbgT0 < 1000) return;
-		const [io, loads, unloads, prerenders] = this.pool.dbgReset();
+		const [io, loads, unloads, prerenders, renderMs, aborts, placeholders, upgrades, queueMs] = this.pool.dbgReset();
 		// Live-mounted metric: number of sections with a rendered component and
 		// the total height they occupy. Compares directly against the fixed IO
 		// window (OVERSCAN_TOP + loadMargin + viewport): if mounted count/area is
@@ -576,9 +576,9 @@ export class AbsoluteSectionManager {
 		this.dbg(
 			'DBG', '',
 			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} w=${this.dbgWheel}`,
-			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} mounts=${mounts} mh=${Math.round(mountH)}`,
+			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} rm=${Math.round(renderMs)}ms ab=${aborts} ph=${placeholders} up=${upgrades} mounts=${mounts} mh=${Math.round(mountH)}`,
 			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
-			`fr=${this.dbgFrameMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${AbsoluteSectionManager.dbgTagMs.toFixed(1)}ms rects=${AbsoluteSectionManager.dbgTagRects} fps=${AbsoluteSectionManager.dbgFps}`,
+			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${AbsoluteSectionManager.dbgTagMs.toFixed(1)}ms rects=${AbsoluteSectionManager.dbgTagRects} fps=${AbsoluteSectionManager.dbgFps}`,
 		);
 		this.dbgT0 = now;
 		this.dbgFs = 0;

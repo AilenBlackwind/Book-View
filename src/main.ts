@@ -147,6 +147,17 @@ export default class BookViewPlugin extends Plugin {
 				new Notice(on ? 'Book View: debug logging on' : 'Book View: debug logging off');
 			},
 		});
+
+		this.addCommand({
+			id: 'copy-debug-log',
+			name: 'Copy debug log to clipboard',
+			callback: async () => {
+				const w = window as unknown as { __bvLog?: string[] };
+				const text = (w.__bvLog ?? []).join('\n');
+				await navigator.clipboard.writeText(text);
+				new Notice(`Book View: ${text.split('\n').length} log lines copied`);
+			},
+		});
 		DebugLog.onChange((enabled) => {
 			if (enabled) ensureGlobalFrameProbe();
 		});

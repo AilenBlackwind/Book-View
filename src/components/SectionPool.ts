@@ -26,6 +26,191 @@ export const PRERENDER_WINDOW = 3000;
 // exact while bounding the flush rate during churn.
 const LIVE_READ_TTL = 100;
 
+// Content size (chars) above which a section is flagged as heavy in the debug
+// log. Heavy sections are the ones whose MarkdownRenderer.render can take tens
+// to hundreds of milliseconds; the marker lets the log distinguish them from
+// the bulk of cheap notes without reading the DBG counters.
+export const HEAVY_SECTION_CHARS = 12000;
+
+// Renders that took at least this long get their own render-ms line. Below
+// that a section is cheap enough to be part of the aggregate DBG counter.
+const RENDER_MS_LOG_THRESHOLD = 20;
+
+// How long after the last user scroll event fresh renders of heavy sections
+// are deferred. Heavy content (math, mermaid) costs 100-260ms per render in
+// the stress book, so a fast gesture that enqueues several of them stalls the
+// main thread for hundreds of ms mid-scroll. While a gesture is this fresh,
+// drainQueue skips heavy sections and reconcile re-enqueues each visible one
+// every frame; once the gesture settles they render normally — same visual
+// result, no jank. Matches PRERENDER_SETTLE, the existing "user is scrolling"
+// guard used for idle work.
+const HEAVY_DEFER_MS = 300;
+
+// Gap between consecutive placeholder→full upgrades. Each full render of a
+// heavy section blocks the main thread for 150-260ms, so upgrades must be
+// serialized and spaced: upgrading every placeholder at once (all started in
+// the same frame) froze the UI for a second after each scroll settle. One
+// upgrade per step keeps the freeze short and between-scrolls.
+const UPGRADE_STEP_DELAY = 300;
+
+// Cap on consecutive drain passes where a section is deferred because its raw
+// content hasn't landed yet. The deferral is meant to last a frame or two while
+// the async cachedRead resolves; a read that never resolves (a vanished file, a
+// rejected vault read) would otherwise leave the section blank forever while the
+// user stands on it, because reconcile re-enqueues it each frame only for it to
+// be deferred again. Past the cap the full render (with its own cachedRead
+// fallback inside loadSection) takes over so the section always renders.
+const MAX_CONTENT_PENDING_SKIPS = 45;
+
+// Cold starts produce floods of drop-stale-render lines: while heights are
+// still 35px estimates the IO window spans ~170 tiny sections, and each wheel
+// step during the initial scroll re-delivers dozens of crossings that drain
+// correctly drops as stale. Logging ~2000 lines per cold start buries the
+// signal. Collapse a drop storm into one summary line; keep individual lines
+// only for small (meaningful) counts.
+const DROP_STALE_LOG_MAX = 4;
+
+// Output budget (chars) for the placeholder preview. The old placeholder passed
+// the whole stripped note through MarkdownRenderer, which cost tens of ms per
+// section even with the math removed — 15 of them in one cold-start window
+// added ~2.5s of render time. The preview is only the note's opening (heavy
+// notes put their math up front, so after stripping $$/mermaid blocks the
+// opening is mostly the title and first lines): real text for the user to read
+// while scrolling, but a couple of ms of render work. The rest of the note's
+// height is covered by the fixed-height box loadPlaceholder sizes to the
+// section's current data.height.
+const PLACEHOLDER_CHARS = 500;
+
+/**
+ * Predictor for sections whose MarkdownRenderer.render is expensive enough to
+ * skip while the user is actively scrolling. Empirically (stress book): math
+ * blocks `$$...$$` correlate perfectly with 120-260ms sync renders, mermaid
+ * blocks cost asynchronously right after mount (layout/paint), while tables,
+ * callouts, and code fences are cheap regardless of count. Cheap substring
+ * scan of the raw markdown — no parsing, no DOM.
+ */
+export function isHeavyContent(content: string): boolean {
+	// Block math `$$...$$` (inline `$...$` excluded: too common to be a signal).
+	if (content.includes('$$')) return true;
+	// Mermaid diagram fenced block.
+	if (content.includes('```mermaid')) return true;
+	return false;
+}
+
+const MATH_PLACEHOLDER_TAG = 'book-view-ph-math';
+const MERMAID_PLACEHOLDER_TAG = 'book-view-ph-mermaid';
+
+function placeholderDiv(tag: string, lines: number): string {
+	// Estimate the placeholder height from the size of the block it replaces so
+	// the scroll layout stays close while the full render is still deferred. The
+	// real render corrects the height via the ResizeObserver, so an estimate is
+	// enough — mermaid especially varies wildly (a flowchart can be 80px or
+	// 600px), so exactness here is impossible without rendering.
+	const base = tag === MERMAID_PLACEHOLDER_TAG ? 80 : 44;
+	const perLine = tag === MERMAID_PLACEHOLDER_TAG ? 22 : 24;
+	const h = Math.max(base, Math.min(600, lines * perLine));
+	return `<div class="book-view-ph ${tag}" style="height:${h}px"></div>`;
+}
+
+/**
+ * Cheap rendering input for heavy sections while the user is actively
+ * scrolling. Strips display-math `$$` blocks and mermaid fences (the two
+ * markers that make MarkdownRenderer.render expensive) and replaces each with
+ * a placeholder div of estimated height; everything else — headings, tables,
+ * callouts, code, inline `$...$` — is passed through untouched. Only the
+ * leading part of the note up to PLACEHOLDER_CHARS is kept: heavy notes put
+ * their math up front, so after stripping the blocks the excerpt is mostly the
+ * title and first lines — real text, rendered in a couple of ms instead of the
+ * whole note's pipeline. Rendering the full stripped note cost tens of ms per
+ * section and made a cold-start window of 15 placeholders stall the scroll for
+ * seconds. The caller mounts this inside a box fixed to the section's current
+ * data.height, so the layout stays correct while the excerpt shows a clipped
+ * preview until the full render replaces it after the gesture settles.
+ */
+export function buildPlaceholderContent(content: string): string {
+	const lines = content.split('\n');
+	const out: string[] = [];
+	let budget = PLACEHOLDER_CHARS;
+	let inFence = false;
+	let fenceIsMermaid = false;
+	let inMath = false;
+	let mathLines = 0;
+	for (const raw of lines) {
+		// Past half the budget, end the excerpt at a paragraph or heading
+		// boundary so it reads like an intentional preview, not a cut sentence.
+		// The math/fence state above is unaffected: the stripped math body is
+		// never pushed, and an unclosed real fence simply has nothing after it.
+		if (budget <= PLACEHOLDER_CHARS / 2) {
+			const t = raw.trim();
+			if (t === '' || /^#{1,6}\s/.test(t)) break;
+		}
+		if (inFence) {
+			if (/^\s*```/.test(raw)) {
+				inFence = false;
+				// A normal code fence keeps its closing marker; a mermaid fence
+				// is fully replaced by the placeholder emitted at its opening.
+				if (!fenceIsMermaid) out.push(raw);
+			} else if (!fenceIsMermaid) {
+				// Fence body: pass through for real code, drop for mermaid
+				// (its content is replaced by the placeholder).
+				out.push(raw);
+			}
+			budget -= raw.length;
+			continue;
+		}
+		if (inMath) {
+			// Close on any line that still carries `$$` — either a bare `$$` or
+			// the trailing `$$` of an `\end{...}$$` sequence.
+			if (raw.includes('$$')) {
+				inMath = false;
+				out.push(placeholderDiv(MATH_PLACEHOLDER_TAG, mathLines));
+			} else {
+				mathLines++;
+			}
+			budget -= raw.length;
+			continue;
+		}
+		const fenceMatch = /^\s*(```+)\s*([^`]*)\s*$/.exec(raw);
+		if (fenceMatch) {
+			inFence = true;
+			const lang = (fenceMatch[2] ?? '').trim().toLowerCase().split(/\s+/)[0] ?? '';
+			fenceIsMermaid = lang === 'mermaid';
+			if (fenceIsMermaid) out.push(placeholderDiv(MERMAID_PLACEHOLDER_TAG, 0));
+			else out.push(raw);
+			budget -= raw.length;
+			continue;
+		}
+		const trimmed = raw.trim();
+		if (trimmed === '$$') {
+			inMath = true;
+			mathLines = 0;
+			continue;
+		}
+		if (trimmed.startsWith('$$')) {
+			if (trimmed.endsWith('$$')) {
+				// `$$...$$` fully on one line.
+				out.push(placeholderDiv(MATH_PLACEHOLDER_TAG, 1));
+				budget -= raw.length;
+			} else {
+				// `$$\begin{...}` style: the block body follows.
+				inMath = true;
+				mathLines = 0;
+			}
+			continue;
+		}
+		if (raw.includes('$$')) {
+			// Mixed line: strip inline display-math spans, keep the text.
+			out.push(raw.replace(/\$\$(.*?)\$\$/g, () => placeholderDiv(MATH_PLACEHOLDER_TAG, 1)));
+			budget -= raw.length;
+			continue;
+		}
+		out.push(raw);
+		budget -= raw.length;
+		if (budget <= 0) break;
+	}
+	return out.join('\n');
+}
+
 /**
  * Decides whether a queued section is so far from the viewport that rendering
  * it now would be wasted churn. Section at [offset, offset+height) must fall
@@ -107,10 +292,22 @@ export interface SectionData {
 	firstType: string;   // 'h1'..'h6' or 'text'
 	lastType: string;    // 'h1'..'h6' or 'text'
 	foldHeadingHeight: number;  // measured height of first heading when folded
+	/** True when the raw content contains markers (math, mermaid) that make
+	 *  MarkdownRenderer.render expensive; such sections are deferred while the
+	 *  user is actively scrolling and rendered when the gesture settles. */
+	heavy: boolean;
+	/** True while the mounted DOM is the cheap placeholder render (text with
+	 *  formula placeholders). Upgraded to the full render once the gesture
+	 *  settles (scheduleDeferredDrain → upgradePlaceholders). */
+	placeholder: boolean;
 	renderGen: number;
 	mtime: number;
 	heightTrusted: boolean;
 	wasHidden: boolean;
+	/** Consecutive drain passes this section was skipped because its raw
+	 *  content had not landed yet (see MAX_CONTENT_PENDING_SKIPS). Reset to 0
+	 *  whenever the section actually mounts. */
+	deferralCount: number;
 }
 
 export interface HeightPersistence {
@@ -170,24 +367,59 @@ export class SectionPool {
 	private observer: IntersectionObserver;
 	private sectionResizeObserver: ResizeObserver;
 	private renderQueue: string[] = [];
+	// O(1) membership mirror of renderQueue. enqueueRender/reconcile checked
+	// `includes` over the whole queue, and a cold-start IO storm queues ~2000
+	// crossings at once; with a plain array that was O(n²) per storm, invisible
+	// in the DBG timing (which only covers the frame callback). The Set keeps
+	// enqueue/reconcile/drain O(1).
+	private renderQueueSet: Set<string> = new Set();
 	private activeRenderCount = 0;
 	private maxConcurrent = 1;
 	private coldStartTimer = 0;
 	private idleTimer = 0;
+	private deferredDrainTimer = 0;
 	private lastUserScrollTimestamp = 0;
+
+	/** scrollTop seen by the previous reconcile frame. A frame-to-frame change
+	 *  marks the book as moving even when no user scroll event fired — the
+	 *  anchor restore at open and the manager's height-compensation writes
+	 *  change scrollTop while their scroll events are consumed as "adjusting"
+	 *  and never reach noteUserScroll. Full renders of heavy sections during
+	 *  that repositioning are the cold-start freeze (rm=2115ms in one debug
+	 *  window), so any movement must count as an active gesture. */
+	private lastReconcileScrollTop: number | null = null;
+	private upgradeQueue: string[] = [];
+	private upgradeInFlight = false;
+	private upgradePumpTimer = 0;
 
 	// Debug counters (live in the togglable debug layer).
 	dbgIo = 0;
 	dbgLoads = 0;
 	dbgUnloads = 0;
 	dbgPrerenders = 0;
+	/** Debug: total ms spent inside MarkdownRenderer.render in the window. */
+	dbgRenderMs = 0;
+	/** Debug: renders thrown away because the section was unloaded mid-render. */
+	dbgAborts = 0;
+	/** Debug: heavy full renders replaced by a cheap placeholder while scrolling. */
+	dbgPlaceholders = 0;
+	/** Debug: placeholder sections upgraded to their full render after settle. */
+	dbgUpgrades = 0;
+	/** Debug: total ms spent in processIoPending + drainQueue (the IO-storm
+	 *  churn that runs outside the frame callback and was previously invisible). */
+	dbgQueueMs = 0;
 
-	dbgReset(): [number, number, number, number] {
-		const r: [number, number, number, number] = [this.dbgIo, this.dbgLoads, this.dbgUnloads, this.dbgPrerenders];
+	dbgReset(): [number, number, number, number, number, number, number, number, number] {
+		const r: [number, number, number, number, number, number, number, number, number] = [this.dbgIo, this.dbgLoads, this.dbgUnloads, this.dbgPrerenders, this.dbgRenderMs, this.dbgAborts, this.dbgPlaceholders, this.dbgUpgrades, this.dbgQueueMs];
 		this.dbgIo = 0;
 		this.dbgLoads = 0;
 		this.dbgUnloads = 0;
 		this.dbgPrerenders = 0;
+		this.dbgRenderMs = 0;
+		this.dbgAborts = 0;
+		this.dbgPlaceholders = 0;
+		this.dbgUpgrades = 0;
+		this.dbgQueueMs = 0;
 		return r;
 	}
 
@@ -322,10 +554,13 @@ export class SectionPool {
 				firstType: 'text',
 				lastType: 'text',
 				foldHeadingHeight: 0,
+				heavy: false,
+				placeholder: false,
 				renderGen: 0,
 				mtime,
 				heightTrusted: cached !== undefined,
 				wasHidden: false,
+				deferralCount: 0,
 			};
 			this.host.sections.set(path, data);
 			this.host.fileOrder.push(path);
@@ -341,6 +576,7 @@ export class SectionPool {
 				data.endsWithHeading = endsWithHeading(content);
 				data.firstType = guessFirstType(content);
 				data.lastType = guessLastType(content);
+				data.heavy = isHeavyContent(content);
 			});
 			readPromises.push(p);
 
@@ -355,7 +591,8 @@ export class SectionPool {
 		if (this.host.isDestroyed()) return;
 		const data = this.host.sections.get(path);
 		if (!data || data.component) return;
-		if (this.renderQueue.includes(path)) return;
+		if (this.renderQueueSet.has(path)) return;
+		this.renderQueueSet.add(path);
 		this.renderQueue.push(path);
 		this.scheduleIoWork();
 	}
@@ -370,8 +607,10 @@ export class SectionPool {
 
 		// Only cache visible sections. A 'full' fold hides the section entirely;
 		// its invisible DOM would be pure waste in the cache until the view
-		// closes, and a fresh render on unfold is instant anyway.
-		if (this.host.getFoldMode(path) !== 'full') {
+		// closes, and a fresh render on unfold is instant anyway. Placeholder
+		// DOM is likewise never cached: it lacks the formulas, and serving it as
+		// the "full" render on a later remount would keep them hidden forever.
+		if (!data.placeholder && this.host.getFoldMode(path) !== 'full') {
 			const rendered = data.el.querySelector('.markdown-rendered');
 			if (rendered) {
 				this.host.renderedDomCache.set(path, rendered as HTMLElement);
@@ -447,6 +686,17 @@ export class SectionPool {
 	 */
 	reconcileVisibleSections(scrollTop: number, clientHeight: number): void {
 		if (this.host.isDestroyed()) return;
+		// Any frame-to-frame scrollTop movement counts as an active gesture,
+		// even when it never reached noteUserScroll (anchor restore at open,
+		// height-compensation writes, TOC smooth jumps). While the book moves,
+		// heavy sections get placeholders instead of 100-260ms full renders
+		// that freeze the gesture; the movement check also keeps the very
+		// first frames after open (restoring to a saved position) inside that
+		// window.
+		if (this.lastReconcileScrollTop !== null && Math.abs(scrollTop - this.lastReconcileScrollTop) >= 1) {
+			this.noteUserScroll();
+		}
+		this.lastReconcileScrollTop = scrollTop;
 		const order = this.host.fileOrder;
 		if (order.length === 0) return;
 		const winTop = scrollTop - OVERSCAN_TOP;
@@ -473,7 +723,7 @@ export class SectionPool {
 			// are not hidden and still need their stub mounted.
 			if (data.component) continue;
 			if (data.el.classList.contains('book-section-folded')) continue;
-			if (this.renderQueue.includes(path)) continue;
+			if (this.renderQueueSet.has(path)) continue;
 			this.host.dbg('reconcile', path);
 			this.enqueueRender(path);
 		}
@@ -489,18 +739,31 @@ export class SectionPool {
 	}
 
 	pruneRenderQueue(pred: (path: string) => boolean): void {
-		this.renderQueue = this.renderQueue.filter(pred);
+		const kept: string[] = [];
+		const set = new Set<string>();
+		for (const p of this.renderQueue) {
+			if (pred(p)) {
+				kept.push(p);
+				set.add(p);
+			}
+		}
+		this.renderQueue = kept;
+		this.renderQueueSet = set;
 	}
 
 	destroy(): void {
 		this.renderQueue.length = 0;
+		this.renderQueueSet.clear();
 		this.ioPending.length = 0;
+		this.upgradeQueue.length = 0;
 		this.observer.disconnect();
 		this.sectionResizeObserver.disconnect();
 		window.clearTimeout(this.coldStartTimer);
 		window.clearTimeout(this.idleTimer);
 		window.clearTimeout(this.idleUnloadTimer);
 		window.clearTimeout(this.ioWorkTimer);
+		window.clearTimeout(this.deferredDrainTimer);
+		window.clearTimeout(this.upgradePumpTimer);
 	}
 
 	/** Re-apply the placeholder transform from the always-current offset. The
@@ -536,6 +799,7 @@ export class SectionPool {
 			}
 			data.component = new Component();
 			this.sectionResizeObserver.observe(data.el);
+			data.deferralCount = 0;
 			return;
 		}
 
@@ -548,6 +812,10 @@ export class SectionPool {
 
 		const content = this.host.rawContent.get(path) ?? await this.host.app.vault.cachedRead(file);
 		if (this.host.isDestroyed() || data.renderGen !== gen) return;
+		data.placeholder = false;
+		if (content.length >= HEAVY_SECTION_CHARS) {
+			this.host.dbg('heavy', path, content.length, Math.round(data.height));
+		}
 
 		data.startsWithHeading = startsWithHeading(content);
 		data.endsWithHeading = endsWithHeading(content);
@@ -560,9 +828,27 @@ export class SectionPool {
 
 		const component = new Component();
 		data.component = component;
+		// Note: async renderers (mermaid, math) keep working after this await
+		// resolves, so their SVG/HTML lands a beat later and the layout/paint
+		// cost shows up after the section mounted — render-ms only captures the
+		// synchronous part (parsing + DOM construction of the cheap blocks).
+		const t0 = performance.now();
 		await MarkdownRenderer.render(this.host.app, content, renderContainer, path, component);
+		const renderMs = performance.now() - t0;
 
-		if (this.host.isDestroyed() || data.renderGen !== gen || data.component !== component) return;
+		if (this.host.isDestroyed() || data.renderGen !== gen || data.component !== component) {
+			// The render was thrown away — a fast scroll unloaded the section
+			// mid-flight, or the content was invalidated. That work was wasted;
+			// this counter is what "defer heavy renders during fast scroll"
+			// should drive to zero.
+			this.dbgAborts++;
+			this.host.dbg('abort-render', path, Math.round(renderMs));
+			return;
+		}
+		this.dbgRenderMs += renderMs;
+		if (renderMs >= RENDER_MS_LOG_THRESHOLD) {
+			this.host.dbg('render-ms', path, Math.round(renderMs));
+		}
 
 		data.el.empty();
 		data.el.appendChild(renderContainer);
@@ -580,6 +866,7 @@ export class SectionPool {
 			this.host.foldScheduleHeightMeasure(path);
 		}
 		this.sectionResizeObserver.observe(data.el);
+		data.deferralCount = 0;
 		this.host.getOnSectionRendered()?.(path, renderContainer);
 		// Recalculate only when something that affects the layout actually
 		// changed: the heading flags (which drive the gaps), or a fold mode
@@ -607,8 +894,171 @@ export class SectionPool {
 		return this.liveScrollTop;
 	}
 
+	/**
+	 * Cheap placeholder render for a heavy section while the user is actively
+	 * scrolling: the raw markdown with `$$`/mermaid blocks replaced by
+	 * estimated-height divs, limited to the note's opening (buildPlaceholderContent).
+	 * The synchronous part of MarkdownRenderer.render drops from 100-260ms to a
+	 * couple of ms, so the text of the note shows immediately instead of a blank
+	 * gap. The preview is mounted inside a box fixed to the section's current
+	 * data.height (and the box is the whole section content), so mounting it
+	 * measures back the height the layout already expects — no height correction,
+	 * no offset cascade, no IntersectionObserver re-fire storm. The full render
+	 * (with real formulas) replaces this DOM once the gesture settles. The render
+	 * is never cached as the full DOM and does not touch the ToC; the upgrade does.
+	 */
+	private async loadPlaceholder(path: string): Promise<void> {
+		this.dbgLoads++;
+		const data = this.host.sections.get(path);
+		if (!data || data.component) return;
+
+		// Use the content already read by the batch reconcile read. A fresh
+		// cachedRead per placeholder is a vault disk read on the critical path
+		// of an active gesture — the placeholder is a stopgap, not worth a read.
+		// If the content hasn't landed yet, skip: reconcileVisibleSections
+		// re-enqueues the section next frame and it either placeholders then or
+		// gets its full render once the gesture settles.
+		const content = this.host.rawContent.get(path);
+		if (content === undefined) {
+			this.host.dbg('placeholder-skip', path);
+			return;
+		}
+
+		const gen = data.renderGen + 1;
+		data.renderGen = gen;
+		this.host.dbg('placeholder-render', path);
+
+		const renderContainer = createDiv({
+			cls: 'markdown-rendered markdown-preview-view',
+		});
+
+		const component = new Component();
+		data.component = component;
+		data.placeholder = true;
+		const t0 = performance.now();
+		await MarkdownRenderer.render(this.host.app, buildPlaceholderContent(content), renderContainer, path, component);
+		const renderMs = performance.now() - t0;
+
+		if (this.host.isDestroyed() || data.renderGen !== gen || data.component !== component) {
+			// Thrown away — a fast scroll unloaded the section mid-render.
+			this.dbgAborts++;
+			this.host.dbg('abort-render', path, Math.round(renderMs));
+			return;
+		}
+		this.dbgRenderMs += renderMs;
+
+		// Fixed-height box: the mounted section's height is exactly data.height
+		// (the layout's current value for it), so the resize observer reports no
+		// change and no correction/recalc runs. Without the box the preview's
+		// measured height differed from the estimate by up to hundreds of px,
+		// each placeholder mount shifted every following section and re-fired
+		// the whole IO window (io=2056 in one bad window) — the feedback loop
+		// that made cold starts as janky as the full renders they replaced.
+		// Folded sections are the exception: the fold collapses the content to a
+		// heading stub, so a box fixed to the full unfolded height would leave a
+		// huge empty region under the stub. Mount those without the box and let
+		// the fold's own stub measurement correct the height as usual.
+		const foldMode = this.host.getFoldMode(path);
+		if (foldMode === 'none') {
+			const box = createDiv({ cls: 'book-view-ph-box' });
+			box.style.height = `${Math.round(data.height)}px`;
+			box.appendChild(renderContainer);
+			data.el.empty();
+			data.el.appendChild(box);
+		} else {
+			data.el.empty();
+			data.el.appendChild(renderContainer);
+		}
+		this.applyTransform(path);
+		this.host.foldTagSection(path, data.el);
+		// No onSectionRendered (ToC tagging) and no fold-stub measurement here:
+		// the placeholder is transient, and the upgrade re-tags/re-measures. No
+		// scheduleUpdate either: the box matches data.height, so there is nothing
+		// for the resize observer to correct.
+		this.sectionResizeObserver.observe(data.el);
+		data.deferralCount = 0;
+	}
+
+	/** Queue the placeholder sections still in the load window for full renders,
+	 *  nearest to the viewport first, then pump them one at a time. Called once
+	 *  the scroll gesture has settled. */
+	private upgradePlaceholders(): void {
+		const primary = this.ioScrollTop ?? this.host.getScrollTop();
+		const clientHeight = this.host.getClientHeight();
+		const viewportCenter = primary + clientHeight / 2;
+		const candidates: Array<[string, number]> = [];
+		for (const [path, data] of this.host.sections) {
+			if (!data.placeholder || !data.component) continue;
+			if (!isSectionInWindow(data.offset, data.height, primary, clientHeight, OVERSCAN_TOP, this.host.loadMargin)) continue;
+			const mid = data.offset + data.height / 2;
+			candidates.push([path, Math.abs(mid - viewportCenter)]);
+		}
+		if (candidates.length === 0) return;
+		candidates.sort((a, b) => a[1] - b[1]);
+		for (const [p] of candidates) {
+			if (!this.upgradeQueue.includes(p)) this.upgradeQueue.push(p);
+		}
+		this.pumpUpgrades();
+	}
+
+	/** Run one placeholder→full upgrade, then schedule the next after a gap. A
+	 *  resumed gesture pauses the pump: the remaining sections stay placeholders
+	 *  and the settle timer re-arms. Each full render blocks the main thread for
+	 *  150-260ms, so upgrading concurrently would re-freeze the UI — one at a
+	 *  time keeps the freeze short and lets scroll frames run between steps. */
+	private pumpUpgrades(): void {
+		if (this.host.isDestroyed()) return;
+		if (this.upgradeInFlight) return;
+		if (Date.now() - this.lastUserScrollTimestamp < HEAVY_DEFER_MS) {
+			// Gesture resumed — postpone the rest of the queue.
+			this.scheduleDeferredDrain();
+			return;
+		}
+		const path = this.upgradeQueue.shift();
+		if (!path) return;
+		const data = this.host.sections.get(path);
+		if (!data || !data.placeholder || !data.component) {
+			// Stale entry (unloaded or already replaced) — skip it.
+			this.pumpUpgrades();
+			return;
+		}
+		const primary = this.ioScrollTop ?? this.host.getScrollTop();
+		const clientHeight = this.host.getClientHeight();
+		if (!isSectionInWindow(data.offset, data.height, primary, clientHeight, OVERSCAN_TOP, this.host.loadMargin)) {
+			this.pumpUpgrades();
+			return;
+		}
+		this.dbgUpgrades++;
+		this.host.dbg('upgrade', path);
+		this.upgradeInFlight = true;
+		void this.upgradePlaceholder(path).finally(() => {
+			this.upgradeInFlight = false;
+			if (this.host.isDestroyed()) return;
+			this.upgradePumpTimer = window.setTimeout(() => {
+				this.upgradePumpTimer = 0;
+				this.pumpUpgrades();
+			}, UPGRADE_STEP_DELAY);
+		});
+	}
+
+	private upgradePlaceholder(path: string): Promise<void> {
+		const data = this.host.sections.get(path);
+		if (!data || !data.placeholder || !data.component) return Promise.resolve();
+		data.placeholder = false;
+		// Release the placeholder's component and observation, but keep its DOM
+		// mounted while the full render runs: loadSection swaps it out on
+		// completion, so the user keeps seeing the text instead of a blank gap
+		// during the 150-260ms formula render.
+		this.sectionResizeObserver.unobserve(data.el);
+		data.component.unload();
+		data.component = null;
+		data.renderGen++;
+		return this.loadSection(path);
+	}
+
 	private drainQueue(): void {
 		if (this.host.isDestroyed()) return;
+		const t0 = performance.now();
 		// Fast scroll enqueues every section that crossed the overscan window,
 		// but renders run at maxConcurrent so the queue drains slower than a
 		// fast gesture fills it. By drain time most entries are already far past
@@ -630,17 +1080,73 @@ export class SectionPool {
 		const clientHeight = this.host.getClientHeight();
 		const margin = OVERSCAN_TOP + this.host.loadMargin;
 		const primaryBottom = primary + clientHeight;
-		while (this.activeRenderCount < this.maxConcurrent && this.renderQueue.length > 0) {
-			const path = this.renderQueue.shift()!;
+		// Heavy sections (block math / mermaid) spend 100-260ms in the
+		// synchronous part of MarkdownRenderer.render. During an active gesture
+		// that stalls the main thread mid-scroll, and several enqueued at once
+		// freeze the page for hundreds of ms. While the gesture is fresh, render
+		// the cheap placeholder version instead (text with formula placeholders)
+		// and upgrade to the full render once it settles (scheduleDeferredDrain).
+		// A cached full DOM is preferred over the placeholder: remounting it is
+		// <1ms. Light sections keep rendering underneath, exactly as before.
+		const scrolling = Date.now() - this.lastUserScrollTimestamp < HEAVY_DEFER_MS;
+		let placeholders = 0;
+		let staleDropped: string[] = [];
+		// shift() per item was O(n²) when a cold-start IO storm queued ~2000
+		// sections at once. Consume a prefix by index and remove it with one
+		// splice; every branch below consumes the item (drops it, defers it, or
+		// starts an async render), so the loop either hits maxConcurrent or
+		// empties the queue.
+		let head = 0;
+		while (this.activeRenderCount < this.maxConcurrent && head < this.renderQueue.length) {
+			const path = this.renderQueue[head++]!;
+			this.renderQueueSet.delete(path);
 			const data = this.host.sections.get(path);
 			if (!data || data.component) continue;
+			// The `heavy` flag is set by the async cachedRead in render() and can
+			// lag the first enqueue (reconcile/IO may fire a frame earlier). Fall
+			// back to a scan of the raw content when the flag hasn't landed yet,
+			// so a section is never full-rendered mid-gesture just because its
+			// read resolved a frame too late.
+			const raw = this.host.rawContent.get(path);
+			const heavy = data.heavy || (raw !== undefined && isHeavyContent(raw));
+			// Shared staleness gate, applied before the placeholder branch too:
+			// a full render of a far-drifted section is churn, and a placeholder
+			// of one is worse — the mount+measure would shift the layout for
+			// something offscreen. reconcileVisibleSections re-enqueues it the
+			// moment it actually re-enters the window, so dropping is safe.
 			if (isStaleRender(data.offset, data.height, primary, primaryBottom, margin)) {
 				// Only an out-of-band candidate pays for the live read.
 				const live = this.readLiveScrollTop();
 				if (isStaleForDrain(data.offset, data.height, primary, primaryBottom, live, live + clientHeight, margin)) {
-					this.host.dbg('drop-stale-render', path);
+					staleDropped.push(path);
 					continue;
 				}
+			}
+			// The `heavy` flag and rawContent land asynchronously (cachedRead in
+			// render()). When neither has arrived yet the section is
+			// unclassified, and full-rendering it mid-gesture could mean a
+			// 100-260ms math render inside a scroll frame. Defer instead —
+			// reconcileVisibleSections re-enqueues it every frame, so it
+			// placeholders (if heavy) or renders normally the moment the read
+			// lands. Bounded by deferralCount: a read that never resolves would
+			// otherwise blank the section forever while the user stands on it.
+			if (raw === undefined && scrolling) {
+				if (data.deferralCount < MAX_CONTENT_PENDING_SKIPS) {
+					data.deferralCount++;
+					this.host.dbg('content-pending', path, data.deferralCount);
+					continue;
+				}
+				this.host.dbg('content-pending-force', path, data.deferralCount);
+			}
+			if (heavy && scrolling && !this.host.renderedDomCache.has(path)) {
+				this.dbgPlaceholders++;
+				placeholders++;
+				this.activeRenderCount++;
+				void this.loadPlaceholder(path).finally(() => {
+					this.activeRenderCount--;
+					this.drainQueue();
+				});
+				continue;
 			}
 			this.activeRenderCount++;
 			void this.loadSection(path).finally(() => {
@@ -648,10 +1154,40 @@ export class SectionPool {
 				this.drainQueue();
 			});
 		}
+		if (head > 0) {
+			this.renderQueue.splice(0, head);
+		}
+		if (placeholders > 0) {
+			this.scheduleDeferredDrain();
+		}
+		if (staleDropped.length > 0) {
+			if (staleDropped.length <= DROP_STALE_LOG_MAX) {
+				for (const p of staleDropped) this.host.dbg('drop-stale-render', p);
+			} else {
+				this.host.dbg('drop-stale-render', '', staleDropped.length);
+			}
+		}
+		this.dbgQueueMs += performance.now() - t0;
+	}
+
+	/** Upgrade placeholder sections to their full render once the gesture has
+	 *  had time to settle, then re-drain the queue. Re-armed on every defer, so
+	 *  a long gesture just keeps pushing the upgrade forward; the first timer
+	 *  after the settle window replaces placeholders with real formulas. */
+	private scheduleDeferredDrain(): void {
+		if (this.host.isDestroyed()) return;
+		if (this.deferredDrainTimer) return;
+		this.deferredDrainTimer = window.setTimeout(() => {
+			this.deferredDrainTimer = 0;
+			if (this.host.isDestroyed()) return;
+			this.upgradePlaceholders();
+			this.scheduleIoWork();
+		}, HEAVY_DEFER_MS);
 	}
 
 	private processIoPending(): void {
 		if (this.ioPending.length === 0) return;
+		const t0 = performance.now();
 		const pending = this.ioPending;
 		this.ioPending = [];
 		// Unload far sections immediately instead of deferring until the
@@ -668,6 +1204,7 @@ export class SectionPool {
 				this.unloadSection(item.path);
 			}
 		}
+		this.dbgQueueMs += performance.now() - t0;
 	}
 
 	private unloadFarSections(): void {

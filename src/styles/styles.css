@@ -216,6 +216,40 @@
 	scroll-margin-top: 20px;
 }
 
+/* Placeholder blocks shown instead of math/mermaid while a heavy section is
+   scrolled past (SectionPool.loadPlaceholder). Height is set inline per block
+   from the size of the source it replaces; the full render replaces these as
+   soon as the scroll gesture settles. */
+.book-view-ph {
+	display: block;
+	min-height: 24px;
+	margin: 0.5em 0;
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-border);
+	opacity: 0.55;
+}
+
+/* Fixed-height wrapper around the placeholder preview (SectionPool.
+   loadPlaceholder). Its height is set inline to the section's current
+   data.height so the mounted section measures exactly what the layout already
+   expects — no height correction, no offset cascade, no IO re-fire storm. The
+   preview text (the note's opening, clipped) sits inside; a subtle gradient at
+   the bottom hints that the note continues below the fold. */
+.book-view-ph-box {
+	position: relative;
+	overflow: hidden;
+}
+
+.book-view-ph-box::after {
+	content: '';
+	position: absolute;
+	inset-inline: 0;
+	bottom: 0;
+	height: 48px;
+	pointer-events: none;
+	background: linear-gradient(to bottom, transparent, var(--background-primary) 90%);
+}
+
 @keyframes book-heading-pulse {
 	0% {
 		background-color: var(--interactive-accent);

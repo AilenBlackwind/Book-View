@@ -36,10 +36,13 @@ function makeLayout(specs: Spec[]): { layout: SectionLayout; host: HostView } {
 			firstType: 'text',
 			lastType: 'text',
 			foldHeadingHeight: s.foldHeadingHeight ?? 0,
+			heavy: false,
+			placeholder: false,
 			renderGen: 0,
 			mtime: 0,
 			heightTrusted: true,
 			wasHidden: false,
+			deferralCount: 0,
 		});
 	}
 	const host: HostView = {

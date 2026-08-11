@@ -5,6 +5,13 @@ import { renderInlineMarkdown, stripMarkdown } from '../utils/renderInlineMarkdo
 import { pickActiveIndex, computeActivePath, computeHiddenState } from '../utils/toc';
 import { DebugLog } from '../utils/debug';
 
+// Per-frame budget for heading-offset measurement. getBoundingClientRect on a
+// section inside the huge transformed book container forces a layout flush per
+// read; draining a cold-start pile-up in one frame was a 50ms+ stall. Trickle
+// at most these many rect reads per frame, and re-request a frame to continue.
+const TAG_RECT_BUDGET = 8;
+const TAG_MS_BUDGET = 6;
+
 export interface TocEntry {
 	level: number;
 	text: string;
@@ -494,20 +501,33 @@ export class TocController {
 	}
 
 	/** Frame callback (registered in setupScrollSpy, runs after processUpdates):
-	 *  drains the deferred heading measurements in one coalesced pass. */
+	 *  drains the deferred heading measurements in one coalesced pass. A cold
+	 *  start mounts many sections back to back, so a whole window's worth of
+	 *  heading rect reads can pile up; draining them all in a single frame was
+	 *  a 50ms+ stall (tag=54.4ms in one cold-start debug window). Each rect read
+	 *  on a section inside the huge transformed container forces a layout
+	 *  flush, so cap the per-frame budget and trickle the rest — the offsets
+	 *  are cached per tocIndex, so late measurements are still correct, and
+	 *  the line-based fallback covers the highlight until they land. */
 	private onTagFrame = (): void => {
 		this.tagFrameRequested = false;
 		if (this.pendingTagHeadings.length === 0) return;
-		const pending = this.pendingTagHeadings;
-		this.pendingTagHeadings = [];
 		const t0 = performance.now();
-		for (const p of pending) {
+		const timeLimit = t0 + TAG_MS_BUDGET;
+		let rects = 0;
+		const stillPending: { sectionEl: HTMLElement; toMeasure: { el: HTMLElement; tocIndex: number }[] }[] = [];
+		for (const p of this.pendingTagHeadings) {
 			const { sectionEl, toMeasure } = p;
 			// Section unloaded before the frame arrived — skip; the line-based
 			// fallback covers it until a future render re-queues the measure.
 			if (!sectionEl.isConnected) continue;
 			let sectionRect: DOMRect | null = null;
+			const remaining: { el: HTMLElement; tocIndex: number }[] = [];
 			for (const item of toMeasure) {
+				if (rects >= TAG_RECT_BUDGET || performance.now() >= timeLimit) {
+					remaining.push(item);
+					continue;
+				}
 				if (!item.el.isConnected) continue;
 				// Headings hidden by fold-mode collapse have display:none —
 				// their rect is zeroed, so skip them and keep the line-based
@@ -517,10 +537,17 @@ export class TocController {
 				const headingRect = item.el.getBoundingClientRect();
 				this.headingOffsets.set(item.tocIndex, headingRect.top - sectionRect.top);
 				this.positionsDirty = true;
+				rects++;
 				AbsoluteSectionManager.dbgTagRects++;
 			}
+			if (remaining.length > 0) stillPending.push({ sectionEl, toMeasure: remaining });
 		}
+		this.pendingTagHeadings = stillPending;
 		AbsoluteSectionManager.dbgTagMs += performance.now() - t0;
+		if (stillPending.length > 0) {
+			this.tagFrameRequested = true;
+			this.absoluteManager?.requestFrame();
+		}
 	};
 
 	// --- Scroll spy ---
