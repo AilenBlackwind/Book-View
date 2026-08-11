@@ -66,9 +66,14 @@ const MAX_CONTENT_PENDING_SKIPS = 45;
 // still 35px estimates the IO window spans ~170 tiny sections, and each wheel
 // step during the initial scroll re-delivers dozens of crossings that drain
 // correctly drops as stale. Logging ~2000 lines per cold start buries the
-// signal. Collapse a drop storm into one summary line; keep individual lines
-// only for small (meaningful) counts.
+// signal. A per-pass collapse to one counted line was ineffective — after the
+// O(1) queue fix each pass drops only 1-4 sections, so every pass logged
+// individually again. Window it instead: passes dropping within
+// DROP_STALE_WINDOW_MS of each other are one storm, summarized once per second
+// (`drop-stale-render N storm`); an isolated small pass after a longer silence
+// keeps its individual lines.
 const DROP_STALE_LOG_MAX = 4;
+const DROP_STALE_WINDOW_MS = 1000;
 
 // Output budget (chars) for the placeholder preview. The old placeholder passed
 // the whole stripped note through MarkdownRenderer, which cost tens of ms per
@@ -408,6 +413,12 @@ export class SectionPool {
 	/** Debug: total ms spent in processIoPending + drainQueue (the IO-storm
 	 *  churn that runs outside the frame callback and was previously invisible). */
 	dbgQueueMs = 0;
+	/** Debug: drop-stale storm aggregation (windowed, see DROP_STALE_WINDOW_MS).
+	 *  Last pass time that dropped something, accumulated drop count in the
+	 *  current storm, and when the last `storm` summary line was emitted. */
+	private dropStaleStormAt = 0;
+	private dropStaleCount = 0;
+	private dropStaleLastSummaryAt = 0;
 
 	dbgReset(): [number, number, number, number, number, number, number, number, number] {
 		const r: [number, number, number, number, number, number, number, number, number] = [this.dbgIo, this.dbgLoads, this.dbgUnloads, this.dbgPrerenders, this.dbgRenderMs, this.dbgAborts, this.dbgPlaceholders, this.dbgUpgrades, this.dbgQueueMs];
@@ -764,6 +775,9 @@ export class SectionPool {
 		window.clearTimeout(this.ioWorkTimer);
 		window.clearTimeout(this.deferredDrainTimer);
 		window.clearTimeout(this.upgradePumpTimer);
+		this.dropStaleStormAt = 0;
+		this.dropStaleCount = 0;
+		this.dropStaleLastSummaryAt = 0;
 	}
 
 	/** Re-apply the placeholder transform from the always-current offset. The
@@ -1161,10 +1175,27 @@ export class SectionPool {
 			this.scheduleDeferredDrain();
 		}
 		if (staleDropped.length > 0) {
-			if (staleDropped.length <= DROP_STALE_LOG_MAX) {
-				for (const p of staleDropped) this.host.dbg('drop-stale-render', p);
+			const now = Date.now();
+			// A storm is consecutive passes dropping within a sliding window of
+			// each other — the cold-start IO churn. An isolated pass after a
+			// longer silence is a fresh burst and keeps its individual lines.
+			const inStorm = this.dropStaleStormAt !== 0 && now - this.dropStaleStormAt < DROP_STALE_WINDOW_MS;
+			this.dropStaleStormAt = now;
+			if (inStorm) {
+				this.dropStaleCount += staleDropped.length;
+				if (now - this.dropStaleLastSummaryAt >= DROP_STALE_WINDOW_MS) {
+					this.host.dbg('drop-stale-render', '', this.dropStaleCount, 'storm');
+					this.dropStaleCount = 0;
+					this.dropStaleLastSummaryAt = now;
+				}
 			} else {
-				this.host.dbg('drop-stale-render', '', staleDropped.length);
+				this.dropStaleCount = staleDropped.length;
+				this.dropStaleLastSummaryAt = now;
+				if (staleDropped.length <= DROP_STALE_LOG_MAX) {
+					for (const p of staleDropped) this.host.dbg('drop-stale-render', p);
+				} else {
+					this.host.dbg('drop-stale-render', '', staleDropped.length);
+				}
 			}
 		}
 		this.dbgQueueMs += performance.now() - t0;

@@ -11,6 +11,16 @@ import { DebugLog } from '../utils/debug';
 
 export const HEIGHT_PER_LINE = 25;
 
+// A scroll gesture counts as active for this long after the last scroll
+// activity (wheel/flick step, anchor restore, programmatic jump). While active,
+// layout-flush-heavy work is deferred: ToC heading rect reads (each forces a
+// style recalc inside a scroll frame) and the scrollTop compensation write
+// (which fires a scroll event that restarts the frame + IO loop — the cold-start
+// churn where sev≈frames in the debug log). The line-based ToC fallback covers
+// the highlight, and a settle update applies the compensation once the gesture
+// ends.
+const GESTURE_DEFER_MS = 700;
+
 // Debug: global main-thread frame counter, independent of the book manager.
 // It shows whether the note tab actually keeps rendering at ~60fps while the
 // user reads a note with the ToC panel open — if a background loop (book
@@ -126,6 +136,12 @@ export class AbsoluteSectionManager {
 	private dbgStackCaptured = 0;
 	// Debug: wheel events (user scrolling input) on the book container.
 	private dbgWheel = 0;
+	/** Debug: scrollTop compensations skipped because a gesture was active
+	 *  (Phase 3b). A high count with rs≈0 in the DBG line confirms the loop
+	 *  break is doing work; the settle update applies them at the end. */
+	private dbgDeferComp = 0;
+	/** Settle timer for the compensation deferred during an active gesture. */
+	private deferCompTimer = 0;
 	// Debug: per-second ms spent in the frame, processUpdates, frame
 	// callbacks (ToC tick), and ToC tagHeadings (fed by BookTocView).
 	private dbgFrameMs = 0;
@@ -137,15 +153,19 @@ export class AbsoluteSectionManager {
 	private dbgApplyMs = 0;
 	private dbgRecalcMs = 0;
 	private dbgRestoreMs = 0;
-	/** Debug: accumulated ms spent in TocController.tagHeadings. */
-	static dbgTagMs = 0;
+	/** Debug: accumulated ms spent in TocController.tagHeadings. Instance (not
+	 *  static) so a second Book-view pane's ToC can't pool its rect work into
+	 *  this manager's DBG window (the 06:11 tag=3258ms/rects=2276 anomaly:
+	 *  frames=42 cannot budget 2276 rects across ~72 sections of 8-rect/6ms
+	 *  frames, so the counters were shared across managers). */
+	dbgTagMs = 0;
 	/** Debug: frames rendered by the whole main thread in the last DBG window. */
-	static dbgFps = 0;
+	dbgFps = 0;
 	/** Debug: number of actual getBoundingClientRect heading measurements done by
 	 *  tagHeadings in the last DBG window (fed by TocController). Distinguishes
 	 *  "each measurement got more expensive" (dirty-layout reflow) from "more
 	 *  measurements ran" (headingOffsets cache is being invalidated). */
-	static dbgTagRects = 0;
+	dbgTagRects = 0;
 
 	// Thin wrapper keeping call sites readable; logic lives in utils/debug.
 	private dbg(
@@ -464,6 +484,16 @@ export class AbsoluteSectionManager {
 		this.scheduleFrame();
 	}
 
+	/** True while the user's scroll is recent enough that layout-flush-heavy
+	 *  work (ToC rect reads, scrollTop compensation) should be deferred. The
+	 *  pool's lastUserScrollAt is refreshed by every scroll event and by any
+	 *  frame-to-frame scrollTop movement, so a wheel flick keeps this true for
+	 *  the whole glide and it flips false ~GESTURE_DEFER_MS after the last
+	 *  movement. */
+	isGestureActive(): boolean {
+		return Date.now() - this.pool.lastUserScrollAt < GESTURE_DEFER_MS;
+	}
+
 	scheduleUpdate(): void {
 		this.updateRequested = true;
 		this.scheduleFrame();
@@ -578,7 +608,7 @@ export class AbsoluteSectionManager {
 			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} w=${this.dbgWheel}`,
 			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} rm=${Math.round(renderMs)}ms ab=${aborts} ph=${placeholders} up=${upgrades} mounts=${mounts} mh=${Math.round(mountH)}`,
 			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
-			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${AbsoluteSectionManager.dbgTagMs.toFixed(1)}ms rects=${AbsoluteSectionManager.dbgTagRects} fps=${AbsoluteSectionManager.dbgFps}`,
+			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${this.dbgTagMs.toFixed(1)}ms rects=${this.dbgTagRects} fps=${this.dbgFps} dc=${this.dbgDeferComp}`,
 		);
 		this.dbgT0 = now;
 		this.dbgFs = 0;
@@ -595,13 +625,14 @@ export class AbsoluteSectionManager {
 		this.dbgApplyMs = 0;
 		this.dbgRecalcMs = 0;
 		this.dbgRestoreMs = 0;
-		AbsoluteSectionManager.dbgTagMs = 0;
+		this.dbgTagMs = 0;
 		this.dbgScrollToCalls = 0;
 		this.dbgWheel = 0;
 		this.dbgStackCaptured = 0;
 		this.dbgSpam.clear();
-		AbsoluteSectionManager.dbgFps = dbgGlobalFrames;
-		AbsoluteSectionManager.dbgTagRects = 0;
+		this.dbgFps = dbgGlobalFrames;
+		this.dbgTagRects = 0;
+		this.dbgDeferComp = 0;
 		dbgGlobalFrames = 0;
 	}
 
@@ -651,8 +682,35 @@ export class AbsoluteSectionManager {
 		this.dbgRecalcMs += performance.now() - t;
 		t = performance.now();
 		this.layoutVersion++;
-		this.layout.restoreScrollAt(anchor, scrollTop);
+		if (this.isGestureActive()) {
+			// Phase 3b: skip the scrollTop compensation write while the gesture
+			// is active. Each write repositions the view to the same content
+			// point, but it also fires a scroll event that restarts the frame +
+			// IO loop (height change → recalc → scrollTop write → scroll event →
+			// frames → new loads — the cold-start churn where sev≈frames in the
+			// debug log). The anchor is left un-applied; the settle timer runs
+			// one compensation update once the gesture ends. The visual cost is
+			// that content shifts with each correction instead of being held
+			// still — masked by the scroll, and re-anchored at settle.
+			this.dbgDeferComp++;
+			this.armDeferredCompensation();
+		} else {
+			this.layout.restoreScrollAt(anchor, scrollTop);
+		}
 		this.dbgRestoreMs += performance.now() - t;
+	}
+
+	/** Run one update once the gesture settles so the compensation skipped
+	 *  during it is applied. Self-extending: if the gesture is still active
+	 *  when the timer fires, processUpdates re-skips and re-arms, so the first
+	 *  tick after the last movement compensates the accumulated corrections. */
+	private armDeferredCompensation(): void {
+		if (this.deferCompTimer) return;
+		this.deferCompTimer = window.setTimeout(() => {
+			this.deferCompTimer = 0;
+			if (this.destroyed) return;
+			this.scheduleUpdate();
+		}, GESTURE_DEFER_MS);
 	}
 
 	getOffset(path: string): number {
@@ -686,6 +744,10 @@ export class AbsoluteSectionManager {
 		if (this.rafId) {
 			cancelAnimationFrame(this.rafId);
 			this.rafId = 0;
+		}
+		if (this.deferCompTimer) {
+			window.clearTimeout(this.deferCompTimer);
+			this.deferCompTimer = 0;
 		}
 		this.containerWidthObserver.disconnect();
 		if (this.boundScrollHandler) {

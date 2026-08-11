@@ -512,6 +512,18 @@ export class TocController {
 	private onTagFrame = (): void => {
 		this.tagFrameRequested = false;
 		if (this.pendingTagHeadings.length === 0) return;
+		// Phase 3a: defer the rect reads while the user is actively scrolling.
+		// Each getBoundingClientRect on a section inside the huge transformed
+		// container forces a layout flush; inside a gesture that lands between
+		// scroll frames, exactly when the main thread is already overloaded.
+		// The line-based fallback keeps the active-heading highlight correct,
+		// and the settle resumes the drain (the re-requested frame runs once
+		// scroll events stop).
+		if (this.absoluteManager?.isGestureActive()) {
+			this.tagFrameRequested = true;
+			this.absoluteManager.requestFrame();
+			return;
+		}
 		const t0 = performance.now();
 		const timeLimit = t0 + TAG_MS_BUDGET;
 		let rects = 0;
@@ -538,12 +550,12 @@ export class TocController {
 				this.headingOffsets.set(item.tocIndex, headingRect.top - sectionRect.top);
 				this.positionsDirty = true;
 				rects++;
-				AbsoluteSectionManager.dbgTagRects++;
+				if (this.absoluteManager) this.absoluteManager.dbgTagRects++;
 			}
 			if (remaining.length > 0) stillPending.push({ sectionEl, toMeasure: remaining });
 		}
 		this.pendingTagHeadings = stillPending;
-		AbsoluteSectionManager.dbgTagMs += performance.now() - t0;
+		if (this.absoluteManager) this.absoluteManager.dbgTagMs += performance.now() - t0;
 		if (stillPending.length > 0) {
 			this.tagFrameRequested = true;
 			this.absoluteManager?.requestFrame();
