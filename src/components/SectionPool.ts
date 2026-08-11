@@ -1094,16 +1094,16 @@ export class SectionPool {
 		const clientHeight = this.host.getClientHeight();
 		const margin = OVERSCAN_TOP + this.host.loadMargin;
 		const primaryBottom = primary + clientHeight;
-		// Heavy sections (block math / mermaid) spend 100-260ms in the
-		// synchronous part of MarkdownRenderer.render. During an active gesture
-		// that stalls the main thread mid-scroll, and several enqueued at once
-		// freeze the page for hundreds of ms. While the gesture is fresh, render
-		// the cheap placeholder version instead (text with formula placeholders)
-		// and upgrade to the full render once it settles (scheduleDeferredDrain).
-		// A cached full DOM is preferred over the placeholder: remounting it is
-		// <1ms. Light sections keep rendering underneath, exactly as before.
+		// EXPERIMENT (2026-08-11): the heavy-section placeholder path
+		// (loadPlaceholder + upgrade-on-settle) is disabled — heavy notes now
+		// full-render even mid-gesture. Rationale: the Phase-3 fixes (no
+		// compensation scrollTop writes during a gesture, no ToC rect reads
+		// during a gesture) broke the feedback loop, so far fewer sections load
+		// concurrently and the 100-260ms math renders may now fit in the spare
+		// frames. If the stress-book cold start still janks, restore the
+		// placeholder branch and the upgrade machinery (they are kept, inert).
+		// `scrolling` below is still used by the content-pending deferral.
 		const scrolling = Date.now() - this.lastUserScrollTimestamp < HEAVY_DEFER_MS;
-		let placeholders = 0;
 		let staleDropped: string[] = [];
 		// shift() per item was O(n²) when a cold-start IO storm queued ~2000
 		// sections at once. Consume a prefix by index and remove it with one
@@ -1116,18 +1116,10 @@ export class SectionPool {
 			this.renderQueueSet.delete(path);
 			const data = this.host.sections.get(path);
 			if (!data || data.component) continue;
-			// The `heavy` flag is set by the async cachedRead in render() and can
-			// lag the first enqueue (reconcile/IO may fire a frame earlier). Fall
-			// back to a scan of the raw content when the flag hasn't landed yet,
-			// so a section is never full-rendered mid-gesture just because its
-			// read resolved a frame too late.
 			const raw = this.host.rawContent.get(path);
-			const heavy = data.heavy || (raw !== undefined && isHeavyContent(raw));
-			// Shared staleness gate, applied before the placeholder branch too:
-			// a full render of a far-drifted section is churn, and a placeholder
-			// of one is worse — the mount+measure would shift the layout for
-			// something offscreen. reconcileVisibleSections re-enqueues it the
-			// moment it actually re-enters the window, so dropping is safe.
+			// Shared staleness gate: a full render of a far-drifted section is
+			// churn. reconcileVisibleSections re-enqueues it the moment it
+			// actually re-enters the window, so dropping is safe.
 			if (isStaleRender(data.offset, data.height, primary, primaryBottom, margin)) {
 				// Only an out-of-band candidate pays for the live read.
 				const live = this.readLiveScrollTop();
@@ -1152,16 +1144,6 @@ export class SectionPool {
 				}
 				this.host.dbg('content-pending-force', path, data.deferralCount);
 			}
-			if (heavy && scrolling && !this.host.renderedDomCache.has(path)) {
-				this.dbgPlaceholders++;
-				placeholders++;
-				this.activeRenderCount++;
-				void this.loadPlaceholder(path).finally(() => {
-					this.activeRenderCount--;
-					this.drainQueue();
-				});
-				continue;
-			}
 			this.activeRenderCount++;
 			void this.loadSection(path).finally(() => {
 				this.activeRenderCount--;
@@ -1170,9 +1152,6 @@ export class SectionPool {
 		}
 		if (head > 0) {
 			this.renderQueue.splice(0, head);
-		}
-		if (placeholders > 0) {
-			this.scheduleDeferredDrain();
 		}
 		if (staleDropped.length > 0) {
 			const now = Date.now();
