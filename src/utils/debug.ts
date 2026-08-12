@@ -10,9 +10,12 @@ export class DebugLog {
 
 	private static readonly MAX = 2000;
 
-	/** Subscribers notified on every enable/disable flip (used to start/stop
-	 *  the global frame probe). */
+	/** One-shot subscribers notified on the next enable/disable flip (used to
+	 *  start the global frame probe on first enable). */
 	private static listeners: ((enabled: boolean) => void)[] = [];
+
+	/** Persistent subscribers notified on every enable/disable flip. */
+	private static changeListeners = new Set<(enabled: boolean) => void>();
 
 	static get enabled(): boolean {
 		return DebugLog._enabled;
@@ -31,6 +34,7 @@ export class DebugLog {
 		const listeners = DebugLog.listeners;
 		DebugLog.listeners = [];
 		for (const listener of listeners) listener(v);
+		for (const listener of DebugLog.changeListeners) listener(v);
 		return DebugLog._enabled;
 	}
 
@@ -49,6 +53,15 @@ export class DebugLog {
 		return () => {
 			const i = DebugLog.listeners.indexOf(listener);
 			if (i >= 0) DebugLog.listeners.splice(i, 1);
+		};
+	}
+
+	/** Persistent version of onChange: fires on every flip, not just the next
+	 *  one. Returns an unsubscribe function. */
+	static onEnabledChange(listener: (enabled: boolean) => void): () => void {
+		DebugLog.changeListeners.add(listener);
+		return () => {
+			DebugLog.changeListeners.delete(listener);
 		};
 	}
 

@@ -66,6 +66,11 @@ export class AbsoluteSectionManager {
 	private loadMargin: number;
 	private persistence: HeightPersistence;
 
+	/** True while the debug scrollTop/scrollTo probe is installed on the
+	 *  container. Installed only while DebugLog is enabled (see constructor). */
+	private scrollProbeInstalled = false;
+	private dbgProbeUnsub: (() => void) | null = null;
+
 	/** Theme-derived vertical gaps, owned by the SectionLayout. */
 	get themeSpacings(): ThemeSpacings {
 		return this.layout.themeSpacings;
@@ -184,6 +189,7 @@ export class AbsoluteSectionManager {
 	// (scroll anchoring, user input, scrollIntoView) bypass these JS hooks, so
 	// if `top` climbs while st/to are 0 the writer is external.
 	private installScrollWriterProbe(): void {
+		if (this.scrollProbeInstalled) return;
 		const el = this.scrollContainer;
 		// Debug probe: aliasing `this` is intentional here — the accessor
 		// functions below run with `this` = the element, not the manager.
@@ -227,6 +233,17 @@ export class AbsoluteSectionManager {
 		};
 		wrap('scrollTo', (el.scrollTo as (...a: unknown[]) => void).bind(el));
 		wrap('scrollBy', (el.scrollBy as (...a: unknown[]) => void).bind(el));
+		this.scrollProbeInstalled = true;
+	}
+
+	/** Undo installScrollWriterProbe: drop the instance-level overrides so the
+	 *  element falls back to the native Element.prototype accessors/methods. */
+	private removeScrollWriterProbe(): void {
+		const el = this.scrollContainer as unknown as Record<string, unknown>;
+		delete el.scrollTop;
+		delete el.scrollTo;
+		delete el.scrollBy;
+		this.scrollProbeInstalled = false;
 	}
 
 	private stackLabel(): string {
@@ -268,7 +285,17 @@ export class AbsoluteSectionManager {
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
 		ensureGlobalFrameProbe();
-		this.installScrollWriterProbe();
+		// The scrollTop writer probe is debug-only: never wrap the container's
+		// accessors in production. Install/uninstall as debug toggles, so the
+		// `st`/`writers` DBG fields work when logging is enabled later.
+		this.dbgProbeUnsub = DebugLog.onEnabledChange((enabled) => {
+			if (enabled) {
+				this.installScrollWriterProbe();
+			} else {
+				this.removeScrollWriterProbe();
+			}
+		});
+		if (DebugLog.enabled) this.installScrollWriterProbe();
 		this.scrollContainer.addEventListener(
 			'wheel',
 			() => {
@@ -740,6 +767,11 @@ export class AbsoluteSectionManager {
 
 	destroy(): void {
 		this.destroyed = true;
+		if (this.dbgProbeUnsub) {
+			this.dbgProbeUnsub();
+			this.dbgProbeUnsub = null;
+		}
+		this.removeScrollWriterProbe();
 		this.frameCallbacks.length = 0;
 		if (this.rafId) {
 			cancelAnimationFrame(this.rafId);
