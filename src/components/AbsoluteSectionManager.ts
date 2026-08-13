@@ -756,6 +756,12 @@ export class AbsoluteSectionManager {
 		return this.layout.getAllOffsets();
 	}
 
+	/** Raw file text held by the pool for already-read sections, or null when
+	 *  the file has not been read yet. Search falls back to cachedRead on null. */
+	getRawContent(path: string): string | null {
+		return this.rawContent.get(path) ?? null;
+	}
+
 	refreshSection(path: string): void {
 		this.pool.refreshSection(path);
 	}

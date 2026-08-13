@@ -624,6 +624,14 @@ export class SectionPool {
 		if (!data.placeholder && this.host.getFoldMode(path) !== 'full') {
 			const rendered = data.el.querySelector('.markdown-rendered');
 			if (rendered) {
+				// Never persist transient find marks in the cache: a section
+				// cached while a "find all" highlight was on it would remount
+				// with stale marks for an old query after the view scrolled
+				// away and back. clearFindMarks only walks the live container,
+				// so cached DOM must be stripped here, at the write.
+				for (const mark of Array.from(rendered.querySelectorAll('mark.book-search-current, mark.book-search-all'))) {
+					mark.replaceWith(...Array.from(mark.childNodes));
+				}
 				this.host.renderedDomCache.set(path, rendered as HTMLElement);
 			}
 		}

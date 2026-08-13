@@ -139,6 +139,39 @@ export default class BookViewPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'search-book',
+			name: 'Find in book',
+			callback: () => {
+				this.app.workspace.getActiveViewOfType(BookView)?.showFindBar();
+			},
+		});
+
+		// Ctrl/Cmd+F for the book view. The primary binding is the view's
+		// `scope` (registered in BookView), which runs through Obsidian's own
+		// hotkey pipeline even when a bound hotkey normally swallows DOM
+		// keydown events. This capture-phase listener is a layout-independent
+		// fallback (physical `KeyF`) for scopes that do not match on
+		// non-Latin keyboard layouts.
+		this.registerDomEvent(window, 'keydown', (evt) => {
+			if (!(evt.ctrlKey || evt.metaKey) || evt.code !== 'KeyF' || evt.shiftKey || evt.altKey) return;
+			const target = evt.target as HTMLElement | null;
+			if (!target) return;
+			const bv = this.app.workspace.getActiveViewOfType(BookView);
+			if (!bv) return;
+			if (target.closest('.book-find-bar')) {
+				evt.preventDefault();
+				evt.stopImmediatePropagation();
+				bv.showFindBar();
+				return;
+			}
+			if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+			if (!target.closest('.book-view-root')) return;
+			evt.preventDefault();
+			evt.stopImmediatePropagation();
+			bv.showFindBar();
+		}, { capture: true });
+
+		this.addCommand({
 			id: 'toggle-debug-logging',
 			name: 'Toggle debug logging',
 			callback: () => {
