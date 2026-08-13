@@ -1,5 +1,5 @@
 import { TocState } from './state';
-import { HEIGHT_PER_LINE } from '../components/AbsoluteSectionManager';
+import { HEIGHT_PER_LINE } from './types';
 import { pickActiveIndex } from '../utils/toc';
 
 /** How close to the panel edge the active row may get before the panel
@@ -37,9 +37,9 @@ export class TocSpy {
 				// rAF, before the offset writes.
 				if (s.tickScheduled) return;
 				s.tickScheduled = true;
-				s.absoluteManager?.requestFrame();
+				s.positionSource?.requestFrame();
 			};
-			s.absoluteManager?.addFrameCallback(this.onFrameTick);
+			s.positionSource?.addFrameCallback(this.onFrameTick);
 			s.scrollContainer.addEventListener('scroll', s.scrollHandler, { passive: true });
 		}
 
@@ -74,7 +74,7 @@ export class TocSpy {
 		// manager frame so onScrollTick's cached scrollTop read is fresh (the
 		// frame refreshes lastScrollTop before the callbacks run).
 		if (s.entries.length > 0) {
-			s.absoluteManager?.requestFrame();
+			s.positionSource?.requestFrame();
 		}
 	}
 
@@ -90,7 +90,7 @@ export class TocSpy {
 	 *  on scrollTop, so recomputing them was pure O(entries) waste per frame. */
 	updatePositionsIfDirty(): void {
 		const s = this.state;
-		const layoutVersion = s.absoluteManager?.getLayoutVersion() ?? -1;
+		const layoutVersion = s.positionSource?.getLayoutVersion() ?? -1;
 		if (!s.positionsDirty && layoutVersion === s.lastLayoutVersion) return;
 		s.positionsDirty = false;
 		s.lastLayoutVersion = layoutVersion;
@@ -99,7 +99,7 @@ export class TocSpy {
 
 	calculatePositions(): void {
 		const s = this.state;
-		if (!s.absoluteManager) return;
+		if (!s.positionSource) return;
 
 		const n = s.entries.length;
 		if (s.headingPositions.length !== n) {
@@ -113,7 +113,7 @@ export class TocSpy {
 			const entry = s.entries[i];
 			if (!entry) continue;
 			const within = s.headingOffsets.get(i);
-			s.headingPositions[i] = (s.absoluteManager.getOffset(entry.file.path) ?? 0)
+			s.headingPositions[i] = (s.positionSource.getOffset(entry.file.path) ?? 0)
 				+ (within ?? entry.line * HEIGHT_PER_LINE);
 		}
 	}
@@ -130,7 +130,7 @@ export class TocSpy {
 		// own writes), and a second read in the same frame forces a second
 		// layout flush — including on frames where processUpdates just dirtied
 		// the layout. The snapshot is from this same frame, so it is exact.
-		const scrollTop = s.absoluteManager?.getScrollTop() ?? s.scrollContainer.scrollTop;
+		const scrollTop = s.positionSource?.getScrollTop() ?? s.scrollContainer.scrollTop;
 
 		// find active heading by position
 		const viewportHeight = s.viewportHeight;
@@ -311,7 +311,7 @@ export class TocSpy {
 			// book has been still for CENTER_SCROLL_SETTLE_MS — measured from
 			// its last scroll event, so this is just past the moment the user
 			// stopped scrolling — then center once.
-			if (s.absoluteManager?.isGestureActive(CENTER_SCROLL_SETTLE_MS)) {
+			if (s.positionSource?.isGestureActive(CENTER_SCROLL_SETTLE_MS)) {
 				this.scheduleCenterScroll(index);
 				return;
 			}
@@ -325,7 +325,7 @@ export class TocSpy {
 
 	destroy(): void {
 		const s = this.state;
-		s.absoluteManager?.removeFrameCallback(this.onFrameTick);
+		s.positionSource?.removeFrameCallback(this.onFrameTick);
 		s.tickScheduled = false;
 		if (s.scrollHandler) {
 			s.scrollContainer.removeEventListener('scroll', s.scrollHandler);

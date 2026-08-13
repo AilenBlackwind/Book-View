@@ -1,6 +1,7 @@
 import { ItemView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
-import { AbsoluteSectionManager, HEIGHT_PER_LINE } from '../components/AbsoluteSectionManager';
+import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
+import { HEIGHT_PER_LINE } from '../toc/types';
 import { WheelAccelerator } from '../components/WheelAccelerator';
 import { showScriptMenu } from '../ui/ContextMenu';
 import { DebugLog } from '../utils/debug';

@@ -1,6 +1,6 @@
 import { TocState } from './state';
 import { TocSpy } from './spy';
-import { HEIGHT_PER_LINE } from '../components/AbsoluteSectionManager';
+import { HEIGHT_PER_LINE } from './types';
 
 /** Click-navigation to a ToC entry: jump the book to the heading, settle the
  *  scroll once async renders stop shifting the layout, and flash a highlight
@@ -11,12 +11,12 @@ export class TocNavigator {
 	async scrollToHeading(entryIndex: number): Promise<void> {
 		const s = this.state;
 		const entry = s.entries[entryIndex];
-		if (!entry || !s.absoluteManager) return;
+		if (!entry || !s.positionSource) return;
 
 		s.navigating = true;
 		s.isJumping = true;
 		try {
-			const sectionOffset = s.absoluteManager.getOffset(entry.file.path);
+			const sectionOffset = s.positionSource.getOffset(entry.file.path) ?? 0;
 			const estimatedY = sectionOffset + entry.line * HEIGHT_PER_LINE;
 
 			s.scrollContainer.scrollTo({ top: Math.max(0, estimatedY - 20), behavior: 'auto' });

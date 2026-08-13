@@ -9,8 +9,6 @@ import { estimateHeight } from '../utils/content';
 import type { ThemeSpacings } from '../utils/theme';
 import { DebugLog } from '../utils/debug';
 
-export const HEIGHT_PER_LINE = 25;
-
 // A scroll gesture counts as active for this long after the last scroll
 // activity (wheel/flick step, anchor restore, programmatic jump). While active,
 // layout-flush-heavy work is deferred: ToC heading rect reads (each forces a

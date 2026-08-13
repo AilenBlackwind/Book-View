@@ -19,7 +19,9 @@ export interface MenuProfile {
 	scripts: ScriptEntry[];
 }
 
-export type AutoExpandMode = 'expand-collapse-default' | 'only-expand' | 'expand-collapse-level' | 'disabled';
+import type { AutoExpandMode } from './toc/types';
+
+export type { AutoExpandMode } from './toc/types';
 
 export interface BookViewSettings {
 	tocShowFileNames: boolean;

@@ -81,7 +81,7 @@ export class TocMeasurer {
 		s.pendingTagHeadings.push({ sectionEl, toMeasure });
 		if (!s.tagFrameRequested) {
 			s.tagFrameRequested = true;
-			s.absoluteManager?.requestFrame();
+			s.positionSource?.requestFrame();
 		}
 	}
 
@@ -90,7 +90,7 @@ export class TocMeasurer {
 	setup(): void {
 		const s = this.state;
 		if (s.entries.length === 0) return;
-		s.absoluteManager?.addFrameCallback(this.onTagFrame);
+		s.positionSource?.addFrameCallback(this.onTagFrame);
 	}
 
 	/** Frame callback (registered in setup, runs after processUpdates):
@@ -113,9 +113,9 @@ export class TocMeasurer {
 		// The line-based fallback keeps the active-heading highlight correct,
 		// and the settle resumes the drain (the re-requested frame runs once
 		// scroll events stop).
-		if (s.absoluteManager?.isGestureActive()) {
+		if (s.positionSource?.isGestureActive()) {
 			s.tagFrameRequested = true;
-			s.absoluteManager.requestFrame();
+			s.positionSource.requestFrame();
 			return;
 		}
 		const t0 = performance.now();
@@ -144,21 +144,21 @@ export class TocMeasurer {
 				s.headingOffsets.set(item.tocIndex, headingRect.top - sectionRect.top);
 				s.positionsDirty = true;
 				rects++;
-				if (s.absoluteManager) s.absoluteManager.dbgTagRects++;
+				if (s.positionSource?.dbgTagRects !== undefined) s.positionSource.dbgTagRects++;
 			}
 			if (remaining.length > 0) stillPending.push({ sectionEl, toMeasure: remaining });
 		}
 		s.pendingTagHeadings = stillPending;
-		if (s.absoluteManager) s.absoluteManager.dbgTagMs += performance.now() - t0;
+		if (s.positionSource?.dbgTagMs !== undefined) s.positionSource.dbgTagMs += performance.now() - t0;
 		if (stillPending.length > 0) {
 			s.tagFrameRequested = true;
-			s.absoluteManager?.requestFrame();
+			s.positionSource?.requestFrame();
 		}
 	};
 
 	destroy(): void {
 		const s = this.state;
-		s.absoluteManager?.removeFrameCallback(this.onTagFrame);
+		s.positionSource?.removeFrameCallback(this.onTagFrame);
 		s.pendingTagHeadings = [];
 		s.tagFrameRequested = false;
 	}

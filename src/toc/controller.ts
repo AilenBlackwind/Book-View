@@ -1,6 +1,5 @@
 import type { App, TFile } from 'obsidian';
-import type { BookViewSettings } from '../settings';
-import type { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
+import type { TocSettings, HeadingPositionSource } from './types';
 import { TocState } from './state';
 import { TocBuilder } from './builder';
 import { TocWindow } from './window';
@@ -30,10 +29,10 @@ export class TocController {
 		files: TFile[],
 		app: App,
 		scrollContainer: HTMLElement,
-		settings: BookViewSettings | null,
-		absoluteManager: AbsoluteSectionManager | null,
+		settings: TocSettings | null,
+		positionSource: HeadingPositionSource | null,
 	) {
-		this.state = new TocState(containerEl, files, app, scrollContainer, settings, absoluteManager);
+		this.state = new TocState(containerEl, files, app, scrollContainer, settings, positionSource);
 		this.measurer = new TocMeasurer(this.state);
 		this.spy = new TocSpy(this.state);
 		this.navigator = new TocNavigator(this.state, this.spy);

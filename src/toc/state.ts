@@ -1,6 +1,5 @@
 import type { App, TFile } from 'obsidian';
-import type { BookViewSettings } from '../settings';
-import type { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
+import type { TocSettings, HeadingPositionSource } from './types';
 import type { TocEntry } from './entries';
 import type { TocWindow } from './window';
 import type { VirtualItem } from './virtual';
@@ -36,8 +35,8 @@ export class TocState {
 	files: TFile[];
 	app: App;
 	scrollContainer: HTMLElement;
-	settings: BookViewSettings | null;
-	absoluteManager: AbsoluteSectionManager | null;
+	settings: TocSettings | null;
+	positionSource: HeadingPositionSource | null;
 
 	entries: TocEntry[] = [];
 	/** Window renderer; set by the controller. */
@@ -126,15 +125,15 @@ export class TocState {
 		files: TFile[],
 		app: App,
 		scrollContainer: HTMLElement,
-		settings: BookViewSettings | null,
-		absoluteManager: AbsoluteSectionManager | null,
+		settings: TocSettings | null,
+		positionSource: HeadingPositionSource | null,
 	) {
 		this.containerEl = containerEl;
 		this.files = files;
 		this.app = app;
 		this.scrollContainer = scrollContainer;
 		this.settings = settings;
-		this.absoluteManager = absoluteManager;
+		this.positionSource = positionSource;
 	}
 
 	/** Reset build-scoped state before a rebuild. */
