@@ -515,10 +515,12 @@ export class AbsoluteSectionManager {
 	 *  work (ToC rect reads, scrollTop compensation) should be deferred. The
 	 *  pool's lastUserScrollAt is refreshed by every scroll event and by any
 	 *  frame-to-frame scrollTop movement, so a wheel flick keeps this true for
-	 *  the whole glide and it flips false ~GESTURE_DEFER_MS after the last
-	 *  movement. */
-	isGestureActive(): boolean {
-		return Date.now() - this.pool.lastUserScrollAt < GESTURE_DEFER_MS;
+	 *  the whole glide and it flips false ~withinMs after the last movement.
+	 *  Callers that only need "has the book stopped moving" can pass a short
+	 *  window; the default keeps the full defer for work that must wait for
+	 *  the whole settle. */
+	isGestureActive(withinMs: number = GESTURE_DEFER_MS): boolean {
+		return Date.now() - this.pool.lastUserScrollAt < withinMs;
 	}
 
 	scheduleUpdate(): void {

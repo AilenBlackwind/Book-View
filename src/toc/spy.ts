@@ -8,6 +8,12 @@ import { pickActiveIndex } from '../utils/toc';
  *  Two heading rows (~52px) keeps the pill near the edge without overflowing. */
 const ACTIVE_EDGE_MARGIN = 52;
 
+/** How long the book must have been still before the panel centers the active
+ *  row. Measured from the last book scroll event (noteUserScroll), so momentum
+ *  glides keep resetting it and the centering fires right after the wheel
+ *  gesture truly rests — not after the whole gesture-defer window (700ms). */
+const CENTER_SCROLL_SETTLE_MS = 50;
+
 /** Scroll spy: maps the book's scroll position to the active ToC entry,
  *  maintains per-entry heading positions, and drives the highlight + panel
  *  centering. Runs off the shared manager frame; never reads layout inside
@@ -302,8 +308,10 @@ export class TocSpy {
 			// on every heading change, and its panel-scroll frames (scroll
 			// events → row-window rebuilds) steal the book flick's frame
 			// budget, which reads as micro-jerks in the book. Wait until the
-			// book actually stopped moving, then center once.
-			if (s.absoluteManager?.isGestureActive()) {
+			// book has been still for CENTER_SCROLL_SETTLE_MS — measured from
+			// its last scroll event, so this is just past the moment the user
+			// stopped scrolling — then center once.
+			if (s.absoluteManager?.isGestureActive(CENTER_SCROLL_SETTLE_MS)) {
 				this.scheduleCenterScroll(index);
 				return;
 			}
@@ -312,7 +320,7 @@ export class TocSpy {
 			const top = s.virtualOffsets[item] ?? 0;
 			const target = Math.max(0, top - (s.tocViewportHeight - s.rowHeight) / 2);
 			s.containerEl.scrollTo({ top: target, behavior: 'smooth' });
-		}, 150);
+		}, CENTER_SCROLL_SETTLE_MS);
 	}
 
 	destroy(): void {
