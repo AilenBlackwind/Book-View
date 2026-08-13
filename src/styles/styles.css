@@ -57,8 +57,9 @@
 
 /* Fold chevrons are drawn as a pure CSS pseudo-element on the tagged heading:
    no per-heading span/SVG DOM nodes, so heading-dense notes (thousands of
-   headings) mount without building an icon node per heading. The heading
-   itself is the fold click target, matching Obsidian's own reading-mode fold.
+   headings) mount without building an icon node per heading. A click on the
+   chevron area toggles the fold (detected by position in AbsoluteSectionManager;
+   pseudo-elements are not click targets); clicks on the heading text do not.
    Only the hovered heading's chevron is revealed (an earlier `:has(...:hover)`
    rule lit up every chevron in the section on any heading hover). */
 .book-section-absolute h1,

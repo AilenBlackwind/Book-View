@@ -409,15 +409,28 @@ export class AbsoluteSectionManager {
 
 		this.boundClickHandler = (evt: MouseEvent) => {
 			const target = evt.target as HTMLElement;
-			// Links keep normal navigation; everything else inside a tagged
-			// heading toggles that heading's fold (the chevron is now a CSS
-			// pseudo-element, so the whole heading is the click target, like
-			// Obsidian's own reading-mode fold).
+			// Links keep normal navigation.
 			if (target.closest('a')) return;
 			const heading = target.closest<HTMLElement>('[data-fold-id]');
 			if (!heading) return;
 			const foldId = heading.dataset.foldId;
 			if (!foldId) return;
+			// The fold chevron is a CSS pseudo-element on the tagged heading
+			// (styles.css .book-section-absolute [data-fold-id]::before): a
+			// 16x16px box at left -19px, vertically centered. Pseudo-elements
+			// are not click targets — a click on one reports the heading itself
+			// — so detect the hit by position instead of giving the chevron a
+			// real DOM node (heading-dense notes must not mount an icon per
+			// heading). Clicks on the heading text no longer toggle the fold.
+			const rect = heading.getBoundingClientRect();
+			const chevronWidth = 16;
+			const chevronLeft = rect.left - 19;
+			const chevronCenterY = rect.top + rect.height / 2;
+			const chevronHit =
+				evt.clientX >= chevronLeft &&
+				evt.clientX <= chevronLeft + chevronWidth &&
+				Math.abs(evt.clientY - chevronCenterY) <= chevronWidth / 2;
+			if (!chevronHit) return;
 			evt.stopPropagation();
 			this.toggleFold(foldId);
 		};

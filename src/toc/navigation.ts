@@ -21,19 +21,34 @@ export class TocNavigator {
 
 			s.scrollContainer.scrollTo({ top: Math.max(0, estimatedY - 20), behavior: 'auto' });
 
-			const placeholder = s.scrollContainer.querySelector(
-				`.book-section-placeholder[data-path="${entry.file.path}"]`,
-			);
-			if (!(placeholder instanceof HTMLElement)) return;
-
-			let targetHeading: Element | null = null;
-			for (let attempt = 0; attempt < 30; attempt++) {
-				const headings = placeholder.querySelectorAll('h1, h2, h3, h4, h5, h6');
-				targetHeading = headings[entry.fileHeadingIndex] ?? null;
-				if (targetHeading) break;
-				await new Promise<void>((resolve) =>
-					window.requestAnimationFrame(() => resolve()),
+			let targetHeading: Element | null = s.positionSource.resolveHeadingEl?.(entry) ?? null;
+			if (!targetHeading) {
+				const placeholder = s.scrollContainer.querySelector(
+					`.book-section-placeholder[data-path="${entry.file.path}"]`,
 				);
+				if (placeholder instanceof HTMLElement) {
+					for (let attempt = 0; attempt < 30; attempt++) {
+						const headings = placeholder.querySelectorAll('h1, h2, h3, h4, h5, h6');
+						targetHeading = headings[entry.fileHeadingIndex] ?? null;
+						if (targetHeading) break;
+						await new Promise<void>((resolve) =>
+							window.requestAnimationFrame(() => resolve()),
+						);
+					}
+				} else if (s.positionSource?.resolveHeadingEl) {
+					// A content-based host (e.g. a reading view) lazy-renders the
+					// note: the estimated scroll just moved the viewport, and the
+					// target heading may take a frame or two to paint. Keep
+					// re-resolving until it appears so the exact settle below runs
+					// instead of leaving the estimate scroll uncorrected.
+					for (let attempt = 0; attempt < 30; attempt++) {
+						await new Promise<void>((resolve) =>
+							window.requestAnimationFrame(() => resolve()),
+						);
+						targetHeading = s.positionSource.resolveHeadingEl(entry) ?? null;
+						if (targetHeading) break;
+					}
+				}
 			}
 
 			if (targetHeading) {

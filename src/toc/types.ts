@@ -6,6 +6,8 @@
  * `HeadingPositionSource` and a `TocSettings` object.
  */
 
+import type { TocEntry } from './entries';
+
 export type AutoExpandMode = 'expand-collapse-default' | 'only-expand' | 'expand-collapse-level' | 'disabled';
 
 /** The ToC settings this module reads. A narrow subset of the host plugin's
@@ -47,6 +49,12 @@ export interface HeadingPositionSource {
 	 *  work (rect reads) should be deferred. A short window answers "has the
 	 *  book actually stopped moving". */
 	isGestureActive(withinMs?: number): boolean;
+	/** Optional: resolve the rendered heading DOM element for an entry
+	 *  directly. Hosts whose headings live in a plain rendered view (e.g. the
+	 *  reading-view adapter) implement this to skip the placeholder lookup;
+	 *  absent, the navigator falls back to the host's placeholder-based
+	 *  resolution. */
+	resolveHeadingEl?(entry: TocEntry): HTMLElement | null;
 	/** Debug counters for the deferred heading-rect measurement (optional —
 	 *  hosts without the debug harness may omit them). */
 	dbgTagRects?: number;
