@@ -1,5 +1,5 @@
 import { App, Modal, Notice, TFile } from 'obsidian';
-import type { TocEntry } from './components/TocController';
+import type { TocEntry } from './toc/entries';
 
 export interface Atom {
 	text: string;

@@ -1,5 +1,6 @@
 import { ItemView, WorkspaceLeaf } from 'obsidian';
-import { TocController, TocEntry } from '../components/TocController';
+import { TocController } from '../toc/controller';
+import type { TocEntry } from '../toc/entries';
 import { DebugLog } from '../utils/debug';
 import type { BookView } from './BookView';
 

@@ -2,7 +2,7 @@ import { WorkspaceLeaf } from 'obsidian';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from '../views/BookView';
 import { BookTocView, VIEW_TYPE_BOOK_TOC } from '../views/BookTocView';
 import { DebugLog } from '../utils/debug';
-import type { TocEntry } from './TocController';
+import type { TocEntry } from '../toc/entries';
 import type BookViewPlugin from '../main';
 
 /**
