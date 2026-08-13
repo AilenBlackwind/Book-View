@@ -223,6 +223,55 @@ describe('getFoldMode', () => {
 		});
 		expect(getFoldMode('f1', c)).toBe('heading');
 	});
+
+	it('is full when the own heading is folded and a parent is folded too', () => {
+		// Regression: folding the child first, then its parent, must hide the
+		// child's section entirely (Obsidian semantics) — not keep its stub
+		// lingering under the collapsed parent.
+		const c = makeCtx({
+			fileOrder: ['f1', 'f2'],
+			headings: [
+				{ id: 'a', path: 'f1', level: 1 },
+				{ id: 'b', path: 'f2', level: 2 },
+			],
+			folded: ['b', 'a'],
+		});
+		expect(getFoldMode('f2', c)).toBe('full');
+	});
+
+	it('is heading again when the parent fold is removed', () => {
+		const c = makeCtx({
+			fileOrder: ['f1', 'f2'],
+			headings: [
+				{ id: 'a', path: 'f1', level: 1 },
+				{ id: 'b', path: 'f2', level: 2 },
+			],
+			folded: ['b'],
+		});
+		expect(getFoldMode('f2', c)).toBe('heading');
+	});
+
+	it('ignores folded siblings and descendants of the own heading', () => {
+		const withDescendant = makeCtx({
+			fileOrder: ['f1'],
+			headings: [
+				{ id: 'a', path: 'f1', level: 1 },
+				{ id: 'c', path: 'f1', level: 2 },
+			],
+			folded: ['a', 'c'],
+		});
+		expect(getFoldMode('f1', withDescendant)).toBe('heading');
+
+		const withSibling = makeCtx({
+			fileOrder: ['f1'],
+			headings: [
+				{ id: 'a', path: 'f1', level: 1 },
+				{ id: 'b', path: 'f1', level: 1 },
+			],
+			folded: ['a', 'b'],
+		});
+		expect(getFoldMode('f1', withSibling)).toBe('heading');
+	});
 });
 
 describe('sectionNeedsFoldStub', () => {
@@ -256,6 +305,18 @@ describe('sectionNeedsFoldStub', () => {
 			fileOrder: ['f1', 'f2'],
 			headings: [{ id: 'a', path: 'f1', level: 1 }],
 			folded: ['a'],
+		});
+		expect(sectionNeedsFoldStub('f2', c)).toBe(false);
+	});
+
+	it('is false when the own heading is folded and a parent is folded too', () => {
+		const c = makeCtx({
+			fileOrder: ['f1', 'f2'],
+			headings: [
+				{ id: 'a', path: 'f1', level: 1 },
+				{ id: 'b', path: 'f2', level: 2 },
+			],
+			folded: ['b', 'a'],
 		});
 		expect(sectionNeedsFoldStub('f2', c)).toBe(false);
 	});

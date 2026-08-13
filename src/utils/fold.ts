@@ -87,6 +87,30 @@ export function isSectionHidden(path: string, ctx: FoldContext): boolean {
 	return false;
 }
 
+/** True when a heading sits under a folded *ancestor* (strictly above it — the
+ *  heading itself excluded). A directly-folded heading hidden under a folded
+ *  parent must not show a fold stub: folding a parent hides everything below
+ *  it, including previously folded children (Obsidian semantics). */
+export function hasFoldedAncestor(headingId: string, ctx: FoldContext): boolean {
+	if (ctx.foldedHeadings.size === 0) return false;
+
+	const info = ctx.headingIndexById.get(headingId);
+	if (!info) return false;
+
+	let currentLevel = info.level;
+	// Same backward scan as isFoldedSubtree: stop at the top (h1) since no
+	// heading shallower than level 1 can exist.
+	for (let i = info.idx - 1; i >= 0 && currentLevel > 1; i--) {
+		const entry = ctx.headingIndex[i];
+		if (!entry) continue;
+		if (entry.level < currentLevel) {
+			if (ctx.foldedHeadings.has(entry.id)) return true;
+			currentLevel = entry.level;
+		}
+	}
+	return false;
+}
+
 export type FoldMode = 'none' | 'heading' | 'full';
 
 /** How a hidden section should render:
@@ -98,21 +122,28 @@ export function getFoldMode(path: string, ctx: FoldContext): FoldMode {
 	if (!ctx.hasSection(path)) return 'full';
 	const ownHeading = ctx.firstHeadingByPath.get(path);
 	if (!ownHeading) return 'full';
-	// A section whose own first heading is folded always shows the heading
-	// stub. Never degrade to 'full' just because the stub height is not
-	// measured yet: 'full' unloads the DOM (heading + chevron vanish) and the
-	// deferred measurement then skips the unloaded section, permanently
-	// hiding the section with no way to expand it back.
+	// A section whose own first heading is folded shows the heading stub —
+	// unless the heading sits under a folded parent: folding a parent hides
+	// everything below it, including previously folded children, so the
+	// child's stub must not linger under the collapsed parent. Never degrade
+	// to 'full' just because the stub height is not measured yet: 'full'
+	// unloads the DOM (heading + chevron vanish) and the deferred measurement
+	// then skips the unloaded section, permanently hiding the section with no
+	// way to expand it back.
 	if (!ctx.foldedHeadings.has(ownHeading.id)) return 'full';
+	if (hasFoldedAncestor(ownHeading.id, ctx)) return 'full';
 	return 'heading';
 }
 
 /** True when the section shows a folded-heading stub: hidden AND its own
- *  first heading is directly folded. Only these need foldHeadingHeight. */
+ *  first heading is directly folded (and not under a folded parent). Only
+ *  these need foldHeadingHeight. */
 export function sectionNeedsFoldStub(path: string, ctx: FoldContext): boolean {
 	if (!isSectionHidden(path, ctx)) return false;
 	const ownHeading = ctx.firstHeadingByPath.get(path);
-	return !!ownHeading && ctx.foldedHeadings.has(ownHeading.id);
+	if (!ownHeading) return false;
+	if (hasFoldedAncestor(ownHeading.id, ctx)) return false;
+	return ctx.foldedHeadings.has(ownHeading.id);
 }
 
 /** First file index strictly after `start` whose section is not fully hidden,
