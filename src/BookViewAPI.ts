@@ -1,4 +1,5 @@
 import { App, Modal, Notice, TFile } from 'obsidian';
+import type { TocEntry } from './components/TocController';
 
 export interface Atom {
 	text: string;
@@ -86,14 +87,18 @@ export class BookViewAPI {
 		return this.context.selection;
 	}
 
+	/** ToC entries of the active book, resolved through the coordinator (the
+	 *  BookView no longer owns a ToC controller since the sidebar spike). */
+	private getEntries(): TocEntry[] {
+		return this.findActiveBookView()?.plugin?.tocCoordinator?.getEntries() ?? [];
+	}
+
 	async getAtomsUnderHeading(entryIndex?: number): Promise<Atom[]> {
 		const idx = entryIndex ?? this.context.entryIndex;
 		if (idx < 0) return this.getAllAtoms();
+		if (!this.findActiveBookView()) return [];
 
-		const bv = this.findActiveBookView();
-		if (!bv) return [];
-
-		const entries = bv.getTocEntries();
+		const entries = this.getEntries();
 		if (idx >= entries.length) return [];
 
 		const clicked = entries[idx];
@@ -115,9 +120,8 @@ export class BookViewAPI {
 	}
 
 	async getAllAtoms(): Promise<Atom[]> {
-		const bv = this.findActiveBookView();
-		if (!bv) return [];
-		const entries = bv.getTocEntries();
+		if (!this.findActiveBookView()) return [];
+		const entries = this.getEntries();
 		const uniquePaths = [...new Set(entries.map((e) => e.file.path))];
 		return this.readAtomsFromPaths(uniquePaths);
 	}

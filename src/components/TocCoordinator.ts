@@ -2,6 +2,7 @@ import { WorkspaceLeaf } from 'obsidian';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from '../views/BookView';
 import { BookTocView, VIEW_TYPE_BOOK_TOC } from '../views/BookTocView';
 import { DebugLog } from '../utils/debug';
+import type { TocEntry } from './TocController';
 import type BookViewPlugin from '../main';
 
 /**
@@ -37,6 +38,13 @@ export class TocCoordinator {
 	private getTocView(): BookTocView | null {
 		const view = this.getLeaf()?.view;
 		return view instanceof BookTocView ? view : null;
+	}
+
+	/** Entries of the ToC bound to the active book. Consumers outside the
+	 *  panel (BookViewAPI, user scripts) resolve headings through here instead
+	 *  of the BookView, which no longer owns a controller. */
+	getEntries(): TocEntry[] {
+		return this.getTocView()?.getEntries() ?? [];
 	}
 
 	open(focus = false): Promise<void> {

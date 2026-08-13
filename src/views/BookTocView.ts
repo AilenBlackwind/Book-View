@@ -1,5 +1,5 @@
 import { ItemView, WorkspaceLeaf } from 'obsidian';
-import { TocController } from '../components/TocController';
+import { TocController, TocEntry } from '../components/TocController';
 import { DebugLog } from '../utils/debug';
 import type { BookView } from './BookView';
 
@@ -34,6 +34,13 @@ export class BookTocView extends ItemView {
 
 	getBoundBook(): BookView | null {
 		return this.boundBook;
+	}
+
+	/** ToC entries of the bound book. Single source of truth for consumers
+	 *  outside the panel (BookViewAPI, scripts) — mirrors the entries of the
+	 *  controller currently bound to the active book. */
+	getEntries(): TocEntry[] {
+		return this.tocController?.getEntries() ?? [];
 	}
 
 	async onOpen(): Promise<void> {

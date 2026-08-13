@@ -1,7 +1,6 @@
 import { ItemView, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
-import { TocController, TocEntry } from '../components/TocController';
 import { WheelAccelerator } from '../components/WheelAccelerator';
 import { showScriptMenu } from '../ui/ContextMenu';
 import { DebugLog } from '../utils/debug';
@@ -19,7 +18,6 @@ export class BookView extends ItemView {
 	private static nextInstanceId = 0;
 	readonly instanceId = ++BookView.nextInstanceId;
 	absoluteManager: AbsoluteSectionManager | null = null;
-	private tocController: TocController | null = null;
 	private contentContainer: HTMLElement | null = null;
 	private wheelAccelerator: WheelAccelerator | null = null;
 	private currentFiles: TFile[] = [];
@@ -95,10 +93,6 @@ export class BookView extends ItemView {
 		// In-book ToC is disabled for the sidebar-toc spike; settings changes
 		// are applied to the right-rail ToC by the coordinator instead.
 		this.plugin?.tocCoordinator?.sync();
-	}
-
-	getTocEntries(): TocEntry[] {
-		return this.tocController?.getEntries() ?? [];
 	}
 
 	refreshAppliedAtoms(paths: string[]): void {
@@ -336,10 +330,6 @@ export class BookView extends ItemView {
 		if (this.absoluteManager) {
 			this.absoluteManager.destroy();
 			this.absoluteManager = null;
-		}
-		if (this.tocController) {
-			this.tocController.destroy();
-			this.tocController = null;
 		}
 		if (this.wheelAccelerator) {
 			this.wheelAccelerator.destroy();
