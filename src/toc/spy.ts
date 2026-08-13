@@ -41,9 +41,21 @@ export class TocSpy {
 		s.tocViewportHeight = s.containerEl.clientHeight;
 		s.tocResizeObserver?.disconnect();
 		s.tocResizeObserver = new ResizeObserver(() => {
-			s.tocViewportHeight = s.containerEl.clientHeight;
+			// The panel height drives the row-window extent; when it changes
+			// (sidebar auto-open animation, splitter drag) re-render the window
+			// so the virtual range covers the new viewport without waiting for
+			// the user to scroll the panel.
+			const height = s.containerEl.clientHeight;
+			if (height === s.tocViewportHeight) return;
+			s.tocViewportHeight = height;
+			s.window?.render();
 		});
 		s.tocResizeObserver.observe(s.containerEl);
+
+		// Re-render the row window with the freshly measured panel height: at
+		// mount the sidebar may still be animating open (clientHeight ~0), so
+		// the initial window only covered a few rows.
+		s.window?.render();
 
 		// Bootstrap: highlight first heading after build. Route through the
 		// manager frame so onScrollTick's cached scrollTop read is fresh (the
