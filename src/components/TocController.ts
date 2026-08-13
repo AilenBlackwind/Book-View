@@ -38,7 +38,6 @@ export class TocController {
 	 *  coordinates relative to the section top. Unknown (unloaded / fold-hidden)
 	 *  entries fall back to the line-based estimate. */
 	private headingOffsets: Map<number, number> = new Map();
-	onEntryContextMenu: ((entryIndex: number, evt: MouseEvent) => void) | null = null;
 
 	// --- Expand/collapse state ---
 	private userCollapsedSet: Set<number> = new Set();
@@ -142,10 +141,6 @@ export class TocController {
 		a.addEventListener('click', (evt) => {
 			evt.preventDefault();
 			void this.scrollToHeading(entryIdx);
-		});
-		a.addEventListener('contextmenu', (evt) => {
-			evt.preventDefault();
-			this.onEntryContextMenu?.(entryIdx, evt);
 		});
 	}
 
