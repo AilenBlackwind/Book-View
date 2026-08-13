@@ -62,6 +62,17 @@ export class TocState {
 	allRowsHidden = false;
 	rowHeight = 0;
 	fileRowHeight = 0;
+	/** false while the row-height probe measured nothing (panel not laid out
+	 *  yet, e.g. the sidebar was hidden at bind); the panel re-measures on
+	 *  first visibility instead of trusting a fallback height. */
+	rowHeightValid = false;
+	/** Set by the controller: called when the panel first becomes visible so
+	 *  the row-height probe can be re-run against a laid-out panel. */
+	onVisibilityGain: (() => void) | null = null;
+	/** Top padding of the panel scroll container (px). Rows render inside the
+	 *  content box, so keepActiveInView compensates for it when pinning to the
+	 *  edges; otherwise the top/bottom gaps would differ by the padding. */
+	tocPaddingTop = 0;
 	/** Per-entry leaf flag (no child heading follows). */
 	isLeaf: boolean[] = [];
 	/** Per-entry nesting-guide background, null when the entry has no guides. */

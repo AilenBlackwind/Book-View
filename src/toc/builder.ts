@@ -28,6 +28,7 @@ export class TocBuilder {
 		if (s.settings?.tocActiveColor) {
 			s.containerEl.style.setProperty('--bv-toc-active-color', s.settings.tocActiveColor);
 		}
+		s.tocPaddingTop = parseFloat(getComputedStyle(s.containerEl).paddingTop) || 0;
 
 		this.measureRowHeights();
 		this.computeIsLeaf();
@@ -93,7 +94,8 @@ export class TocBuilder {
 
 	/** Measure the fixed row heights (heading row + file row) from a probe
 	 *  appended to the connected panel, so the virtual offsets match the real
-	 *  rendered rows. */
+	 *  rendered rows. The probe can measure nothing (0) while the panel has no
+	 *  layout (sidebar hidden at bind); remeasure() re-runs it on visibility. */
 	private measureRowHeights(): void {
 		const s = this.state;
 		const probe = s.containerEl.createDiv({ cls: 'book-toc-list' });
@@ -107,9 +109,24 @@ export class TocBuilder {
 		const fileLi = probe.createEl('li', { cls: 'book-toc-file' });
 		fileLi.createDiv({ cls: 'book-toc-file-title', text: 'X' });
 
-		s.rowHeight = li.offsetHeight || 24;
-		s.fileRowHeight = fileLi.offsetHeight || 24;
+		const headingH = li.offsetHeight;
+		const fileH = fileLi.offsetHeight;
+		s.rowHeight = headingH || 26;
+		s.fileRowHeight = fileH || 34;
+		s.rowHeightValid = headingH > 0 && fileH > 0;
 		probe.remove();
+	}
+
+	/** Re-run the height probe once the panel has layout (sidebar opened after
+	 *  bind). No-op while the panel is still unhit; rebuilds the virtual data
+	 *  so offsets match the real rows instead of the fallback heights. */
+	remeasure(): void {
+		const s = this.state;
+		if (s.containerEl.clientHeight <= 0) return;
+		this.measureRowHeights();
+		if (!s.rowHeightValid) return;
+		s.rebuildVirtualData();
+		s.window?.render();
 	}
 
 	/** Per-entry leaf flag: an entry is a leaf when no deeper heading follows. */

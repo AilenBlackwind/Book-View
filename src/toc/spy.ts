@@ -2,6 +2,12 @@ import { TocState } from './state';
 import { HEIGHT_PER_LINE } from '../components/AbsoluteSectionManager';
 import { pickActiveIndex } from '../utils/toc';
 
+/** How close to the panel edge the active row may get before the panel
+ *  scrolls to keep it visible (keepActiveInView), and how far from the edge
+ *  it is then pinned. Larger = the pill roams less before the panel follows.
+ *  Two heading rows (~52px) keeps the pill near the edge without overflowing. */
+const ACTIVE_EDGE_MARGIN = 52;
+
 /** Scroll spy: maps the book's scroll position to the active ToC entry,
  *  maintains per-entry heading positions, and drives the highlight + panel
  *  centering. Runs off the shared manager frame; never reads layout inside
@@ -48,6 +54,7 @@ export class TocSpy {
 			const height = s.containerEl.clientHeight;
 			if (height === s.tocViewportHeight) return;
 			s.tocViewportHeight = height;
+			if (height > 0 && !s.rowHeightValid) s.onVisibilityGain?.();
 			s.window?.render();
 		});
 		s.tocResizeObserver.observe(s.containerEl);
@@ -142,6 +149,13 @@ export class TocSpy {
 		// collapsed), fall back to the nearest visible ancestor.
 		const highlightIndex = this.visibleAncestor(bestIndex, mode !== 'disabled');
 		this.updateHighlight(highlightIndex);
+		// During a fast flick the active row can leave the panel viewport and
+		// the pill vanishes until the settle-centering runs. Pin it back with
+		// an instant scrollTop write (no smooth animation — that is what stole
+		// the book's frame budget), so the indicator stays visible while the
+		// gesture is still moving. Runs only when the row actually crosses an
+		// edge, so it is one cheap write per heading change.
+		this.keepActiveInView(highlightIndex);
 
 		// Center the active item once the scroll settles. Centering inside the
 		// scroll frame both forced a layout read (li.offsetTop) and restarted a
@@ -245,6 +259,35 @@ export class TocSpy {
 		this.updateHighlight(this.visibleAncestor(s.activeEntryIndex, mode !== 'disabled'));
 	}
 
+	/** Write-only scroll to keep the active row inside the panel viewport.
+	 *  Unlike scheduleCenterScroll this is an instant scrollTop write, so it
+	 *  never starts an animation: a row pinned near an edge stays rendered
+	 *  (edge + overscan) and the pill stays visible during a fast flick
+	 *  without per-frame panel churn. Pure virtual-offset arithmetic — no
+	 *  layout reads. The panel reacts when the row approaches an edge within
+	 *  ACTIVE_EDGE_MARGIN and pins it that far from the edge, so the pill
+	 *  never slides all the way out of the visible area. */
+	private keepActiveInView(index: number): void {
+		const s = this.state;
+		if (index < 0 || s.tocViewportHeight <= 0) return;
+		const item = s.entryToItem[index];
+		if (item === undefined || item < 0) return;
+		const top = s.virtualOffsets[item] ?? 0;
+		const bottom = top + s.rowHeight;
+		const scrollTop = s.containerEl.scrollTop;
+		const viewport = s.tocViewportHeight;
+		const pad = s.tocPaddingTop;
+		// Clamp so tiny panels can't oscillate between the two branches.
+		const margin = Math.min(ACTIVE_EDGE_MARGIN, viewport * 0.25);
+		if (top < scrollTop + margin - pad) {
+			s.containerEl.scrollTop = Math.max(0, top + pad - margin);
+		} else if (bottom > scrollTop + viewport - margin - pad) {
+			const total = s.virtualOffsets[s.virtualOffsets.length - 1] ?? 0;
+			const max = Math.max(0, total - viewport);
+			s.containerEl.scrollTop = Math.min(max, bottom - viewport + margin + pad);
+		}
+	}
+
 	/** Write-only scroll centering, run once after the scroll settles. Computes
 	 *  the target from the virtual offsets (fixed row heights) and the cached
 	 *  panel height — no layout read. Runs in a macrotask so the panel scroll
@@ -254,6 +297,16 @@ export class TocSpy {
 		window.clearTimeout(s.centerScrollTimer);
 		s.centerScrollTimer = window.setTimeout(() => {
 			if (index < 0 || s.tocViewportHeight <= 0) return;
+			// The book may still be gliding after the wheel gesture ended. A
+			// smooth panel scroll started then would be cancelled and restarted
+			// on every heading change, and its panel-scroll frames (scroll
+			// events → row-window rebuilds) steal the book flick's frame
+			// budget, which reads as micro-jerks in the book. Wait until the
+			// book actually stopped moving, then center once.
+			if (s.absoluteManager?.isGestureActive()) {
+				this.scheduleCenterScroll(index);
+				return;
+			}
 			const item = s.entryToItem[index];
 			if (item === undefined || item < 0) return;
 			const top = s.virtualOffsets[item] ?? 0;

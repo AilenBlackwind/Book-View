@@ -39,6 +39,7 @@ export class TocController {
 		this.navigator = new TocNavigator(this.state, this.spy);
 		this.builder = new TocBuilder(this.state, this.navigator);
 		this.window = new TocWindow(this.state, this.builder);
+		this.state.onVisibilityGain = () => this.builder.remeasure();
 		this.state.window = this.window;
 		// A window render re-creates the row elements; re-apply the highlight so
 		// the pill is re-hosted into the active row instead of a detached one.
