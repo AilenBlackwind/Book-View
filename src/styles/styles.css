@@ -223,6 +223,15 @@
 .book-section-absolute .markdown-rendered > [class*="el-"]:first-child * {
 	margin-top: 0 !important;
 	margin-block-start: 0 !important;
+}
+
+/* Zero the first block's top padding, but keep it for a leading callout:
+   the callout's padding is part of its own box (background + radius), and
+   stripping it would push the title flush against the note's top edge. */
+.book-section-absolute .markdown-rendered > :first-child:not(.callout),
+.book-section-absolute .markdown-rendered > :first-child:not(.callout) *:not(.callout),
+.book-section-absolute .markdown-rendered > [class*="el-"]:first-child:not(.callout),
+.book-section-absolute .markdown-rendered > [class*="el-"]:first-child *:not(.callout) {
 	padding-top: 0 !important;
 }
 
@@ -231,6 +240,15 @@
 .book-section-absolute .markdown-rendered > [class*="el-"]:last-child * {
 	margin-bottom: 0 !important;
 	margin-block-end: 0 !important;
+}
+
+/* Same for the trailing block's bottom padding: a callout at the very end
+   of a note must keep its bottom padding or its last line is clipped flush
+   against the callout's bottom border. */
+.book-section-absolute .markdown-rendered > :last-child:not(.callout),
+.book-section-absolute .markdown-rendered > :last-child:not(.callout) *:not(.callout),
+.book-section-absolute .markdown-rendered > [class*="el-"]:last-child:not(.callout),
+.book-section-absolute .markdown-rendered > [class*="el-"]:last-child *:not(.callout) {
 	padding-bottom: 0 !important;
 }
 

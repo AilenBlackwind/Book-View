@@ -30,11 +30,41 @@ export function estimateHeight(text: string): number {
 			estimated += 48 - (heading[1]?.length ?? 1) * 2;
 			continue;
 		}
-		if (/^>\s?\[!/.test(trimmed)) {
-			estimated += 48; // callout header
+		if (trimmed.startsWith('>')) {
+			// Blockquote / callout: strip the quote prefixes and charge the
+			// content like the same markdown rendered outside the quote. The
+			// old flat 26px per `>` line treated a wrapped callout paragraph
+			// as one rendered line, so callouts with long lines, images, or
+			// tables were under-estimated by hundreds of px — the note box
+			// ended above a trailing callout's text and clipped it. Wrapped
+			// lines (chars / 85) and the callout's own padding make the
+			// estimate land at or above the real height until the resize
+			// observer corrects it.
+			const content = trimmed.replace(/^(>\s*)+/, '');
+			if (content.length === 0) {
+				estimated += 16; // blank quote line
+				continue;
+			}
+			if (/^\[!/.test(content)) {
+				// Callout header: title row + the callout's top/bottom padding.
+				// A long title wraps like any other text.
+				const titleLines = Math.max(1, Math.ceil(content.length / 85));
+				estimated += 48 + (titleLines - 1) * 24;
+				continue;
+			}
+			if (/!\[.*?\]\(.*?\)|!\[\[.*?\]\]/.test(content)) {
+				estimated += 300;
+				continue;
+			}
+			if (/^#{1,6}\s/.test(content)) {
+				const lvl = content.indexOf('#');
+				estimated += 48 - (lvl + 1) * 2;
+				continue;
+			}
+			estimated += Math.ceil(content.length / 85) * 24;
 			continue;
 		}
-		if (/^(-|\*|\+|\d+\.)\s/.test(trimmed) || trimmed.startsWith('>')) {
+		if (/^(-|\*|\+|\d+\.)\s/.test(trimmed)) {
 			estimated += 26;
 			continue;
 		}
