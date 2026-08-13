@@ -913,7 +913,8 @@
 	user-select: none;
 }
 
-.book-find-bar .book-find-btn {
+.book-find-bar .book-find-btn,
+.book-find-bar .book-find-all {
 	width: 24px;
 	height: 24px;
 	padding: 0;
@@ -921,35 +922,36 @@
 	align-items: center;
 	justify-content: center;
 	border: none;
-	border-radius: var(--radius-s);
+	border-radius: 0;
 	background: transparent;
+	box-shadow: none;
 	color: var(--text-muted);
 	cursor: pointer;
 }
 
-.book-find-bar .book-find-btn:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
+.book-find-bar button:focus-visible {
+	box-shadow: none;
 }
 
-.book-find-bar .book-find-all {
-	padding: 4px 8px;
-	border: none;
-	border-radius: var(--radius-s);
-	background: transparent;
-	color: var(--text-muted);
-	cursor: pointer;
-	font-size: var(--font-ui-small);
+/* Icon-only glyphs: pin size/stroke instead of Obsidian's --icon-size
+   defaults and don't let the SVG intercept hover (tooltip needs the
+   button as target). */
+.book-find-bar button .svg-icon {
+	width: 18px;
+	height: 18px;
+	stroke-width: 2px;
+	pointer-events: none;
 }
 
+.book-find-bar .book-find-btn:hover,
 .book-find-bar .book-find-all:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
 .book-find-bar .book-find-all.is-active {
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
+	background: var(--background-modifier-active-hover);
+	color: var(--text-normal);
 }
 
 /* Current match + "find all" highlights inside rendered sections */

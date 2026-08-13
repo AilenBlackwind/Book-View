@@ -40,7 +40,8 @@ export class FindBar {
 		setIcon(nextBtn, 'chevron-down');
 		nextBtn.addEventListener('click', () => this.cb.onNext());
 
-		this.findAllBtn = this.el.createEl('button', { cls: 'book-find-all', text: 'Find all' });
+		this.findAllBtn = this.el.createEl('button', { cls: 'book-find-all', attr: { 'aria-label': 'Find all' } });
+		setIcon(this.findAllBtn, 'file-text');
 		this.findAllBtn.addEventListener('click', () => this.cb.onToggleFindAll());
 
 		const closeBtn = this.el.createEl('button', { cls: 'book-find-btn', attr: { 'aria-label': 'Close' } });
