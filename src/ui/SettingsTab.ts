@@ -3,6 +3,8 @@ import type BookViewPlugin from '../main';
 import type { ModifierConfig, MenuProfile } from '../settings';
 import { CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
 
+type SettingsSection = 'toc' | 'menus' | 'general';
+
 let _defaultColor: string | null = null;
 
 function getDefaultColor(): string {
@@ -23,6 +25,7 @@ function getDefaultColor(): string {
 
 export class BookViewSettingTab extends PluginSettingTab {
 	plugin: BookViewPlugin;
+	private activeSection: SettingsSection = 'toc';
 
 	constructor(app: App, plugin: BookViewPlugin) {
 		super(app, plugin);
@@ -33,11 +36,49 @@ export class BookViewSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl)
-			.setName('Table of contents')
-			.setHeading();
+		const tabBar = containerEl.createDiv({ cls: 'bv-settings-tabs' });
 
-		new Setting(containerEl)
+		const sections: Array<{ id: SettingsSection; label: string }> = [
+			{ id: 'general', label: 'General' },
+			{ id: 'toc', label: 'Table of contents' },
+			{ id: 'menus', label: 'Context menus' },
+		];
+
+		const sectionEls: Record<SettingsSection, HTMLElement> = {
+			toc: containerEl.createDiv({ cls: 'bv-settings-section' }),
+			menus: containerEl.createDiv({ cls: 'bv-settings-section' }),
+			general: containerEl.createDiv({ cls: 'bv-settings-section' }),
+		};
+
+		for (const section of sections) {
+			const tab = tabBar.createEl('button', { cls: 'bv-settings-tab', text: section.label });
+			tab.dataset.tab = section.id;
+			tab.addEventListener('click', () => this.showSection(section.id, tabBar, sectionEls));
+		}
+
+		this.renderTocSettings(sectionEls.toc);
+		this.renderMenuSettings(sectionEls.menus);
+		this.renderGeneralSettings(sectionEls.general);
+
+		this.showSection(this.activeSection, tabBar, sectionEls);
+	}
+
+	private showSection(
+		id: SettingsSection,
+		tabBar: HTMLElement,
+		sectionEls: Record<SettingsSection, HTMLElement>,
+	): void {
+		this.activeSection = id;
+		tabBar.querySelectorAll<HTMLElement>('.bv-settings-tab').forEach((tab) => {
+			tab.toggleClass('is-active', tab.dataset.tab === id);
+		});
+		for (const [secId, el] of Object.entries(sectionEls) as Array<[SettingsSection, HTMLElement]>) {
+			el.toggleClass('is-active', secId === id);
+		}
+	}
+
+	private renderTocSettings(el: HTMLElement): void {
+		new Setting(el)
 			.setName('Auto-open for books')
 			.setDesc('Show the table of contents in the right sidebar automatically whenever a book is open. When disabled, the toc opens only via the "toggle book toc in right sidebar" command.')
 			.addToggle((toggle) =>
@@ -49,7 +90,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Focus toc when opening a book')
 			.setDesc('Make the toc panel the active view when switching to a book. When disabled, the panel opens but the book stays active.')
 			.addToggle((toggle) =>
@@ -61,7 +102,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Show file names')
 			.setDesc('Display file names as section headers in the table of contents.')
 			.addToggle((toggle) =>
@@ -73,7 +114,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Nesting guides')
 			.setDesc('Display vertical guide lines from headings to show nesting depth.')
 			.addToggle((toggle) =>
@@ -85,7 +126,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Render Markdown')
 			.setDesc('Render bold, italic, code and other inline Markdown in headings instead of showing raw syntax.')
 			.addToggle((toggle) =>
@@ -97,7 +138,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Active heading color')
 			.setDesc('Color of the highlight behind the active heading. Leave empty for the default accent color.')
 			.addColorPicker((picker) =>
@@ -118,7 +159,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 				});
 			});
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Default collapsed level')
 			.setDesc('Headings at this level and deeper are collapsed when opening a book. Set to off to disable.')
 			.addDropdown((dd) =>
@@ -137,7 +178,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Auto expand')
 			.setDesc('Auto expand and collapse headings when scrolling and cursor position change.')
 			.addDropdown((dropdown) =>
@@ -152,12 +193,14 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+	}
 
-		new Setting(containerEl)
+	private renderGeneralSettings(el: HTMLElement): void {
+		new Setting(el)
 			.setName('Reading')
 			.setHeading();
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Lazy load margin')
 			.setDesc('How many pixels above and below the viewport to pre-load sections. Increase for slower devices, decrease for faster ones.')
 			.addSlider((slider) =>
@@ -171,11 +214,11 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Wheel flick')
 			.setHeading();
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Wheel flick acceleration')
 			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks.')
 			.addToggle((toggle) =>
@@ -187,7 +230,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Wheel flick strength')
 			.setDesc('Total scroll distance per notch, as a multiple of the native amount.')
 			.addSlider((slider) =>
@@ -201,7 +244,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		new Setting(el)
 			.setName('Wheel flick smoothness')
 			.setDesc('How long the flick glides. Higher values glide longer.')
 			.addSlider((slider) =>
@@ -215,8 +258,11 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		this.renderSingleModifier(containerEl, 'Popout editor shortcut', 'Modifier keys required to open the native editor in a popout window on double-click.', 'editorModifiers');
-		this.renderMenuProfiles(containerEl);
+		this.renderSingleModifier(el, 'Popout editor shortcut', 'Modifier keys required to open the native editor in a popout window on double-click.', 'editorModifiers');
+	}
+
+	private renderMenuSettings(el: HTMLElement): void {
+		this.renderMenuProfiles(el);
 	}
 
 	private applyTocActiveColor(color: string): void {
@@ -264,10 +310,6 @@ export class BookViewSettingTab extends PluginSettingTab {
 	}
 
 	private renderMenuProfiles(containerEl: HTMLElement): void {
-		new Setting(containerEl)
-			.setName('Menu profiles')
-			.setHeading();
-
 		containerEl.createEl('p', {
 			text: 'Each profile is an independent right-click menu with its own modifier shortcut and scripts. Right-click with the matching modifiers to open that profile\'s menu.',
 			cls: 'setting-item-description',

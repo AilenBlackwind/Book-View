@@ -693,6 +693,45 @@
 	overflow-y: auto;
 }
 
+/* Settings: tab bar */
+.bv-settings-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	padding-bottom: 12px;
+	margin-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bv-settings-tab {
+	padding: 6px 12px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-s);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+}
+
+.bv-settings-tab:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.bv-settings-tab.is-active {
+	background: var(--background-modifier-active-hover);
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border);
+}
+
+.bv-settings-section {
+	display: none;
+}
+
+.bv-settings-section.is-active {
+	display: block;
+}
+
 /* Settings: modifier key row */
 .bv-mod-row {
 	display: flex;
