@@ -86,7 +86,10 @@
 	mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 18 15 12 9 6'/></svg>") center / contain no-repeat;
 	opacity: 0;
 	cursor: pointer;
-	transition: opacity 150ms ease;
+	/* No opacity transition: the chevron is a mask-painted pseudo-element, so
+	   an opacity fade cannot be composited and runs ~150ms on the main thread
+	   (a 163ms `Animating opacity ::before` bar per hover / per folded section
+	   mount). Instant show/hide removes the main-thread animation entirely. */
 }
 
 .book-section-absolute [data-fold-id]:hover::before,
@@ -118,6 +121,28 @@
 	   node stable, firing a scroll event per adjustment and re-entering the
 	   layout loop. The plugin restores its own anchor (restoreScrollAt). */
 	overflow-anchor: none !important;
+}
+
+/* Core's node-inserted animation cost (micro-freeze fix). The 0.01ms
+   outline-color "flash" is Obsidian's DOM-insertion signal that mermaid and
+   the enhancer hook onto; inside the huge transformed book container the
+   uncompositable outline-color falls back to main-thread paint of the whole
+   subtree (~12-35ms per insert). Callouts already carry rendered content, so
+   the signal is dropped for them; everything else keeps the signal (events
+   must still fire) but as a no-op so nothing gets painted. outline-color is
+   inherited, so even an identical from/to forces a style recalc of every
+   descendant (the mermaid SVG's whole node tree) — opacity is not inherited,
+   so an identical opacity from/to still fires the events but only re-resolves
+   the element's own style. The keyframes override is inherently global
+   (keyframes cannot be scoped), but identical from/to values are invisible
+   everywhere. */
+@keyframes node-inserted {
+	from { opacity: 1; }
+	to { opacity: 1; }
+}
+
+.book-content-container .callout {
+	animation-name: none !important;
 }
 
 .book-toc-container {
