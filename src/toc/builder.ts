@@ -16,6 +16,16 @@ const GUIDE_POSITIONS = [8, 20, 32, 44, 56, 68];
  * only the visible window, so there are no eternal DOM arrays.
  */
 export class TocBuilder {
+	/** Rendered label span per entry, cached so a row-window rebuild clones the
+	 *  label (cheap) instead of re-parsing the heading markdown through a
+	 *  DOMParser for every re-created row. Populated on first render; keyed by
+	 *  entry index, reset when the builder is re-created for a new book. */
+	private labelCache = new Map<number, HTMLElement>();
+	/** The tocRenderMarkdown mode the cache was built with; a settings toggle
+	 *  mid-session clears the cache so rebuilt rows use the new mode instead of
+	 *  cloning labels parsed under the old one. */
+	private cachedMarkdownMode: boolean | null = null;
+
 	constructor(private state: TocState, private navigator: TocNavigator) {}
 
 	build(): void {
@@ -70,7 +80,18 @@ export class TocBuilder {
 				'data-level': String(entry.level),
 			},
 		});
-		renderHeadingLabel(a, entry.text, s.settings?.tocRenderMarkdown ?? false);
+		const renderMarkdown = s.settings?.tocRenderMarkdown ?? false;
+		if (this.cachedMarkdownMode !== renderMarkdown) {
+			this.labelCache.clear();
+			this.cachedMarkdownMode = renderMarkdown;
+		}
+		let label = this.labelCache.get(entryIndex);
+		if (label) {
+			a.appendChild(label.cloneNode(true));
+		} else {
+			label = renderHeadingLabel(a, entry.text, renderMarkdown);
+			this.labelCache.set(entryIndex, label);
+		}
 		a.addEventListener('click', (evt) => {
 			evt.preventDefault();
 			void this.navigator.scrollToHeading(entryIndex);

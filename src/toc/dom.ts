@@ -2,8 +2,9 @@ import { renderInlineMarkdown, stripMarkdown } from '../utils/renderInlineMarkdo
 
 /** Render a heading's label into `parent`. With the render-markdown setting
  *  on, the inline markdown is parsed through a DOMParser so tags/bold/italic/
- *  code become real DOM nodes; otherwise a plain stripped-text span. */
-export function renderHeadingLabel(parent: HTMLElement, text: string, renderMarkdown: boolean): void {
+ *  code become real DOM nodes; otherwise a plain stripped-text span. Returns
+ *  the created span so callers can cache it and clone on later row rebuilds. */
+export function renderHeadingLabel(parent: HTMLElement, text: string, renderMarkdown: boolean): HTMLElement {
 	if (renderMarkdown) {
 		const span = parent.createSpan();
 		const html = renderInlineMarkdown(text);
@@ -11,7 +12,7 @@ export function renderHeadingLabel(parent: HTMLElement, text: string, renderMark
 		while (doc.body.firstChild) {
 			span.appendChild(doc.body.firstChild);
 		}
-	} else {
-		parent.createSpan({ text: stripMarkdown(text) });
+		return span;
 	}
+	return parent.createSpan({ text: stripMarkdown(text) });
 }

@@ -71,6 +71,22 @@ export class TocWindow {
 		const viewport = s.tocViewportHeight > 0 ? s.tocViewportHeight : s.containerEl.clientHeight;
 		const scrollTop = s.containerEl.scrollTop;
 
+		// Lazy window: the rendered range only has to *cover* the visible one
+		// (it already spans OVERSCAN rows past it), so a scroll that stays
+		// inside the rendered range is a no-op instead of a full row rebuild.
+		// Wheel scrolling moves a few rows per event, so this turns per-event
+		// rebuilds into one per ~OVERSCAN rows — the dominant panel-scroll cost
+		// is DOM churn, not the range math. Row screen positions stay exact
+		// (absolute list + virtual offsets), so the lag is invisible until the
+		// scroll reaches the window edge, where a rebuild re-centers it.
+		if (
+			this.renderedItems === items &&
+			(offsets[this.startIndex] ?? 0) <= scrollTop &&
+			scrollTop + viewport <= (offsets[this.endIndex] ?? Infinity)
+		) {
+			return;
+		}
+
 		let start = firstItemAt(offsets, scrollTop, n);
 		let end = firstItemAfter(offsets, scrollTop + viewport, n);
 		start = Math.max(0, start - OVERSCAN);
