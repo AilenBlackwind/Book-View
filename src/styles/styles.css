@@ -360,8 +360,10 @@
 	height: 100%;
 }
 
-/* CSS-drawn chevron (no SVG): border corner rotated to point right when
-   collapsed, down when expanded. */
+/* Inline SVG chevron: points down when the section is open, right when
+   collapsed — same convention as the book's fold chevrons (open = down). The
+   glyph is centered in its box, so the rotation turns in place (no optical
+   shift like the old border-L pseudo element). */
 .book-toc-chevron {
 	width: 16px;
 	height: 100%;
@@ -374,13 +376,14 @@
 	justify-content: center;
 }
 
-.book-toc-chevron::before {
-	content: '';
-	width: 6px;
-	height: 6px;
-	border-right: 1.5px solid currentColor;
-	border-bottom: 1.5px solid currentColor;
-	transform: rotate(-45deg);
+.book-toc-chevron svg {
+	width: 12px;
+	height: 12px;
+	display: block;
+	/* Raised ~2px: the chevron glyph's optical bottom hangs below the heading
+	   text's baseline band. Applied in both states so the open↔collapsed
+	   rotation still turns around the same center. */
+	transform: translateY(-2px) rotate(90deg);
 	transition: transform 150ms ease;
 }
 
@@ -388,8 +391,8 @@
 	color: var(--text-normal);
 }
 
-.book-toc-heading.book-toc-collapsed .book-toc-chevron::before {
-	transform: rotate(45deg);
+.book-toc-heading.book-toc-collapsed .book-toc-chevron svg {
+	transform: translateY(-2px) rotate(0deg);
 }
 
 .book-toc-heading.book-toc-leaf .book-toc-chevron {

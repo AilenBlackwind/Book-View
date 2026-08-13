@@ -64,8 +64,24 @@ export class TocBuilder {
 
 		const inner = li.createDiv({ cls: 'book-toc-heading-inner' });
 
-		// CSS-drawn chevron (no SVG setIcon): the span is only a click target.
+		// Inline SVG chevron: currentColor inherits the row's text color and the
+		// glyph is centered in its box, so rotating it between the open (down)
+		// and collapsed (right) states turns it in place — the old border-L
+		// pseudo element had its optical center ~2px off the box center, which
+		// made it sit crooked against the heading text and shift when rotated.
+		// Orientation matches the book's fold chevrons: open points down.
 		const chevron = inner.createSpan({ cls: 'book-toc-chevron' });
+		const chevronSvg = chevron.createSvg('svg', { attr: { viewBox: '0 0 16 16' } });
+		chevronSvg.createSvg('path', {
+			attr: {
+				d: 'M5 4l4 4-4 4',
+				fill: 'none',
+				stroke: 'currentColor',
+				'stroke-width': '2',
+				'stroke-linecap': 'round',
+				'stroke-linejoin': 'round',
+			},
+		});
 		chevron.addEventListener('click', (evt) => {
 			evt.preventDefault();
 			evt.stopPropagation();
