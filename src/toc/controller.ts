@@ -3,6 +3,7 @@ import type { BookViewSettings } from '../settings';
 import type { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { TocState } from './state';
 import { TocBuilder } from './builder';
+import { TocWindow } from './window';
 import { TocSpy } from './spy';
 import { TocMeasurer } from './measure';
 import { TocNavigator } from './navigation';
@@ -12,12 +13,14 @@ export type { TocEntry } from './entries';
 
 /**
  * Thin orchestrator for the table of contents. Owns the shared TocState and
- * wires the dedicated modules — builder (DOM), state (expand/collapse),
- * measurer (heading offsets), spy (scroll tracking), navigator (click jumps).
+ * wires the dedicated modules — builder (data + row factories), window
+ * (virtualized row rendering), state (expand/collapse), measurer (heading
+ * offsets), spy (scroll tracking), navigator (click jumps).
  */
 export class TocController {
 	private state: TocState;
 	private builder: TocBuilder;
+	private window: TocWindow;
 	private spy: TocSpy;
 	private measurer: TocMeasurer;
 	private navigator: TocNavigator;
@@ -35,6 +38,11 @@ export class TocController {
 		this.spy = new TocSpy(this.state);
 		this.navigator = new TocNavigator(this.state, this.spy);
 		this.builder = new TocBuilder(this.state, this.navigator);
+		this.window = new TocWindow(this.state, this.builder);
+		this.state.window = this.window;
+		// A window render re-creates the row elements; re-apply the highlight so
+		// the pill is re-hosted into the active row instead of a detached one.
+		this.window.onRowsRendered = () => this.spy.reapplyHighlight();
 	}
 
 	getEntries(): TocEntry[] {
@@ -44,9 +52,10 @@ export class TocController {
 	build(): void {
 		this.destroy();
 		this.builder.build();
-		this.state.applyVisibility();
+		this.window.mount();
+		this.window.setup();
 		this.spy.calculatePositions();
-		if (this.state.tocItems.length === 0) return;
+		if (this.state.entries.length === 0) return;
 		this.measurer.setup();
 		this.spy.setup();
 	}
@@ -62,6 +71,7 @@ export class TocController {
 	}
 
 	destroy(): void {
+		this.window.destroy();
 		this.measurer.destroy();
 		this.spy.destroy();
 		this.navigator.destroy();

@@ -2,7 +2,10 @@ import type { App, TFile } from 'obsidian';
 import type { BookViewSettings } from '../settings';
 import type { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import type { TocEntry } from './entries';
+import type { TocWindow } from './window';
+import type { VirtualItem } from './virtual';
 import { computeActivePath, computeHiddenState } from '../utils/toc';
+import { buildVirtualItems, computeVirtualOffsets } from './virtual';
 
 /** One deferred heading-rect measurement queued by tagHeadings. */
 export interface PendingTagHeading {
@@ -16,10 +19,17 @@ export interface PendingTagSection {
 	toMeasure: PendingTagHeading[];
 }
 
+/** Per-entry nesting-guide background (one CSS background per ancestor). */
+export interface GuideStyle {
+	image: string;
+	position: string;
+	size: string;
+}
+
 /**
- * All mutable ToC state plus the pure expand/collapse and visibility logic.
- * The builder/spy/measure/navigation modules only operate on this object, so
- * the controller stays a thin orchestrator.
+ * All mutable ToC state plus the pure expand/collapse and virtual-list logic.
+ * The builder/window/spy/measure/navigation modules only operate on this
+ * object, so the controller stays a thin orchestrator.
  */
 export class TocState {
 	containerEl: HTMLElement;
@@ -30,9 +40,8 @@ export class TocState {
 	absoluteManager: AbsoluteSectionManager | null;
 
 	entries: TocEntry[] = [];
-	tocItems: HTMLElement[] = [];
-	headingLis: HTMLElement[] = [];
-	chevronEls: HTMLElement[] = [];
+	/** Window renderer; set by the controller. */
+	window: TocWindow | null = null;
 	activeHeading: HTMLElement | null = null;
 	/** Lookup from `${path}#${line}` to ToC entry index (built once per build). */
 	entryByPathLine: Map<string, number> = new Map();
@@ -40,6 +49,26 @@ export class TocState {
 	 *  coordinates relative to the section top. Unknown (unloaded / fold-hidden)
 	 *  entries fall back to the line-based estimate. */
 	headingOffsets: Map<number, number> = new Map();
+
+	// --- Virtual list (see src/toc/virtual.ts) ---
+	virtualItems: VirtualItem[] = [];
+	/** Cumulative top offset per item; last element = total height. */
+	virtualOffsets: number[] = [0];
+	/** Parallel to entries: virtual item index of a visible heading, -1 when
+	 *  hidden (collapsed) or absent. */
+	entryToItem: number[] = [];
+	/** true when every heading is hidden (e.g. fully collapsed); the spy skips
+	 *  highlight/centering and the window renders an empty spacer. */
+	allRowsHidden = false;
+	rowHeight = 0;
+	fileRowHeight = 0;
+	/** Per-entry leaf flag (no child heading follows). */
+	isLeaf: boolean[] = [];
+	/** Per-entry nesting-guide background, null when the entry has no guides. */
+	guideStyles: (GuideStyle | null)[] = [];
+	/** Live row elements of the current window, keyed by entry index. */
+	rowByEntry: Map<number, HTMLElement> = new Map();
+	rowAnchorByEntry: Map<number, HTMLElement> = new Map();
 
 	// --- Expand/collapse state ---
 	userCollapsedSet: Set<number> = new Set();
@@ -49,7 +78,6 @@ export class TocState {
 	activeEntryIndex = -1;
 	pendingPathIndex = -1;
 	activePathTimer = 0;
-	animCleanupTimer = 0;
 	defaultLevel = 0;
 
 	// --- Scroll ---
@@ -72,7 +100,7 @@ export class TocState {
 	/** Cached viewport height; reading clientHeight every scroll frame forces a reflow. */
 	viewportHeight = 0;
 	viewportResizeObserver: ResizeObserver | null = null;
-	/** Cached TOC panel height for write-only scroll centering. */
+	/** Cached TOC panel height for write-only scroll centering + the row window. */
 	tocViewportHeight = 0;
 	tocResizeObserver: ResizeObserver | null = null;
 
@@ -101,9 +129,13 @@ export class TocState {
 	/** Reset build-scoped state before a rebuild. */
 	resetForBuild(): void {
 		this.entries = [];
-		this.tocItems = [];
-		this.headingLis = [];
-		this.chevronEls = [];
+		this.virtualItems = [];
+		this.virtualOffsets = [0];
+		this.entryToItem = [];
+		this.isLeaf = [];
+		this.guideStyles = [];
+		this.rowByEntry.clear();
+		this.rowAnchorByEntry.clear();
 		this.userCollapsedSet.clear();
 		this.userExpandedSet.clear();
 		this.activePathSet.clear();
@@ -111,20 +143,26 @@ export class TocState {
 		this.isJumping = false;
 		this.headingOffsets.clear();
 		this.defaultLevel = this.settings?.tocCollapsedLevel ?? 0;
+		this.allRowsHidden = false;
 	}
 
 	/** Drop all collected data (full teardown; DOM is emptied by the view). */
 	clearData(): void {
 		this.entries = [];
-		this.tocItems = [];
-		this.headingLis = [];
-		this.chevronEls = [];
+		this.virtualItems = [];
+		this.virtualOffsets = [0];
+		this.entryToItem = [];
+		this.isLeaf = [];
+		this.guideStyles = [];
 		this.headingPositions = [];
 		this.headingOffsets.clear();
 		this.entryByPathLine.clear();
 		this.userCollapsedSet.clear();
 		this.userExpandedSet.clear();
 		this.activePathSet.clear();
+		this.rowByEntry.clear();
+		this.rowAnchorByEntry.clear();
+		this.allRowsHidden = false;
 	}
 
 	// --- Expand / Collapse logic ---
@@ -163,67 +201,51 @@ export class TocState {
 			this.userExpandedSet.add(index);
 		}
 
-		this.applyVisibility();
+		// Anchor the toggled row so it does not jump when the total height
+		// shrinks/grows above it.
+		this.applyVisibility(index);
 	}
 
-	applyVisibility(): void {
-		// Phase 1: compute new state in a single forward pass (O(n)) using a
-		// stack of open ancestors instead of a backward scan per entry.
-		const willHide = computeHiddenState(this.entries, (i) => this.isEntryExpanded(i));
-
-		// Phase 2: lock heights for changing items. Read all scroll heights
-		// first (one forced reflow), then write all max-heights.
-		const changed: { li: HTMLElement; index: number; start: number }[] = [];
-		for (let i = 0; i < this.entries.length; i++) {
-			const li = this.headingLis[i];
-			if (!li) continue;
-			const currentlyHidden = li.hasClass('book-toc-collapsed-hidden');
-			if (willHide[i] === currentlyHidden) continue;
-			changed.push({ li, index: i, start: li.scrollHeight });
-		}
-		for (const c of changed) {
-			c.li.style.maxHeight = `${c.start}px`;
+	/** Rebuild the virtual list after a visibility change. Optional
+	 *  `anchorEntry` keeps that entry's row visually pinned (scroll anchoring)
+	 *  by compensating the panel scrollTop for the height delta above it. */
+	applyVisibility(anchorEntry?: number): void {
+		let delta = 0;
+		if (anchorEntry !== undefined && anchorEntry >= 0) {
+			const item = this.entryToItem[anchorEntry];
+			const before = item === undefined || item < 0 ? 0 : (this.virtualOffsets[item] ?? 0);
+			this.rebuildVirtualData();
+			const itemAfter = this.entryToItem[anchorEntry];
+			const after = itemAfter === undefined || itemAfter < 0 ? 0 : (this.virtualOffsets[itemAfter] ?? 0);
+			delta = after - before;
+		} else {
+			this.rebuildVirtualData();
 		}
 
-		// Force the max-height "start" value to be picked up before the target
-		// write. Read the contained panel instead of document.body: the TOC
-		// container has contain:layout, so this reflows only the panel subtree,
-		// not the whole document.
-		if (changed.length > 0) void this.containerEl.offsetHeight;
+		// Clamp the panel scrollTop to the new total height, applying the
+		// anchor compensation so content above/below the anchor stays put.
+		const viewport = this.tocViewportHeight > 0 ? this.tocViewportHeight : this.containerEl.clientHeight;
+		const total = this.virtualOffsets[this.virtualOffsets.length - 1] ?? 0;
+		const max = Math.max(0, total - viewport);
+		this.containerEl.scrollTop = Math.max(0, Math.min(this.containerEl.scrollTop + delta, max));
 
-		// Phase 3: toggle class and set target height
-		for (let i = 0; i < this.entries.length; i++) {
-			const li = this.headingLis[i];
-			if (!li) continue;
-			if (willHide[i]) {
-				li.addClass('book-toc-collapsed-hidden');
-			} else {
-				li.removeClass('book-toc-collapsed-hidden');
-			}
-		}
+		this.window?.render();
+	}
 
-		for (const c of changed) {
-			c.li.style.maxHeight = willHide[c.index] ? '0' : `${c.start}px`;
-		}
-
-		// Phase 4: after transition, clear inline max-height for expanded items
-		window.clearTimeout(this.animCleanupTimer);
-		this.animCleanupTimer = window.setTimeout(() => {
-			for (let i = 0; i < this.entries.length; i++) {
-				const li = this.headingLis[i];
-				if (!li || willHide[i]) continue;
-				li.style.removeProperty('max-height');
-			}
-		}, 160);
-
-		for (let i = 0; i < this.chevronEls.length; i++) {
-			const chevron = this.chevronEls[i];
-			if (!chevron) continue;
-			if (this.isEntryExpanded(i)) {
-				chevron.removeClass('book-toc-chevron-closed');
-			} else {
-				chevron.addClass('book-toc-chevron-closed');
-			}
-		}
+	/** Recompute hidden state → virtual items → offsets from the current
+	 *  collapse/expand state. Runs at build (after row heights are measured)
+	 *  and on every visibility change. */
+	rebuildVirtualData(): void {
+		const hidden = computeHiddenState(this.entries, (i) => this.isEntryExpanded(i));
+		const { items, entryToItem } = buildVirtualItems(
+			this.entries,
+			this.files,
+			hidden,
+			this.settings?.tocShowFileNames ?? false,
+		);
+		this.virtualItems = items;
+		this.entryToItem = entryToItem;
+		this.virtualOffsets = computeVirtualOffsets(items, this.rowHeight, this.fileRowHeight);
+		this.allRowsHidden = !items.some((item) => item.type === 'heading');
 	}
 }

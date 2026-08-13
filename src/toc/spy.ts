@@ -5,7 +5,9 @@ import { pickActiveIndex } from '../utils/toc';
 /** Scroll spy: maps the book's scroll position to the active ToC entry,
  *  maintains per-entry heading positions, and drives the highlight + panel
  *  centering. Runs off the shared manager frame; never reads layout inside
- *  scroll events. */
+ *  scroll events. With the virtualized panel the highlight and centering go
+ *  through the virtual offsets + the window's row maps instead of direct row
+ *  DOM lookups. */
 export class TocSpy {
 	constructor(private state: TocState) {}
 
@@ -14,7 +16,7 @@ export class TocSpy {
 	 *  setup that followed the build. */
 	setup(): void {
 		const s = this.state;
-		if (s.tocItems.length > 0) {
+		if (s.entries.length > 0) {
 			s.scrollHandler = () => {
 				// No layout read in the scroll event: events can dispatch while
 				// the book layout is dirty (async section loads), and reading
@@ -123,36 +125,20 @@ export class TocSpy {
 
 		const mode = s.settings?.autoExpandMode ?? 'disabled';
 
-		// Update highlight immediately (tracks scroll in real-time)
-		let highlightIndex = bestIndex;
-		if (mode === 'disabled') {
-			const li = s.headingLis[bestIndex];
-			if (li?.hasClass('book-toc-collapsed-hidden')) {
-				let targetLevel = s.entries[bestIndex]?.level ?? 0;
-				for (let j = bestIndex - 1; j >= 0; j--) {
-					const a = s.entries[j];
-					if (!a) break;
-					if (a.level < targetLevel) {
-						const ancLi = s.headingLis[j];
-						if (ancLi && !ancLi.hasClass('book-toc-collapsed-hidden')) {
-							highlightIndex = j;
-							break;
-						}
-						targetLevel = a.level;
-					}
-				}
-			}
-		}
-
+		// Update highlight immediately (tracks scroll in real-time). When the
+		// active entry is hidden (collapsed under an ancestor, or all rows
+		// collapsed), fall back to the nearest visible ancestor.
+		const highlightIndex = this.visibleAncestor(bestIndex, mode !== 'disabled');
 		this.updateHighlight(highlightIndex);
 
 		// Center the active item once the scroll settles. Centering inside the
 		// scroll frame both forced a layout read (li.offsetTop) and restarted a
 		// smooth scroll on the panel for every active-item change; a single
-		// trailing animation after the wheel rests is one read + one animation.
-		if (s.lastCenterIndex !== bestIndex) {
-			s.lastCenterIndex = bestIndex;
-			this.scheduleCenterScroll(bestIndex);
+		// trailing animation after the wheel rests is one write + no reads
+		// (virtual offsets instead of offsetTop).
+		if (s.lastCenterIndex !== highlightIndex) {
+			s.lastCenterIndex = highlightIndex;
+			this.scheduleCenterScroll(highlightIndex);
 		}
 
 		// Debounce expand/collapse: wait for scroll to settle (30ms)
@@ -182,9 +168,41 @@ export class TocSpy {
 		}, 400);
 	}
 
+	/** The entry to highlight for `index`: itself when its row is in the
+	 *  virtual list, else the nearest visible ancestor. With auto-expand on the
+	 *  active path is force-expanded, so the entry itself is visible. Returns
+	 *  -1 when nothing is visible. */
+	visibleAncestor(index: number, skipWalk: boolean): number {
+		const s = this.state;
+		if (s.allRowsHidden) return -1;
+		if (skipWalk) return index;
+		if (this.isVisible(index)) return index;
+		let targetLevel = s.entries[index]?.level ?? 0;
+		for (let j = index - 1; j >= 0; j--) {
+			const a = s.entries[j];
+			if (!a) break;
+			if (a.level < targetLevel) {
+				if (this.isVisible(j)) return j;
+				targetLevel = a.level;
+			}
+		}
+		return -1;
+	}
+
+	private isVisible(index: number): boolean {
+		const item = this.state.entryToItem[index];
+		return item !== undefined && item >= 0;
+	}
+
 	updateHighlight(index: number): void {
 		const s = this.state;
-		const el = s.tocItems[index];
+		if (index < 0) {
+			s.activeHeading?.removeClass('is-active');
+			s.activeHeading = null;
+			s.highlightEl?.remove();
+			return;
+		}
+		const el = s.rowAnchorByEntry.get(index);
 		if (!el) return;
 
 		// Only touch the DOM when the active item actually changes; during a
@@ -195,10 +213,10 @@ export class TocSpy {
 			s.activeHeading = el;
 
 			// Host the highlight bar inside the active row: it then follows the
-			// item automatically through collapse/expand animations and TOC
-			// reflows, so it can never sit on a stale cached position.
+			// item automatically through collapse/expand and window re-renders,
+			// so it can never sit on a stale cached position.
 			if (s.highlightEl) {
-				const li = s.headingLis[index];
+				const li = s.rowByEntry.get(index);
 				if (li && s.highlightEl.parentElement !== li) {
 					li.appendChild(s.highlightEl);
 				}
@@ -206,18 +224,28 @@ export class TocSpy {
 		}
 	}
 
+	/** Re-apply the highlight after a window render replaced the row elements
+	 *  (the previous activeHeading node may be detached). */
+	reapplyHighlight(): void {
+		const s = this.state;
+		if (s.activeEntryIndex < 0) return;
+		const mode = s.settings?.autoExpandMode ?? 'disabled';
+		this.updateHighlight(this.visibleAncestor(s.activeEntryIndex, mode !== 'disabled'));
+	}
+
 	/** Write-only scroll centering, run once after the scroll settles. Computes
-	 *  the target from the active row's offset (the rows' offsetParent is the
-	 *  positioned .book-toc-relative container) and the cached panel height.
-	 *  Runs in a macrotask so the layout read/write happens after the frame's
-	 *  render, when the layout is clean. */
+	 *  the target from the virtual offsets (fixed row heights) and the cached
+	 *  panel height — no layout read. Runs in a macrotask so the panel scroll
+	 *  write happens after the frame's render, when the layout is clean. */
 	private scheduleCenterScroll(index: number): void {
 		const s = this.state;
 		window.clearTimeout(s.centerScrollTimer);
 		s.centerScrollTimer = window.setTimeout(() => {
-			const li = s.headingLis[index];
-			if (!li || s.tocViewportHeight <= 0) return;
-			const target = Math.max(0, li.offsetTop - (s.tocViewportHeight - li.offsetHeight) / 2);
+			if (index < 0 || s.tocViewportHeight <= 0) return;
+			const item = s.entryToItem[index];
+			if (item === undefined || item < 0) return;
+			const top = s.virtualOffsets[item] ?? 0;
+			const target = Math.max(0, top - (s.tocViewportHeight - s.rowHeight) / 2);
 			s.containerEl.scrollTo({ top: target, behavior: 'smooth' });
 		}, 150);
 	}

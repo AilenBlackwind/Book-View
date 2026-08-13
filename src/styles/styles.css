@@ -304,79 +304,102 @@
 	overflow-anchor: none;
 }
 
+/* Virtualized panel: the spacer sets the total scroll height (inline style),
+   the list is an absolutely positioned window over it. content-visibility
+   lets the browser skip layout of off-screen spacer content. */
+.book-toc-spacer {
+	position: relative;
+	content-visibility: auto;
+	contain: layout paint style;
+}
+
 .book-toc-list {
 	list-style: none;
 	padding: 0;
 	margin: 0;
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
 }
 
+/* File rows are fixed-height so the virtual offsets stay exact; the visual
+   gap is padding-bottom, not margin (margins are invisible to offsetHeight
+   and would misalign the virtual window). */
 .book-toc-file {
-	margin-bottom: 12px;
+	height: 34px;
+	box-sizing: border-box;
 }
 
 .book-toc-file-title {
+	height: 100%;
+	box-sizing: border-box;
 	font-weight: 600;
 	color: var(--text-normal);
-	margin-bottom: 4px;
-	padding: 4px 0;
+	padding: 4px 0 8px;
 	border-bottom: 1px solid var(--background-modifier-border);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
-.book-toc-file-headings {
-	list-style: none;
-	padding: 0;
-	margin: 0;
-}
-
+/* Heading rows: fixed height, no max-height collapse animation (rows below
+   the fold are simply not rendered). */
 .book-toc-heading {
 	position: relative;
+	height: 26px;
+	box-sizing: border-box;
 	overflow: hidden;
-	max-height: none;
 	opacity: 1;
-	transition: max-height 150ms ease-out, opacity 150ms ease-out;
-}
-
-.book-toc-heading.book-toc-collapsed-hidden {
-	max-height: 0 !important;
-	opacity: 0;
-	pointer-events: none;
 }
 
 .book-toc-heading-inner {
 	display: flex;
 	align-items: center;
+	height: 100%;
 }
 
+/* CSS-drawn chevron (no SVG): border corner rotated to point right when
+   collapsed, down when expanded. */
 .book-toc-chevron {
 	width: 16px;
+	height: 100%;
 	flex-shrink: 0;
 	cursor: pointer;
 	user-select: none;
-	transform: rotate(90deg);
-	transition: transform 300ms ease;
 	color: var(--text-muted);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 8px;
-	padding: 4px 0;
+}
+
+.book-toc-chevron::before {
+	content: '';
+	width: 6px;
+	height: 6px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+	transition: transform 150ms ease;
 }
 
 .book-toc-chevron:hover {
 	color: var(--text-normal);
 }
 
-.book-toc-chevron.book-toc-chevron-closed {
-	transform: rotate(0deg);
+.book-toc-heading.book-toc-collapsed .book-toc-chevron::before {
+	transform: rotate(45deg);
 }
 
-.book-toc-chevron.book-toc-leaf {
+.book-toc-heading.book-toc-leaf .book-toc-chevron {
 	visibility: hidden;
 	cursor: default;
 }
 
 .book-toc-item {
 	display: block;
+	height: 100%;
+	box-sizing: border-box;
 	padding: 2px 8px;
 	color: var(--nav-item-color);
 	cursor: pointer;
@@ -386,7 +409,6 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	flex: 1;
-	min-width: 0;
 	min-width: 0;
 }
 

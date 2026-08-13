@@ -89,7 +89,7 @@ export class TocMeasurer {
 	 *  Mirrors the original setupScrollSpy guard: no entries, no wiring. */
 	setup(): void {
 		const s = this.state;
-		if (s.tocItems.length === 0) return;
+		if (s.entries.length === 0) return;
 		s.absoluteManager?.addFrameCallback(this.onTagFrame);
 	}
 
