@@ -59,6 +59,8 @@ export default class BookViewPlugin extends Plugin {
 		this.api = new BookViewAPI(
 			this.app,
 			() => {
+				const active = this.app.workspace.getActiveViewOfType(BookView);
+				if (active?.filePath) return active;
 				const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BOOK_VIEW);
 				for (const leaf of leaves) {
 					if (leaf.view instanceof BookView && leaf.view.filePath) {
@@ -282,6 +284,8 @@ export default class BookViewPlugin extends Plugin {
 	}
 
 	private getActiveBookLeaf(): WorkspaceLeaf | null {
+		const active = this.app.workspace.getActiveViewOfType(BookView);
+		if (active?.filePath) return active.leaf;
 		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BOOK_VIEW);
 		for (const leaf of leaves) {
 			if (leaf.view instanceof BookView && leaf.view.filePath) {

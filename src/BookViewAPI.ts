@@ -120,10 +120,10 @@ export class BookViewAPI {
 	}
 
 	async getAllAtoms(): Promise<Atom[]> {
-		if (!this.findActiveBookView()) return [];
-		const entries = this.getEntries();
-		const uniquePaths = [...new Set(entries.map((e) => e.file.path))];
-		return this.readAtomsFromPaths(uniquePaths);
+		const bv = this.findActiveBookView();
+		if (!bv) return [];
+		const paths = bv.getCurrentFiles().map((f) => f.path);
+		return this.readAtomsFromPaths(paths);
 	}
 
 	private async readAtomsFromPaths(paths: string[]): Promise<Atom[]> {

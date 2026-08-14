@@ -1,4 +1,4 @@
-import { ItemView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
+import { Component, ItemView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { HEIGHT_PER_LINE } from '../toc/types';
@@ -38,6 +38,10 @@ export class BookView extends ItemView {
 	private savedContainer: HTMLElement | null = null;
 	filePath: string = '';
 	plugin: BookViewPlugin | null = null;
+	/** One Component per loadBook, so event listeners bound for a book are
+	 *  released in cleanup() instead of accumulating on repeated loads. */
+	private loadComponent: Component | null = null;
+	private reloadTimer = 0;
 
 	constructor(leaf: WorkspaceLeaf) {
 		super(leaf);
@@ -453,21 +457,25 @@ export class BookView extends ItemView {
 		}
 	}
 
-	private async loadBook(filePath: string): Promise<void> {
+	private async loadBook(filePath: string, force = false): Promise<void> {
 		// Debug: log every loadBook call with its instance id to catch
 		// duplicate loads of the same book (tab/view churn) vs. fresh instances.
 		DebugLog.log('LOAD', String(this.instanceId), filePath);
 		// Obsidian may call onOpen/setState with the same filePath several times
 		// during a tab switch (open → setState → state re-apply). Each loadBook
 		// tears down the whole book, re-renders every section, and force-rebinds
-		// the ToC. Skip the duplicate work when this exact book is rendered.
-		if (this.loadedPath === filePath && this.absoluteManager && this.currentFiles.length > 0) {
+		// the ToC. Skip the duplicate work when this exact book is rendered
+		// (unless the manifest itself changed and a rebuild is forced).
+		if (!force && this.loadedPath === filePath && this.absoluteManager && this.currentFiles.length > 0) {
 			DebugLog.log('LOAD skip', String(this.instanceId), filePath);
 			return;
 		}
 		this.cleanup();
 		this.loadedPath = filePath;
 		this.filePath = filePath;
+
+		const comp = new Component();
+		this.loadComponent = comp;
 
 		const file = this.app.vault.getFileByPath(filePath);
 		if (!(file instanceof TFile)) return;
@@ -525,7 +533,7 @@ export class BookView extends ItemView {
 		// which rebinds after this book finishes loading.
 		this.plugin?.tocCoordinator?.setCurrentBook(this);
 
-		this.registerDomEvent(this.contentContainer, 'dblclick', (evt: MouseEvent) => {
+		comp.registerDomEvent(this.contentContainer, 'dblclick', (evt: MouseEvent) => {
 			const mod = this.plugin?.settings.editorModifiers;
 			if (!mod || !matchesModifiers(evt, mod)) return;
 			evt.preventDefault();
@@ -544,7 +552,7 @@ export class BookView extends ItemView {
 			void leaf.openFile(targetFile, { state: { mode: 'source' } });
 		});
 
-		this.registerDomEvent(this.contentContainer, 'contextmenu', (evt: MouseEvent) => {
+		comp.registerDomEvent(this.contentContainer, 'contextmenu', (evt: MouseEvent) => {
 			const profiles = this.plugin?.settings.menuProfiles;
 			if (!profiles || profiles.length === 0) return;
 
@@ -577,7 +585,7 @@ export class BookView extends ItemView {
 			});
 		});
 
-		this.registerEvent(
+		comp.registerEvent(
 			this.app.workspace.on('active-leaf-change', (leaf) => {
 				if (leaf === this.leaf) {
 					this.restoreScrollPosition();
@@ -591,17 +599,25 @@ export class BookView extends ItemView {
 			}),
 		);
 
-		this.registerEvent(
+		comp.registerEvent(
 			this.app.vault.on('modify', (file) => {
 				if (!(file instanceof TFile)) return;
+				if (file.path === this.filePath) {
+					this.scheduleReload();
+					return;
+				}
 				if (!this.manifestPaths.has(file.path)) return;
 				this.scheduleRefresh(file.path);
 			}),
 		);
 
-		this.registerEvent(
+		comp.registerEvent(
 			this.app.metadataCache.on('changed', (file) => {
 				if (!(file instanceof TFile)) return;
+				if (file.path === this.filePath) {
+					this.scheduleReload();
+					return;
+				}
 				if (!this.manifestPaths.has(file.path)) return;
 				if (!this.haveHeadingsChanged(file)) return;
 				this.scheduleTocRefresh(file.path);
@@ -617,12 +633,19 @@ export class BookView extends ItemView {
 	private scheduleRefresh(path: string): void {
 		const existing = this.refreshTimers.get(path);
 		if (existing) window.clearTimeout(existing);
-
 		const timer = window.setTimeout(() => {
 			this.refreshTimers.delete(path);
 			this.absoluteManager?.markDirty(path);
 		}, 300);
 		this.refreshTimers.set(path, timer);
+	}
+
+	private scheduleReload(): void {
+		window.clearTimeout(this.reloadTimer);
+		this.reloadTimer = window.setTimeout(() => {
+			this.reloadTimer = 0;
+			void this.loadBook(this.filePath, true);
+		}, 300);
 	}
 
 	private initTocHeadingsCache(): void {
@@ -693,6 +716,10 @@ export class BookView extends ItemView {
 	}
 
 	private cleanup(): void {
+		this.loadComponent?.unload();
+		this.loadComponent = null;
+		window.clearTimeout(this.reloadTimer);
+		this.reloadTimer = 0;
 		for (const timer of this.refreshTimers.values()) {
 			window.clearTimeout(timer);
 		}
