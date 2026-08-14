@@ -311,36 +311,48 @@ export class SectionLayout {
 		return data.offset + h;
 	}
 
-	restoreScrollAt(anchor: Anchor | null, currentScrollTop: number): void {
-		if (!anchor) return;
-		const data = this.host.sections.get(this.host.fileOrder[anchor.idx] ?? '');
-		if (!data) return;
+	restoreScrollAt(
+		anchor: Anchor | null,
+		currentScrollTop: number,
+		minDelta: number = SCROLL_THRESHOLD,
+	): boolean {
+		const target = this.restoreTarget(anchor, currentScrollTop);
+		if (target === null) return false;
+		const delta = Math.abs(target - currentScrollTop);
+		if (delta <= minDelta) return false;
+		this.isAdjustingScroll = true;
+		this.host.dbg('compensate', '', Math.round(currentScrollTop), '->', Math.round(target));
+		// Write scrollTop synchronously, in the same task that just rewrote
+		// the section transforms: the browser batches the dirty styles and
+		// the scroll write into ONE layout pass and ONE paint, so the view
+		// settles directly at the corrected position. Deferring the write to
+		// a macrotask painted the intermediate pre-compensation position
+		// first, which flickered the whole viewport up/down for a frame
+		// right after the scroll stopped. The synchronous reflow is paid
+		// once per settle update — acceptable now that updates are deferred
+		// while the user is actively scrolling.
+		this.host.scrollContainer.scrollTop = target;
+		return true;
+	}
+
+	/** The scrollTop that keeps the anchor's content fixed after a layout
+	 *  shift, or null when there is no anchor to hold. */
+	private restoreTarget(anchor: Anchor | null, currentScrollTop: number): number | null {
+		if (!anchor) return null;
+		const path = this.host.fileOrder[anchor.idx] ?? '';
+		const data = this.host.sections.get(path);
+		if (!data) return null;
 		// Clamp the anchor offset to what is actually visible after the fold:
 		// a fully hidden section collapses to its fold point, a heading stub to
 		// its stub height. Without this, restoring into a now-hidden section
 		// overshoots past the end of the spacer.
-		const foldMode = this.host.getFoldMode(this.host.fileOrder[anchor.idx] ?? '');
+		const foldMode = this.host.getFoldMode(path);
 		const maxOffset = foldMode === 'full'
 			? 0
 			: foldMode === 'heading'
 				? (data.foldHeadingHeight > 0 ? data.foldHeadingHeight : FALLBACK_FOLD_HEADING_HEIGHT)
 				: data.height;
 		const off = Math.min(anchor.anchorOffset, Math.max(0, maxOffset));
-		const target = data.offset + off;
-		const delta = Math.abs(target - currentScrollTop);
-		if (delta > SCROLL_THRESHOLD) {
-			this.isAdjustingScroll = true;
-			this.host.dbg('compensate', '', Math.round(currentScrollTop), '->', Math.round(target));
-			// Write scrollTop synchronously, in the same task that just rewrote
-			// the section transforms: the browser batches the dirty styles and
-			// the scroll write into ONE layout pass and ONE paint, so the view
-			// settles directly at the corrected position. Deferring the write to
-			// a macrotask painted the intermediate pre-compensation position
-			// first, which flickered the whole viewport up/down for a frame
-			// right after the scroll stopped. The synchronous reflow is paid
-			// once per settle update — acceptable now that updates are deferred
-			// while the user is actively scrolling.
-			this.host.scrollContainer.scrollTop = target;
-		}
+		return data.offset + off;
 	}
 }

@@ -19,6 +19,17 @@ import { DebugLog } from '../utils/debug';
 // ends.
 const GESTURE_DEFER_MS = 700;
 
+// Compensations larger than this are anchored immediately even mid-gesture.
+// Deferring them (GESTURE_DEFER_MS) makes the slide visible: a section above
+// the viewport that loads taller than its estimate pushes the reading content
+// DOWN by the correction amount, which reads as a "bounce" while scrolling up.
+// Anchoring every correction during the gesture is cheap now that the
+// adjusting-scroll event does not schedule a spy frame and does not extend the
+// gesture window (the one-shot flag is consumed in boundScrollHandler), so the
+// threshold only needs to cover sub-pixel noise — the last value (24px) left
+// many-small-notes areas visibly sliding mid-scroll.
+const GESTURE_ANCHOR_PX = 8;
+
 // Debug: global main-thread frame counter, independent of the book manager.
 // It shows whether the note tab actually keeps rendering at ~60fps while the
 // user reads a note with the ToC panel open — if a background loop (book
@@ -113,6 +124,11 @@ export class AbsoluteSectionManager {
 	private lastClientHeight = 0;
 	private boundScrollHandler: ((evt: Event) => void) | null = null;
 	private boundClickHandler: ((evt: MouseEvent) => void) | null = null;
+	/** Set per scroll event by boundScrollHandler (which runs before the spy's
+	 *  scroll listener): true when the event came from a compensation write.
+	 *  The spy reads it via isAdjustingScroll() to skip scheduling a frame for
+	 *  a write that did not move the book. */
+	private lastScrollWasAdjusting = false;
 	private lastContainerWidth = 0;
 	private pendingHeights: Map<string, number> = new Map();
 	private pendingWidthChange = false;
@@ -143,6 +159,7 @@ export class AbsoluteSectionManager {
 	 *  (Phase 3b). A high count with rs≈0 in the DBG line confirms the loop
 	 *  break is doing work; the settle update applies them at the end. */
 	private dbgDeferComp = 0;
+	private dbgAnchorDuringGesture = 0;
 	/** Settle timer for the compensation deferred during an active gesture. */
 	private deferCompTimer = 0;
 	// Debug: per-second ms spent in the frame, processUpdates, frame
@@ -211,6 +228,12 @@ export class AbsoluteSectionManager {
 							self.dbgWriters.push(
 								`scrollTop=${Math.round(v)} ${self.stackLabel()}`,
 							);
+						} else {
+							// Every write, value-only: the per-second `writers`
+							// stream then shows the full up/down sequence (the
+							// 4-write stack cap otherwise hides the bounce
+							// writer that fires mid-second).
+							self.dbgWriters.push(`scrollTop=${Math.round(v)}`);
 						}
 					}
 					sd.set.call(this, v);
@@ -391,6 +414,7 @@ export class AbsoluteSectionManager {
 			// frame for a scroll that did not move the book.
 			if (evt.target !== this.scrollContainer) {
 				this.dbgSevB++;
+				this.lastScrollWasAdjusting = false;
 				return;
 			}
 			this.dbgSev++;
@@ -398,19 +422,39 @@ export class AbsoluteSectionManager {
 			// the book layout is still dirty (async height measurements), and
 			// reading it would force a full style recalc. The scroll position
 			// is read once per frame in processUpdates, before its own writes.
-		if (!this.layout.consumeAdjustingScroll()) {
-			this.pool.noteUserScroll();
-			// Unloads are deferred while scrolling (see processIoPending);
-			// reclaim far sections once the gesture settles.
-			this.pool.scheduleIdleUnload();
-		}
+			// The one-shot flag is consumed here — boundScrollHandler is
+			// registered before the spy's scroll listener, so this event is
+			// marked before the spy runs and it skips scheduling a frame for a
+			// write that did not move the book.
+			this.lastScrollWasAdjusting = this.layout.consumeAdjustingScroll();
+			if (!this.lastScrollWasAdjusting) {
+				this.pool.noteUserScroll();
+				// Unloads are deferred while scrolling (see processIoPending);
+				// reclaim far sections once the gesture settles.
+				this.pool.scheduleIdleUnload();
+			}
 		};
 		this.scrollContainer.addEventListener('scroll', this.boundScrollHandler, { passive: true });
 
 		this.boundClickHandler = (evt: MouseEvent) => {
 			const target = evt.target as HTMLElement;
 			// Links keep normal navigation.
-			if (target.closest('a')) return;
+			if (target.closest('a')) {
+				// Diagnostic: a click on a link inside a fold heading bypasses
+				// the fold hit-test entirely and lets Obsidian navigate (which
+				// can trigger the active-leaf-change scroll restore). Log the
+				// anchor to tell internal links from native heading anchors.
+				const inHeading = target.closest<HTMLElement>('[data-fold-id]');
+				if (inHeading) {
+					const a = target.closest('a');
+					this.dbg(
+						'fold-link',
+						inHeading.dataset.foldId || '',
+						`<${target.tagName.toLowerCase()}${target.className ? '.' + String(target.className).trim().split(/\s+/).join('.') : ''}> ${a?.getAttribute('data-href') || a?.getAttribute('href') || ''}`,
+					);
+				}
+				return;
+			}
 			const heading = target.closest<HTMLElement>('[data-fold-id]');
 			if (!heading) return;
 			const foldId = heading.dataset.foldId;
@@ -430,6 +474,12 @@ export class AbsoluteSectionManager {
 				evt.clientX >= chevronLeft &&
 				evt.clientX <= chevronLeft + chevronWidth &&
 				Math.abs(evt.clientY - chevronCenterY) <= chevronWidth / 2;
+			const bodyZoom = parseFloat(document.body.style.zoom) || 1;
+			this.dbg(
+				'fold-click',
+				foldId,
+				`cx=${Math.round(evt.clientX)} cy=${Math.round(evt.clientY)} left=${rect.left.toFixed(1)} top=${rect.top.toFixed(1)} h=${rect.height.toFixed(1)} zoom=${bodyZoom} hit=${chevronHit ? 1 : 0}`,
+			);
 			if (!chevronHit) return;
 			evt.stopPropagation();
 			this.toggleFold(foldId);
@@ -532,6 +582,14 @@ export class AbsoluteSectionManager {
 	 *  the whole settle. */
 	isGestureActive(withinMs: number = GESTURE_DEFER_MS): boolean {
 		return Date.now() - this.pool.lastUserScrollAt < withinMs;
+	}
+
+	/** True when the most recent book scroll event was caused by a compensation
+	 *  write (boundScrollHandler marked it before the spy's listener ran). The
+	 *  spy skips the frame for such events: the book did not move, so the
+	 *  highlight/centering already reflect the position. */
+	isAdjustingScroll(): boolean {
+		return this.lastScrollWasAdjusting;
 	}
 
 	scheduleUpdate(): void {
@@ -648,7 +706,7 @@ export class AbsoluteSectionManager {
 			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} w=${this.dbgWheel}`,
 			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} rm=${Math.round(renderMs)}ms ab=${aborts} ph=${placeholders} up=${upgrades} mounts=${mounts} mh=${Math.round(mountH)}`,
 			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
-			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${this.dbgTagMs.toFixed(1)}ms rects=${this.dbgTagRects} fps=${this.dbgFps} dc=${this.dbgDeferComp}`,
+			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${this.dbgTagMs.toFixed(1)}ms rects=${this.dbgTagRects} fps=${this.dbgFps} dc=${this.dbgDeferComp} ac=${this.dbgAnchorDuringGesture}`,
 		);
 		this.dbgT0 = now;
 		this.dbgFs = 0;
@@ -673,6 +731,7 @@ export class AbsoluteSectionManager {
 		this.dbgFps = dbgGlobalFrames;
 		this.dbgTagRects = 0;
 		this.dbgDeferComp = 0;
+		this.dbgAnchorDuringGesture = 0;
 		dbgGlobalFrames = 0;
 	}
 
@@ -731,9 +790,16 @@ export class AbsoluteSectionManager {
 			// debug log). The anchor is left un-applied; the settle timer runs
 			// one compensation update once the gesture ends. The visual cost is
 			// that content shifts with each correction instead of being held
-			// still — masked by the scroll, and re-anchored at settle.
-			this.dbgDeferComp++;
-			this.armDeferredCompensation();
+			// still — masked by the scroll, and re-anchored at settle. Large
+			// corrections are not masked though (a section above loading taller
+			// than its estimate slides the reading content down mid-scroll), so
+			// those are anchored immediately.
+			if (this.layout.restoreScrollAt(anchor, scrollTop, GESTURE_ANCHOR_PX)) {
+				this.dbgAnchorDuringGesture++;
+			} else {
+				this.dbgDeferComp++;
+				this.armDeferredCompensation();
+			}
 		} else {
 			this.layout.restoreScrollAt(anchor, scrollTop);
 		}

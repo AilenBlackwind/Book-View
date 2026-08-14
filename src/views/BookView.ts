@@ -31,6 +31,11 @@ export class BookView extends ItemView {
 	private loadedPath = '';
 	private popoutLeaf: WorkspaceLeaf | null = null;
 	private savedScrollTop: number = -1;
+	/** contentContainer that `savedScrollTop` was read from. A rebuild
+	 *  (loadBook) replaces it; if it is still the live container the scroll is
+	 *  current or was moved intentionally (e.g. ToC teleport), so a stale
+	 *  restore would be wrong. */
+	private savedContainer: HTMLElement | null = null;
 	filePath: string = '';
 	plugin: BookViewPlugin | null = null;
 
@@ -655,14 +660,28 @@ export class BookView extends ItemView {
 	private saveScrollPosition(): void {
 		if (this.contentContainer) {
 			this.savedScrollTop = this.contentContainer.scrollTop;
+			this.savedContainer = this.contentContainer;
 		}
 	}
 
 	private restoreScrollPosition(): void {
-		// Debug: correlate the scroll-event storm with the restore jump
-		// (hypothesis B: spy churns while the position jump settles).
+		if (!this.contentContainer) return;
+		// Only a rebuild (loadBook replacing contentContainer) makes the saved
+		// position meaningful: the fresh container starts at 0 and the save is
+		// the only record of where the user was. If the same container is still
+		// live, the scroll is either current or was moved intentionally while
+		// the leaf was inactive (e.g. a ToC teleport with the panel focused) —
+		// restoring the stale save would yank the viewport back to it (the
+		// "jump to top after ToC teleport" bug).
+		if (this.savedContainer === this.contentContainer) {
+			DebugLog.log('RESTORE skip', '', this.savedScrollTop);
+			this.savedScrollTop = -1;
+			this.savedContainer = null;
+			return;
+		}
+		this.savedContainer = null;
 		DebugLog.log('RESTORE', '', this.savedScrollTop >= 0 ? this.savedScrollTop : -2);
-		if (this.contentContainer && this.savedScrollTop >= 0) {
+		if (this.savedScrollTop >= 0) {
 			const target = this.savedScrollTop;
 			this.savedScrollTop = -1;
 			window.requestAnimationFrame(() => {

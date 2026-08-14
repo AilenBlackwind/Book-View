@@ -35,6 +35,12 @@ export class TocSpy {
 				// scrollTop would force a full style recalc right here. Instead
 				// request one coalesced frame; the tick reads scrollTop in the
 				// rAF, before the offset writes.
+				// A compensation write also fires a scroll event; the host marks
+				// it as adjusting (boundScrollHandler runs before this
+				// listener). The book did not move, so the highlight/centering
+				// already match the position — skip the frame instead of
+				// waking the shared frame for no work.
+				if (s.positionSource?.isAdjustingScroll?.()) return;
 				if (s.tickScheduled) return;
 				s.tickScheduled = true;
 				s.positionSource?.requestFrame();

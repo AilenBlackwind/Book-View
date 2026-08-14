@@ -49,6 +49,11 @@ export interface HeadingPositionSource {
 	 *  work (rect reads) should be deferred. A short window answers "has the
 	 *  book actually stopped moving". */
 	isGestureActive(withinMs?: number): boolean;
+	/** True when the most recent book scroll event was caused by a programmatic
+	 *  compensation write rather than the user. The spy skips scheduling a
+	 *  frame for it — the book did not move, so the highlight/centering already
+	 *  reflect the position. Optional: hosts without compensation may omit it. */
+	isAdjustingScroll?(): boolean;
 	/** Optional: resolve the rendered heading DOM element for an entry
 	 *  directly. Hosts whose headings live in a plain rendered view (e.g. the
 	 *  reading-view adapter) implement this to skip the placeholder lookup;
