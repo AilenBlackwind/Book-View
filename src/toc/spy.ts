@@ -96,6 +96,18 @@ export class TocSpy {
 	 *  on scrollTop, so recomputing them was pure O(entries) waste per frame. */
 	updatePositionsIfDirty(): void {
 		const s = this.state;
+		// While a gesture is active the section offsets are still shifting:
+		// sections mount into the viewport and report measured heights, and
+		// each height correction bumps the layout version (the compensating
+		// scrollTop write is itself deferred until the gesture ends). If we
+		// recomputed from those live offsets every frame, headings near the
+		// trigger line crossed it back and forth as estimates overshot and
+		// undershot, flipping the pill between two adjacent entries. Freeze the
+		// last settled positions for the gesture: pickActiveIndex then tracks
+		// the scroll alone (positions stay monotonic), and the frame after the
+		// gesture ends recomputes once from the final offsets. The heading
+		// measurements are deferred the same way (TocMeasurer.onTagFrame).
+		if (s.positionSource?.isGestureActive()) return;
 		const layoutVersion = s.positionSource?.getLayoutVersion() ?? -1;
 		if (!s.positionsDirty && layoutVersion === s.lastLayoutVersion) return;
 		s.positionsDirty = false;
