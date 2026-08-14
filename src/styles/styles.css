@@ -21,8 +21,9 @@
 /* Combined selector for higher specificity than .book-section-placeholder below. */
 .book-section-placeholder.book-section-absolute {
 	position: absolute;
-	width: 100%;
+	width: auto;
 	left: 0;
+	right: 0;
 	top: 0;
 	/* Positioning is done with transform instead of style.top: a top write on a
 	   positioned element invalidates its style and layout, so every recalcOffsets
@@ -369,7 +370,6 @@
 	position: relative;
 	height: 26px;
 	box-sizing: border-box;
-	overflow: hidden;
 	opacity: 1;
 }
 
@@ -461,9 +461,17 @@
 	position: absolute;
 	/* The pill is hosted inside the active row and follows it through
 	   collapse/expand reflows, so it fills the row instead of using a cached
-	   top/height that would go stale the moment the TOC reflows. */
-	top: 0;
-	bottom: 0;
+	   top/height that would go stale the moment the TOC reflows. The row is
+	   taller than its text (26px vs the ~2px item padding + line box), so the
+	   full-height bar reads as hanging below the text; trim the bottom by the
+	   same amount as the item's top padding to center it on the text. */
+	/* The text's optical center sits above the line-box center (extra
+	   line-height room below the x-height band), so the bar is raised 3px past
+	   the row top to read as centered. The heading row no longer clips (its
+	   overflow:hidden dated from the collapse-animation era; the label itself
+	   is clipped by .book-toc-item), so the raised top keeps its radius. */
+	top: -2px;
+	bottom: 6px;
 	left: 4px;
 	right: 4px;
 	background: var(--bv-toc-active-color, var(--interactive-accent));
