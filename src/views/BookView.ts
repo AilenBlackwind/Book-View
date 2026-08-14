@@ -314,6 +314,50 @@ export class BookView extends ItemView {
 		}
 	}
 
+	/** Jumps to the start of a book note (internal-link navigation, ToC-like):
+	 *  scrolls to the section's offset, then corrects against the mounted
+	 *  section's real position once its content lands, and flashes the note's
+	 *  first heading. */
+	private async jumpToSectionStart(filePath: string): Promise<void> {
+		const manager = this.absoluteManager;
+		const container = this.contentContainer;
+		if (!manager || !container) return;
+
+		const sectionOffset = manager.getOffset(filePath) ?? 0;
+		container.scrollTo({ top: Math.max(0, sectionOffset - 20), behavior: 'auto' });
+
+		const selector = `.book-section-placeholder[data-path="${CSS.escape(filePath)}"]`;
+		for (let attempt = 0; attempt < 60; attempt++) {
+			const section = container.querySelector<HTMLElement>(selector);
+			// Wait for the section's content to mount: only then is its DOM
+			// transform refreshed and its top position real. Off-window
+			// placeholders keep a stale transform, and settling against one
+			// yanks the scroll back to wherever the placeholder still sits.
+			if (section && section.querySelector('.markdown-rendered')) {
+				const sectionRect = section.getBoundingClientRect();
+				const containerRect = container.getBoundingClientRect();
+				const target = container.scrollTop + (sectionRect.top - containerRect.top) - 20;
+				if (Math.abs(container.scrollTop - target) < 1) {
+					this.flashSectionTop(section);
+					return;
+				}
+				container.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
+			}
+			await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+		}
+	}
+
+	private flashSectionTop(section: HTMLElement): void {
+		const heading = section.querySelector('h1, h2, h3, h4, h5, h6');
+		if (!heading) return;
+		heading.addClass('book-heading-highlight');
+		const onEnd = () => {
+			heading.removeClass('book-heading-highlight');
+			heading.removeEventListener('animationend', onEnd);
+		};
+		heading.addEventListener('animationend', onEnd);
+	}
+
 	/** Wraps the `occurrence`-th case-insensitive match of `query` in a
 	 *  transient `<mark>` and returns whether it was placed. Adjacent text
 	 *  nodes are merged first so words previously split by mark
@@ -551,6 +595,40 @@ export class BookView extends ItemView {
 			this.popoutLeaf = leaf;
 			void leaf.openFile(targetFile, { state: { mode: 'source' } });
 		});
+
+		// Internal links inside the book: links to other book notes jump to the
+		// start of that note (ToC-like); links to other vault notes open in a
+		// new tab so the book is preserved. Registered on `window` in the
+		// capture phase — the top of the event chain, before Obsidian's own
+		// internal-link handling on `document`, which would otherwise navigate
+		// away first. Modified/middle clicks and non-internal links (websites)
+		// are left to Obsidian.
+		comp.registerDomEvent(
+			window,
+			'click',
+			(evt: MouseEvent) => {
+				if (evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.altKey || evt.shiftKey) return;
+				const target = evt.target as HTMLElement;
+				const container = this.contentContainer;
+				if (!container || !container.contains(target)) return;
+				const link = target.closest<HTMLElement>('a.internal-link');
+				if (!link) return;
+				const href = link.getAttribute('data-href') ?? link.getAttribute('href');
+				if (!href) return;
+				const placeholder = target.closest<HTMLElement>('.book-section-placeholder');
+				const sourcePath = placeholder?.dataset.path ?? this.filePath;
+				const dest = this.app.metadataCache.getFirstLinkpathDest(href, sourcePath);
+				if (!(dest instanceof TFile)) return;
+				evt.preventDefault();
+				evt.stopImmediatePropagation();
+				if (this.manifestPaths.has(dest.path)) {
+					void this.jumpToSectionStart(dest.path);
+				} else {
+					void this.app.workspace.openLinkText(href, sourcePath, 'tab');
+				}
+			},
+			{ capture: true },
+		);
 
 		comp.registerDomEvent(this.contentContainer, 'contextmenu', (evt: MouseEvent) => {
 			const profiles = this.plugin?.settings.menuProfiles;
