@@ -232,6 +232,8 @@ export default class BookViewPlugin extends Plugin {
 	onunload() {
 		delete window.BookView;
 		this.api = null;
+		window.clearTimeout(this.saveHeightsTimer);
+		DebugLog.setEnabled(false);
 	}
 
 	async loadSettings() {
