@@ -148,6 +148,13 @@ export class TocWindow {
 		this.startIndex = 0;
 		this.endIndex = 0;
 		this.renderedItems = null;
+		// Remove the DOM this window created (skeleton + highlight). The view
+		// also empties the panel on full teardown, but the incremental rebuild
+		// (TocController.rebuild) re-runs mount without a view-level wipe, so
+		// the old skeleton must not leak into the panel.
+		this.spacerEl?.parentElement?.remove();
+		this.state.highlightEl?.remove();
+		this.state.highlightEl = null;
 		this.spacerEl = null;
 		this.listEl = null;
 	}

@@ -62,6 +62,22 @@ const UPGRADE_STEP_DELAY = 300;
 // fallback inside loadSection) takes over so the section always renders.
 const MAX_CONTENT_PENDING_SKIPS = 45;
 
+// A section whose MarkdownRenderer.render threw (a markdown processor or plugin
+// choked on the content — plausible right after a mass edit or linter run) is
+// reset and retried up to this many times, with a delay between attempts, so it
+// recovers on its own instead of staying a blank box until the note reloads.
+// Past the cap the section is left blank and logged rather than retry-looping.
+const MAX_RENDER_RETRIES = 3;
+const RENDER_RETRY_DELAY = 800;
+
+/** Format a thrown render error for the debug log without tripping
+ *  no-base-to-string on the unknown catch type. */
+function formatRenderError(err: unknown): string {
+	if (err instanceof Error) return err.message;
+	if (typeof err === 'string') return err;
+	return JSON.stringify(err);
+}
+
 // Cold starts produce floods of drop-stale-render lines: while heights are
 // still 35px estimates the IO window spans ~170 tiny sections, and each wheel
 // step during the initial scroll re-delivers dozens of crossings that drain
@@ -313,6 +329,9 @@ export interface SectionData {
 	 *  content had not landed yet (see MAX_CONTENT_PENDING_SKIPS). Reset to 0
 	 *  whenever the section actually mounts. */
 	deferralCount: number;
+	/** Consecutive failed MarkdownRenderer.render attempts (see
+	 *  MAX_RENDER_RETRIES). Reset to 0 on every successful mount. */
+	renderFailures: number;
 }
 
 export interface HeightPersistence {
@@ -572,6 +591,7 @@ export class SectionPool {
 				heightTrusted: cached !== undefined,
 				wasHidden: false,
 				deferralCount: 0,
+				renderFailures: 0,
 			};
 			this.host.sections.set(path, data);
 			this.host.fileOrder.push(path);
@@ -822,6 +842,7 @@ export class SectionPool {
 			data.component = new Component();
 			this.sectionResizeObserver.observe(data.el);
 			data.deferralCount = 0;
+			data.renderFailures = 0;
 			return;
 		}
 
@@ -854,8 +875,17 @@ export class SectionPool {
 		// resolves, so their SVG/HTML lands a beat later and the layout/paint
 		// cost shows up after the section mounted — render-ms only captures the
 		// synchronous part (parsing + DOM construction of the cheap blocks).
+		// A throwing render must not leave the section stuck: data.component is
+		// set before the render, so an unhandled rejection would leave a live
+		// component over an empty element and reconcile would skip it forever
+		// (a blank atom until the note reloads). See the error branch below.
 		const t0 = performance.now();
-		await MarkdownRenderer.render(this.host.app, content, renderContainer, path, component);
+		let renderError: unknown = null;
+		try {
+			await MarkdownRenderer.render(this.host.app, content, renderContainer, path, component);
+		} catch (err) {
+			renderError = err;
+		}
 		const renderMs = performance.now() - t0;
 
 		if (this.host.isDestroyed() || data.renderGen !== gen || data.component !== component) {
@@ -868,6 +898,26 @@ export class SectionPool {
 			return;
 		}
 		this.dbgRenderMs += renderMs;
+		if (renderError) {
+			// The render threw (a markdown processor/plugin choked on the
+			// content — plausible right after a mass edit or linter run). Reset
+			// the section so reconcile does not skip it, drop the raw content
+			// so the retry re-reads the file, and re-enqueue on a delay: the
+			// content may have been transiently broken mid-operation.
+			this.host.dbg('render-error', path, formatRenderError(renderError), data.renderFailures);
+			data.renderFailures++;
+			data.component.unload();
+			data.component = null;
+			data.renderGen++;
+			this.host.rawContent.delete(path);
+			data.el.empty();
+			if (data.renderFailures < MAX_RENDER_RETRIES) {
+				window.setTimeout(() => {
+					if (!this.host.isDestroyed()) this.enqueueRender(path);
+				}, RENDER_RETRY_DELAY);
+			}
+			return;
+		}
 		if (renderMs >= RENDER_MS_LOG_THRESHOLD) {
 			this.host.dbg('render-ms', path, Math.round(renderMs));
 		}
@@ -889,6 +939,7 @@ export class SectionPool {
 		}
 		this.sectionResizeObserver.observe(data.el);
 		data.deferralCount = 0;
+		data.renderFailures = 0;
 		this.host.getOnSectionRendered()?.(path, renderContainer);
 		// Recalculate only when something that affects the layout actually
 		// changed: the heading flags (which drive the gaps), or a fold mode
@@ -958,7 +1009,12 @@ export class SectionPool {
 		data.component = component;
 		data.placeholder = true;
 		const t0 = performance.now();
-		await MarkdownRenderer.render(this.host.app, buildPlaceholderContent(content), renderContainer, path, component);
+		let renderError: unknown = null;
+		try {
+			await MarkdownRenderer.render(this.host.app, buildPlaceholderContent(content), renderContainer, path, component);
+		} catch (err) {
+			renderError = err;
+		}
 		const renderMs = performance.now() - t0;
 
 		if (this.host.isDestroyed() || data.renderGen !== gen || data.component !== component) {
@@ -968,6 +1024,24 @@ export class SectionPool {
 			return;
 		}
 		this.dbgRenderMs += renderMs;
+		if (renderError) {
+			// Same recovery as loadSection: reset, drop the raw content, retry
+			// on a delay so a transiently broken content cannot leave a blank
+			// section until the note is reloaded.
+			this.host.dbg('placeholder-error', path, formatRenderError(renderError), data.renderFailures);
+			data.renderFailures++;
+			data.component.unload();
+			data.component = null;
+			data.renderGen++;
+			this.host.rawContent.delete(path);
+			data.el.empty();
+			if (data.renderFailures < MAX_RENDER_RETRIES) {
+				window.setTimeout(() => {
+					if (!this.host.isDestroyed()) this.enqueueRender(path);
+				}, RENDER_RETRY_DELAY);
+			}
+			return;
+		}
 
 		// Fixed-height box: the mounted section's height is exactly data.height
 		// (the layout's current value for it), so the resize observer reports no
@@ -999,6 +1073,7 @@ export class SectionPool {
 		// for the resize observer to correct.
 		this.sectionResizeObserver.observe(data.el);
 		data.deferralCount = 0;
+		data.renderFailures = 0;
 	}
 
 	/** Queue the placeholder sections still in the load window for full renders,

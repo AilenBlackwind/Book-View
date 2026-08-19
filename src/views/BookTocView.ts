@@ -44,6 +44,13 @@ export class BookTocView extends ItemView {
 		return this.tocController?.getEntries() ?? [];
 	}
 
+	/** Incremental rebuild (entries + rows) after a book file's headings
+	 *  changed. Unlike bind(book, true) it keeps the controller and the panel
+	 *  DOM, so a mass edit coalescing into one refresh does not flicker. */
+	rebuild(): void {
+		this.tocController?.rebuild();
+	}
+
 	async onOpen(): Promise<void> {
 		this.contentEl.addClass('book-toc-view-root');
 	}

@@ -97,10 +97,14 @@ export class BookView extends ItemView {
 	}
 
 	protected async onOpen(): Promise<void> {
+		const t0 = performance.now();
+		DebugLog.startup('onOpen', this.filePath || '(no path)', `layout=${this.app.workspace.layoutReady}`);
 		const state = this.getState();
 		if (typeof state.filePath === 'string' && state.filePath) {
-			await this.loadBook(state.filePath);
+			await this.loadBookWhenReady(state.filePath);
 		}
+		const ms = performance.now() - t0;
+		if (ms > 50) DebugLog.log('LOAD onOpen-ms', String(this.instanceId), this.filePath, Math.round(ms));
 	}
 
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
@@ -108,7 +112,7 @@ export class BookView extends ItemView {
 		const s = state as Record<string, unknown>;
 		if (typeof s?.filePath === 'string') {
 			this.filePath = s.filePath;
-			await this.loadBook(s.filePath);
+			await this.loadBookWhenReady(s.filePath);
 		}
 	}
 
@@ -162,6 +166,14 @@ export class BookView extends ItemView {
 		this.findIndex = -1;
 		this.findAllActive = false;
 		this.findBar?.setFindAllActive(false);
+	}
+
+	/** ESC entry point, called by the plugin's window capture handler. Closes
+	 *  the find bar when it is open; otherwise the key is a no-op (Obsidian's
+	 *  default back-navigation was already swallowed, so ESC never swaps this
+	 *  leaf back to the previous note). */
+	handleEscape(): void {
+		this.closeFindBar();
 	}
 
 	private scheduleFind(query: string): void {
@@ -501,6 +513,59 @@ export class BookView extends ItemView {
 		}
 	}
 
+	private async loadBookWhenReady(filePath: string): Promise<void> {
+		const t0 = performance.now();
+		// Deferred-view replay (app startup) can run before workspace layout is
+		// marked ready — awaiting onLayoutReady there would deadlock on the 5s
+		// safety timeout (obsidian creates leaves → calls onOpen → we await
+		// layoutReady → but layoutReady is set only after loadLayout completes
+		// → and loadLayout may be waiting for us). The leaf has no size during
+		// this window, so the size-loop below handles it naturally: a few
+		// rAF ticks let the browser lay out the workspace, then clientHeight
+		// becomes positive and loadBook runs. Runtime opens (layout already up,
+		// leaf already sized) skip the loop instantly.
+		for (let i = 0; i < 120 && this.contentEl.clientHeight <= 0; i++) {
+			await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+			if (this.leaf.view !== this) return;
+		}
+		const waitMs = performance.now() - t0;
+		if (waitMs > 100) {
+			DebugLog.log('LOAD wait-ms', String(this.instanceId), filePath, Math.round(waitMs));
+			DebugLog.startup('onOpen waited', filePath, `${Math.round(waitMs)}ms`);
+		}
+		await this.loadBook(filePath);
+		DebugLog.startup('loadBook done', filePath, `${Math.round(performance.now() - t0)}ms`);
+	}
+
+	private async waitForManifestCache(file: TFile): Promise<void> {
+		return new Promise<void>((resolve) => {
+			const ref = this.app.metadataCache.on('changed', (f) => {
+				if (f.path === file.path) {
+					window.clearTimeout(timer);
+					this.app.metadataCache.offref(ref);
+					resolve();
+				}
+			});
+			const timer = window.setTimeout(() => {
+				this.app.metadataCache.offref(ref);
+				resolve();
+			}, 4000);
+		});
+	}
+
+	/** Cheap heuristic: does the raw file content look like it links other
+	 *  notes? Used to distinguish "manifest cache not parsed yet" from a
+	 *  genuinely empty manifest, so the cold-start wait never delays a book
+	 *  that has no links to render. */
+	private async rawContainsLinks(file: TFile): Promise<boolean> {
+		try {
+			const content = await this.app.vault.cachedRead(file);
+			return /\[\[|\[[^\]]*\]\(\.\//.test(content);
+		} catch {
+			return false;
+		}
+	}
+
 	private async loadBook(filePath: string, force = false): Promise<void> {
 		// Debug: log every loadBook call with its instance id to catch
 		// duplicate loads of the same book (tab/view churn) vs. fresh instances.
@@ -523,6 +588,19 @@ export class BookView extends ItemView {
 
 		const file = this.app.vault.getFileByPath(filePath);
 		if (!(file instanceof TFile)) return;
+
+		// Cold-start guard: a restored workspace can open the book before the
+		// metadata cache finished scanning the manifest (layout-ready is not
+		// gated on the cache). getManifestLinks then returns [] and the book
+		// would render "No linked notes found" with no event left to reload it.
+		// Wait (bounded) for the manifest's own cache to land. Only wait when
+		// the raw content actually contains link syntax, so a genuinely
+		// linkless manifest still shows the empty state immediately.
+		const manifestCache = this.app.metadataCache.getFileCache(file);
+		if (!manifestCache?.links && (await this.rawContainsLinks(file))) {
+			DebugLog.log('LOAD wait-metadata', String(this.instanceId), filePath);
+			await this.waitForManifestCache(file);
+		}
 
 		this.contentEl.empty();
 		this.contentEl.addClass('book-view-root');
@@ -558,6 +636,11 @@ export class BookView extends ItemView {
 		this.manifestPaths = new Set(files.map((f) => f.path));
 
 		const settings = this.plugin?.settings;
+
+		// The first book render must use theme spacings measured after the
+		// layout is ready; measure on demand instead of trusting onload's
+		// premature reading (see main.ts ensureThemeSpacings).
+		if (this.plugin) await this.plugin.ensureThemeSpacings();
 
 		this.absoluteManager = new AbsoluteSectionManager(
 			this.contentContainer,
@@ -698,13 +781,15 @@ export class BookView extends ItemView {
 				}
 				if (!this.manifestPaths.has(file.path)) return;
 				if (!this.haveHeadingsChanged(file)) return;
-				this.scheduleTocRefresh(file.path);
+				// Heading changes rebuild the ToC. Debounced + coalesced by the
+				// coordinator so a burst of file edits triggers ONE incremental
+				// rebuild (see TocCoordinator.scheduleRefresh).
+				this.plugin?.tocCoordinator?.scheduleRefresh();
 			}),
 		);
 	}
 
 	private refreshTimers: Map<string, number> = new Map();
-	private tocRefreshTimers: Map<string, number> = new Map();
 	/** JSON hash of each file's headings (level + heading text), used to skip TOC rebuild when only body text changed */
 	private tocHeadingsCache: Map<string, string> = new Map();
 
@@ -745,17 +830,6 @@ export class BookView extends ItemView {
 		}
 		this.tocHeadingsCache.set(file.path, hash);
 		return hash !== prev;
-	}
-
-	private scheduleTocRefresh(path: string): void {
-		const existing = this.tocRefreshTimers.get(path);
-		if (existing) window.clearTimeout(existing);
-
-		const timer = window.setTimeout(() => {
-			this.tocRefreshTimers.delete(path);
-			this.plugin?.tocCoordinator?.refresh();
-		}, 500);
-		this.tocRefreshTimers.set(path, timer);
 	}
 
 	private saveScrollPosition(): void {
@@ -802,10 +876,6 @@ export class BookView extends ItemView {
 			window.clearTimeout(timer);
 		}
 		this.refreshTimers.clear();
-		for (const timer of this.tocRefreshTimers.values()) {
-			window.clearTimeout(timer);
-		}
-		this.tocRefreshTimers.clear();
 		this.tocHeadingsCache.clear();
 		if (this.absoluteManager) {
 			this.absoluteManager.destroy();

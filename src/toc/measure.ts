@@ -12,23 +12,31 @@ const TAG_MS_BUDGET = 6;
 /** Heading-offset measurement (tagHeadings + the deferred rect reads in the
  *  shared manager frame) and offset cache invalidation. */
 export class TocMeasurer {
+	/** Entries whose measured within-section offset is stale because the file
+	 *  was edited (see invalidatePath). The cached value stays authoritative
+	 *  until the section's next render re-measures it; deleting it would make
+	 *  calculatePositions fall back to line estimates and the pill jump to the
+	 *  wrong entry and back — the flicker during mass edits. */
+	private dirtyOffsets = new Set<number>();
+
 	constructor(private state: TocState) {}
 
-	/** Drop measured within-section offsets for one path. Called when a file's
-	 *  content is edited (markDirty re-renders the section without a TOC
-	 *  rebuild), so the next render re-measures instead of trusting a stale
-	 *  offset. */
+	/** Mark one path's heading offsets for re-measurement instead of deleting
+	 *  them. Called when a file's content is edited (markDirty re-renders the
+	 *  section without a TOC rebuild); the offsets are re-measured by
+	 *  tagHeadings once the section's next render lands. */
 	invalidatePath(path: string): void {
 		const s = this.state;
-		let removed = 0;
+		let marked = 0;
 		for (let k = 0; k < s.entries.length; k++) {
-			if (s.entries[k]?.file.path === path && s.headingOffsets.delete(k)) removed++;
+			if (s.entries[k]?.file.path === path && s.headingOffsets.has(k)) {
+				this.dirtyOffsets.add(k);
+				marked++;
+			}
 		}
-		// Debug: is the headingOffsets cache being silently evicted by
-		// markDirty (file modify events) while the user is elsewhere?
-		if (removed > 0) {
-			s.positionsDirty = true;
-			DebugLog.log('TOC invalidate', path, removed);
+		// Debug: are content edits re-measuring the expected entries?
+		if (marked > 0) {
+			DebugLog.log('TOC invalidate', path, marked);
 		}
 	}
 
@@ -64,10 +72,14 @@ export class TocMeasurer {
 
 			// Churn re-mounts of the same file re-render an identical layout, so
 			// the measured within-section offsets stay valid across renders. Only
-			// measure headings without a cached offset. Content edits invalidate
-			// the cache via invalidatePath, so stale offsets are re-measured
-			// there.
-			if (s.headingOffsets.has(tocIndex)) continue;
+			// measure headings without a cached offset, plus entries whose cached
+			// offset was invalidated by a content edit (invalidatePath) — those
+			// re-measure against the freshly rendered DOM. The dirty flag is
+			// cleared when the rect read actually lands (onTagFrame); a skipped
+			// read (section unloaded, fold-hidden) keeps it dirty so the next
+			// render retries.
+			const dirty = this.dirtyOffsets.has(tocIndex);
+			if (s.headingOffsets.has(tocIndex) && !dirty) continue;
 			toMeasure.push({ el, tocIndex });
 		}
 		if (toMeasure.length === 0) return;
@@ -143,6 +155,7 @@ export class TocMeasurer {
 				const headingRect = item.el.getBoundingClientRect();
 				s.headingOffsets.set(item.tocIndex, headingRect.top - sectionRect.top);
 				s.positionsDirty = true;
+				this.dirtyOffsets.delete(item.tocIndex);
 				rects++;
 				if (s.positionSource?.dbgTagRects !== undefined) s.positionSource.dbgTagRects++;
 			}
@@ -161,5 +174,6 @@ export class TocMeasurer {
 		s.positionSource?.removeFrameCallback(this.onTagFrame);
 		s.pendingTagHeadings = [];
 		s.tagFrameRequested = false;
+		this.dirtyOffsets.clear();
 	}
 }

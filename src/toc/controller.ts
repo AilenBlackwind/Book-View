@@ -60,6 +60,25 @@ export class TocController {
 		this.spy.setup();
 	}
 
+	/** Rebuild the entries and rows from the current metadata cache without
+	 *  destroying the controller or wiping the panel DOM. Used when a book
+	 *  file's headings changed (markDirty re-renders the section itself). A
+	 *  full bind/unbind wipe-and-rebuild is the ToC flicker source during mass
+	 *  edits; this keeps the panel mounted and only swaps the data + rows. */
+	rebuild(): void {
+		this.window.destroy();
+		this.measurer.destroy();
+		this.spy.destroy();
+		this.state.resetForBuild();
+		this.builder.build();
+		this.window.mount();
+		this.window.setup();
+		this.spy.calculatePositions();
+		if (this.state.entries.length === 0) return;
+		this.measurer.setup();
+		this.spy.setup();
+	}
+
 	/** Tag a freshly mounted section's headings; rect reads are deferred to
 	 *  the shared manager frame (see TocMeasurer). */
 	tagHeadings(path: string, container: HTMLElement): void {

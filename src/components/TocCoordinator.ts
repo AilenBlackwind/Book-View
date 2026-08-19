@@ -1,4 +1,4 @@
-import { WorkspaceLeaf } from 'obsidian';
+import { MarkdownView, WorkspaceLeaf } from 'obsidian';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from '../views/BookView';
 import { BookTocView, VIEW_TYPE_BOOK_TOC } from '../views/BookTocView';
 import { DebugLog } from '../utils/debug';
@@ -10,10 +10,11 @@ import type BookViewPlugin from '../main';
  *
  * The ToC follows the active leaf: whenever a book becomes active it opens
  * (and, per settings, focuses) the panel, and it closes when the user moves
- * to a non-book note. Interacting with the ToC panel itself (its leaf being
- * active) keeps the current binding; a manual toggle-off suppresses the
- * immediate reopen that the detach-triggered active-leaf-change would
- * otherwise cause.
+ * to a non-book note. Opening a note that belongs to the bound book in the
+ * editor keeps the panel open and bound. Interacting with the ToC panel
+ * itself (its leaf being active) keeps the current binding; a manual
+ * toggle-off suppresses the immediate reopen that the detach-triggered
+ * active-leaf-change would otherwise cause.
  *
  * Both auto behaviors can be turned off in settings: `tocAutoOpen` disables
  * auto-open/close entirely (the ToC becomes fully manual), and
@@ -28,6 +29,10 @@ export class TocCoordinator {
 	 *  change. Used to avoid re-stealing focus when the user clicks back into
 	 *  the book right after interacting with the panel. */
 	private prevActiveWasToc = false;
+	/** Coalescing timer for heading-change refreshes: a burst of file edits
+	 *  (mass replace, a linter run) producing many `scheduleRefresh` calls
+	 *  rebuilds the ToC once, not once per file. */
+	private refreshTimer = 0;
 
 	constructor(private plugin: BookViewPlugin) {}
 
@@ -91,9 +96,24 @@ export class TocCoordinator {
 		}
 	}
 
+	/** True when the active view is the editor showing one of the current
+	 *  book's notes (or the book manifest itself). Editing a note in the book
+	 *  keeps the ToC open and bound; switching to any other note closes it. */
+	private isEditingBookFile(): boolean {
+		const book = this.lastBook;
+		if (!book) return false;
+		const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+		const file = activeView?.file;
+		if (!file) return false;
+		if (file.path === book.filePath) return true;
+		return book.getCurrentFiles().some((f) => f.path === file.path);
+	}
+
 	/** Follow the active leaf: open+bind when a book is active, close on any
 	 *  other view. The ToC leaf itself being active means the user is inside
-	 *  the panel — keep the binding instead of closing it. */
+	 *  the panel — keep the binding instead of closing it. Opening a book note
+	 *  in the editor (MarkdownView) also keeps the binding, so the panel does
+	 *  not slam shut mid-edit. */
 	sync(): void {
 		if (this.suppressAutoOpen) return;
 
@@ -105,7 +125,7 @@ export class TocCoordinator {
 
 		const active = this.plugin.app.workspace.getActiveViewOfType(BookView);
 		if (!active) {
-			if (this.plugin.settings.tocAutoOpen) this.close();
+			if (this.plugin.settings.tocAutoOpen && !this.isEditingBookFile()) this.close();
 			return;
 		}
 
@@ -140,10 +160,22 @@ export class TocCoordinator {
 		if (view.getBoundBook() !== book) view.bind(book, true);
 	}
 
-	/** Force-rebuild the bound ToC (e.g. when a book's headings changed). */
+	/** Force-rebuild the bound ToC (e.g. when a book's headings changed).
+	 *  Incremental: entries + rows are rebuilt in place, the panel DOM is not
+	 *  wiped. */
 	refresh(): void {
-		const view = this.getTocView();
-		if (view && this.lastBook) view.bind(this.lastBook, true);
+		this.getTocView()?.rebuild();
+	}
+
+	/** Debounced, coalesced heading-change refresh. Every caller (each edited
+	 *  book file) lands here; a single 500ms timer turns a mass edit into one
+	 *  ToC rebuild instead of N full panel rebuilds. */
+	scheduleRefresh(): void {
+		window.clearTimeout(this.refreshTimer);
+		this.refreshTimer = window.setTimeout(() => {
+			this.refreshTimer = 0;
+			this.refresh();
+		}, 500);
 	}
 
 	onBookClosed(book: BookView): void {

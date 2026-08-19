@@ -17,8 +17,31 @@ export class DebugLog {
 	/** Persistent subscribers notified on every enable/disable flip. */
 	private static changeListeners = new Set<(enabled: boolean) => void>();
 
+	/** Lightweight always-on startup profiler. Pushes a few key timestamps
+	 *  on every app start so a slow startup can be diagnosed after the fact
+	 *  (Copy debug log or DevTools console) without needing to have debug
+	 *  logging pre-enabled. Capped to a handful of entries. */
+	private static _startupLog: string[] = [];
+
 	static get enabled(): boolean {
 		return DebugLog._enabled;
+	}
+
+	/** Record a startup-phase timestamp (always-on, not gated by enabled).
+	 *  Visible via the "Copy debug log" command on every startup. */
+	static startup(msg: string, a?: number | string, b?: number | string): void {
+		const wall = Date.now();
+		const t = performance.now();
+		let line = `[startup ${wall}] +${Math.round(t)}ms ${msg}`;
+		if (a !== undefined) line += ` ${a}`;
+		if (b !== undefined) line += ` ${b}`;
+		DebugLog._startupLog.push(line);
+		if (DebugLog._startupLog.length > 30) DebugLog._startupLog.splice(0, DebugLog._startupLog.length - 30);
+	}
+
+	/** Retrieve the always-on startup log. */
+	static getStartupLog(): string[] {
+		return DebugLog._startupLog;
 	}
 
 	/** Turn logging on or off. Enabling clears the ring buffer first so the

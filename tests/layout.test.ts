@@ -43,6 +43,7 @@ function makeLayout(specs: Spec[]): { layout: SectionLayout; host: HostView } {
 			heightTrusted: true,
 			wasHidden: false,
 			deferralCount: 0,
+			renderFailures: 0,
 		});
 	}
 	const host: HostView = {

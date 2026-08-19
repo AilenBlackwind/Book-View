@@ -17,10 +17,26 @@ export default class BookViewPlugin extends Plugin {
 	bufferManager: BufferManager = null as unknown as BufferManager;
 	api: BookViewAPI | null = null;
 	private skipPaths = new Set<string>();
+	/** Last mouse clientX/clientY, updated by a capture-phase mousemove listener.
+	 *  Used by the Ctrl+F fallback to open the find bar of the book under the
+	 *  cursor: after a wheel gesture focus stays on <body> (wheel events never
+	 *  move focus), so the keydown target is not inside the book even though
+	 *  the user is clearly reading it. */
+	private lastPointerX = -1;
+	private lastPointerY = -1;
 	heightStore: Record<string, { m: number; h: number; w: number }> = {};
 	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
 	tocCoordinator: TocCoordinator | null = null;
 	private saveHeightsTimer = 0;
+	/** Memoized first theme-spacing measurement. onload used to measure
+	 *  immediately, i.e. before the layout was ready — on a cold start the
+	 *  probe rendered into a DOM whose theme CSS was still settling, so the
+	 *  first book used those premature gaps until a css-change corrected them.
+	 *  loadBook awaits this instead, which puts the first measurement after
+	 *  layout-ready (the theme is fully applied by then). css-change re-measures
+	 *  directly into `themeSpacings`, and loadBook reads the field after the
+	 *  barrier, so a stale memo is harmless. */
+	private themeSpacingsReady: Promise<void> | null = null;
 
 	getPersistedHeight = (path: string, mtime: number, width: number): number | undefined => {
 		const rec = this.heightStore[path];
@@ -45,9 +61,9 @@ export default class BookViewPlugin extends Plugin {
 	};
 
 	async onload() {
+		DebugLog.startup('plugin load');
 		await this.loadSettings();
 
-		this.themeSpacings = await measureThemeSpacings(this.app);
 		this.registerEvent(
 			this.app.workspace.on('css-change', async () => {
 				this.themeSpacings = await measureThemeSpacings(this.app);
@@ -80,6 +96,13 @@ export default class BookViewPlugin extends Plugin {
 			capture: true,
 			passive: false,
 		});
+
+		// Track the cursor position (capture, cheap) so the Ctrl+F fallback can
+		// resolve the book under the pointer even when focus never entered it.
+		this.registerDomEvent(window, 'mousemove', (evt) => {
+			this.lastPointerX = evt.clientX;
+			this.lastPointerY = evt.clientY;
+		}, { capture: true });
 
 		this.registerView(VIEW_TYPE_BOOK_VIEW, (leaf) => {
 			const view = new BookView(leaf);
@@ -158,19 +181,59 @@ export default class BookViewPlugin extends Plugin {
 			if (!(evt.ctrlKey || evt.metaKey) || evt.code !== 'KeyF' || evt.shiftKey || evt.altKey) return;
 			const target = evt.target as HTMLElement | null;
 			if (!target) return;
-			const bv = this.app.workspace.getActiveViewOfType(BookView);
-			if (!bv) return;
+
+			// The find bar's field is an INPUT element: handle a Ctrl+F pressed
+			// while its field is focused (re-open the bar) before the input
+			// check below swallows it.
 			if (target.closest('.book-find-bar')) {
-				evt.preventDefault();
-				evt.stopImmediatePropagation();
-				bv.showFindBar();
+				const bv = this.findBookViewByRoot(target.closest('.book-view-root'));
+				if (bv) {
+					evt.preventDefault();
+					evt.stopImmediatePropagation();
+					bv.showFindBar();
+				}
 				return;
 			}
+
 			if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
-			if (!target.closest('.book-view-root')) return;
+
+			// Open the find bar of the book the user is interacting with, in
+			// order: the book that holds the DOM focus, the active book view,
+			// or the book under the cursor. The last covers wheel scrolling —
+			// wheel events never move focus, so after a gesture the keydown
+			// target is <body> and the keymap (view scope) alone never fires;
+			// clicking the book (moving focus inside) was previously required.
+			const bv =
+				this.findBookViewByRoot(target.closest('.book-view-root')) ??
+				this.app.workspace.getActiveViewOfType(BookView) ??
+				this.findBookViewByRoot(this.bookRootUnderPointer());
+			if (!bv) return;
 			evt.preventDefault();
 			evt.stopImmediatePropagation();
 			bv.showFindBar();
+		}, { capture: true });
+
+		// ESC in the book: close the find bar when it is open, and always
+		// swallow the key so Obsidian's default back-navigation never swaps the
+		// leaf back to the previous note. With the find bar closed ESC is a
+		// no-op. Open modals, context menus and suggesters own the ESC key and
+		// must be left alone (see hasOpenOverlay).
+		this.registerDomEvent(window, 'keydown', (evt) => {
+			if (evt.key !== 'Escape' || evt.ctrlKey || evt.metaKey || evt.altKey) return;
+			const target = evt.target as HTMLElement | null;
+			if (!target) return;
+			// Typing in a field that is not part of the book: leave ESC to
+			// Obsidian (editor autocomplete, other search fields…).
+			if ((target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) && !target.closest('.book-view-root')) return;
+			const bv =
+				this.findBookViewByRoot(target.closest('.book-view-root')) ??
+				this.app.workspace.getActiveViewOfType(BookView) ??
+				this.findBookViewByRoot(this.bookRootUnderPointer());
+			if (!bv) return;
+			if (this.hasOpenOverlay()) return;
+			evt.preventDefault();
+			evt.stopImmediatePropagation();
+			bv.handleEscape();
 		}, { capture: true });
 
 		this.addCommand({
@@ -188,9 +251,20 @@ export default class BookViewPlugin extends Plugin {
 			name: 'Copy debug log to clipboard',
 			callback: async () => {
 				const w = window as unknown as { __bvLog?: string[] };
-				const text = (w.__bvLog ?? []).join('\n');
+				const startup = DebugLog.getStartupLog();
+				const debug = w.__bvLog ?? [];
+				const parts: string[] = [];
+				if (startup.length) {
+					parts.push('--- Startup ---');
+					parts.push(...startup);
+				}
+				if (debug.length) {
+					parts.push('--- Debug ---');
+					parts.push(...debug);
+				}
+				const text = parts.join('\n');
 				await navigator.clipboard.writeText(text);
-				new Notice(`Book View: ${text.split('\n').length} log lines copied`);
+				new Notice(`Book View: ${startup.length} startup + ${debug.length} debug lines copied`);
 			},
 		});
 		DebugLog.onChange((enabled) => {
@@ -262,6 +336,18 @@ export default class BookViewPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(Object.assign({}, this.settings, { measuredHeights: this.heightStore }));
 		this.refreshAllTocs();
+	}
+
+	/** Lazy, memoized theme-spacing measurement. Awaited by BookView.loadBook
+	 *  before it builds the section manager, so the first book render always
+	 *  uses spacings measured after layout-ready (see themeSpacingsReady). */
+	ensureThemeSpacings(): Promise<void> {
+		if (!this.themeSpacingsReady) {
+			this.themeSpacingsReady = measureThemeSpacings(this.app).then((s) => {
+				this.themeSpacings = s;
+			});
+		}
+		return this.themeSpacingsReady;
 	}
 
 	refreshAllTocs() {
@@ -339,6 +425,36 @@ export default class BookViewPlugin extends Plugin {
 			}
 		});
 		return result;
+	}
+
+	/** The BookView whose `.book-view-root` element is `root`, or null. */
+	private findBookViewByRoot(root: HTMLElement | null): BookView | null {
+		if (!root) return null;
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BOOK_VIEW);
+		for (const leaf of leaves) {
+			if (leaf.view instanceof BookView && leaf.view.contentEl === root) {
+				return leaf.view;
+			}
+		}
+		return null;
+	}
+
+	/** The `.book-view-root` currently under the tracked cursor position, or
+	 *  null when the cursor is elsewhere (or not yet tracked). */
+	private bookRootUnderPointer(): HTMLElement | null {
+		if (this.lastPointerX < 0) return null;
+		const el = document.elementFromPoint(this.lastPointerX, this.lastPointerY);
+		if (!(el instanceof HTMLElement)) return null;
+		return el.closest('.book-view-root');
+	}
+
+	/** True while a modal, context menu, or suggester overlay is open. Those
+	 *  own the ESC key and must be able to close themselves, so the book's ESC
+	 *  swallow must not run while one is up. */
+	private hasOpenOverlay(): boolean {
+		return Boolean(document.querySelector(
+			'body > .modal-container, body > .menu-container, body > .suggestion-container, body > .popover',
+		));
 	}
 
 	private async activateBookView(filePath: string, targetLeaf: WorkspaceLeaf) {
