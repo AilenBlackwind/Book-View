@@ -33,6 +33,11 @@ class ReplacePreviewModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass('book-replace-preview');
 
+		this.scope.register([], "Enter", () => {
+			this.onConfirm();
+			this.close();
+		});
+
 		contentEl.createEl('h3', { text: `Replace in ${this.changes.length} location(s)` });
 
 		const list = contentEl.createDiv({ cls: 'book-replace-list' });
