@@ -399,16 +399,10 @@ export default class BookViewPlugin extends Plugin {
 		if (this.skipPaths.has(viewFile.path)) return;
 
 		if (isBookManifest(this.app, viewFile)) {
-			const existing = this.getActiveBookLeaf();
-			if (existing) {
-				const bv = existing.view as BookView;
-				if (bv.filePath !== viewFile.path) {
-					void this.activateBookView(viewFile.path, existing);
-				}
-				leaf.detach();
-			} else {
-				void this.activateBookView(viewFile.path, leaf);
-			}
+			// Convert the current leaf to BookView.  Each leaf is independent —
+			// opening a second manifest creates a second BookView without
+			// touching the first (standard FileView / note behavior).
+			void this.activateBookView(viewFile.path, leaf);
 		}
 	}
 
