@@ -38,7 +38,7 @@ export class TocNavigator {
 				} else if (s.positionSource?.resolveHeadingEl) {
 					// A content-based host (e.g. a reading view) lazy-renders the
 					// note: the estimated scroll just moved the viewport, and the
-					// target heading may take a frame or two to paint. Keep
+					// target heading may take a frame or two to paint.  Keep
 					// re-resolving until it appears so the exact settle below runs
 					// instead of leaving the estimate scroll uncorrected.
 					for (let attempt = 0; attempt < 30; attempt++) {
@@ -57,6 +57,15 @@ export class TocNavigator {
 			}
 
 			this.spy.calculatePositions();
+			// Mark positions as just-recalculated so the expand/collapse gate
+			// in the spy waits for heading offsets to be measured instead of
+			// firing immediately on line-based estimates.
+			s.positionsStableSince = performance.now();
+			// Record navigation time and scroll position so the spy defers
+			// pickActiveIndex until the user scrolls significantly away from
+			// the teleport target — the pill stays on the teleported-to entry.
+			s.lastNavigationTime = performance.now();
+			s.lastNavigationScrollTop = s.scrollContainer.scrollTop;
 			// Set activeEntryIndex BEFORE applyVisibility: the re-render
 			// destroys and recreates rows, then calls reapplyHighlight()
 			// which reads activeEntryIndex to re-host the highlight pill.

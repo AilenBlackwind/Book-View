@@ -141,7 +141,7 @@ export class TocSpy {
 		}
 	}
 
-/** Called once per rAF frame on scroll */
+	/** Called once per rAF frame on scroll */
 	onScrollTick(): void {
 		const s = this.state;
 		if (s.isJumping) return;
@@ -151,6 +151,21 @@ export class TocSpy {
 		const scrollTop = s.positionSource?.getScrollTop() ?? s.scrollContainer.scrollTop;
 		const viewportHeight = s.viewportHeight;
 		const bestIndex = pickActiveIndex(s.headingPositions, scrollTop, viewportHeight);
+
+		// After a navigation (teleport), trust the teleported-to entry until
+		// the user scrolls significantly away from the teleport target.
+		// Compensate events (programmatic scroll adjustments from lazy section
+		// loads) can shift scrollTop by hundreds of pixels — skip them via
+		// isAdjustingScroll so they don't release the grace prematurely.
+		if (s.lastNavigationTime > 0) {
+			if (s.positionSource?.isAdjustingScroll?.()) return;
+			const scrollDelta = Math.abs(scrollTop - s.lastNavigationScrollTop);
+			const SCROLL_RELEASE_PX = viewportHeight * 0.4;
+			const MAX_GRACE_MS = 2000;
+			const elapsed = performance.now() - s.lastNavigationTime;
+			if (scrollDelta < SCROLL_RELEASE_PX && elapsed < MAX_GRACE_MS) return;
+			s.lastNavigationTime = 0;
+		}
 
 		if (bestIndex < 0) {
 			window.clearTimeout(s.activePathTimer);
@@ -191,18 +206,18 @@ export class TocSpy {
 		}
 
 		// Debounce expand/collapse: wait for scroll to settle (30ms).
-		// Also suppress when:
-		//  1. Heading positions were recently recalculated (300ms window) —
-		//     sections lazy-mounting shift estimates.
-		//  2. The active entry's heading offset hasn't been measured yet
-		//     (headingOffsets map) — its position is a line-based estimate
-		//     which can be wildly off after lazy section mounts.
-		// Expanding/collapsing on a transient wrong heading causes visible
-		// flicker (the user sees the indicator jump to a wrong section).
-		const POSITIONS_SETTLE_MS = 300;
+		// Also suppress when heading positions were recently recalculated
+		// (300ms window) — sections lazy-mounting shift estimates.
+		// NOTE: do NOT gate on offsetMeasured (headingOffsets.has(bestIndex)).
+		// Collapsed headings have display:none, so tagHeadings skips them and
+		// their offsets are never measured — gating on it creates a deadlock
+		// where expand/collapse can never fire for collapsed entries.  The
+		// positionsStable window is sufficient: once positions have been stable
+		// for 300ms the line-based estimates are close enough to pick the right
+		// heading, and the 30ms debounce after that prevents transient flicker.
+		const POSITIONS_SETTLE_MS = 100;
 		const positionsStable = (performance.now() - s.positionsStableSince) > POSITIONS_SETTLE_MS;
-		const offsetMeasured = s.headingOffsets.has(bestIndex);
-		if (bestIndex !== s.pendingPathIndex && positionsStable && offsetMeasured) {
+		if (bestIndex !== s.pendingPathIndex && positionsStable) {
 			s.pendingPathIndex = bestIndex;
 			window.clearTimeout(s.activePathTimer);
 			s.activePathTimer = window.setTimeout(() => {

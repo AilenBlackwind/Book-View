@@ -1,4 +1,4 @@
-import { Component, ItemView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
+import { Component, FileView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { HEIGHT_PER_LINE } from '../toc/types';
@@ -17,7 +17,7 @@ function matchesModifiers(evt: MouseEvent, mod: ModifierConfig): boolean {
 
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
 
-export class BookView extends ItemView {
+export class BookView extends FileView {
 	// Debug: distinguish loadBook calls on the same vs. new instances.
 	private static nextInstanceId = 0;
 	readonly instanceId = ++BookView.nextInstanceId;
@@ -31,10 +31,6 @@ export class BookView extends ItemView {
 	private loadedPath = '';
 	private popoutLeaf: WorkspaceLeaf | null = null;
 	private savedScrollTop: number = -1;
-	/** contentContainer that `savedScrollTop` was read from. A rebuild
-	 *  (loadBook) replaces it; if it is still the live container the scroll is
-	 *  current or was moved intentionally (e.g. ToC teleport), so a stale
-	 *  restore would be wrong. */
 	private savedContainer: HTMLElement | null = null;
 	filePath: string = '';
 	plugin: BookViewPlugin | null = null;
@@ -45,6 +41,7 @@ export class BookView extends ItemView {
 
 	constructor(leaf: WorkspaceLeaf) {
 		super(leaf);
+		this.allowNoFile = true;
 		// Ctrl/Cmd+F bound through Obsidian's hotkey pipeline: the view scope
 		// takes precedence over the global "search current file" hotkey while
 		// this view is focused, instead of racing it for the DOM keydown.
@@ -93,7 +90,7 @@ export class BookView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		return { filePath: this.filePath };
+		return { filePath: this.filePath, file: this.filePath };
 	}
 
 	protected async onOpen(): Promise<void> {
@@ -110,15 +107,37 @@ export class BookView extends ItemView {
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
 		await super.setState(state, result);
 		const s = state as Record<string, unknown>;
-		if (typeof s?.filePath === 'string') {
-			this.filePath = s.filePath;
-			await this.loadBookWhenReady(s.filePath);
+		// Accept both conventions: `filePath` (our plugin) and `file` (Obsidian FileView / workspace restore).
+		const raw = (typeof s?.filePath === 'string' && s.filePath)
+			|| (typeof s?.file === 'string' && s.file);
+		if (raw) {
+			this.filePath = raw;
+			this.file = this.app.vault.getFileByPath(raw) ?? null;
+			await this.loadBookWhenReady(raw);
 		}
 	}
 
 	protected async onClose(): Promise<void> {
 		this.plugin?.tocCoordinator?.onBookClosed(this);
 		this.cleanup();
+	}
+
+	// FileView abstract methods --------------------------------------------------
+
+	async onLoadFile(_file: TFile): Promise<void> {
+		// Loading is driven by setState → loadBookWhenReady; nothing extra needed.
+	}
+
+	async onUnloadFile(_file: TFile): Promise<void> {
+		this.cleanup();
+	}
+
+	async onRename(_file: TFile): Promise<void> {
+		// filePath stays in sync via setState when the workspace re-saves state.
+	}
+
+	canAcceptExtension(_extension: string): boolean {
+		return false;
 	}
 
 	refreshToc(): void {

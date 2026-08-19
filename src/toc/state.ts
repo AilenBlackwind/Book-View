@@ -125,6 +125,13 @@ export class TocState {
 	 *  not cause the indicator to briefly highlight a wrong heading and
 	 *  toggle expand/collapse before positions settle. */
 	positionsStableSince = 0;
+	/** Timestamp (ms) of last scrollToHeading call and the scrollTop at that
+	 *  moment.  The spy defers pickActiveIndex + updateHighlight until the
+	 *  user scrolls significantly away from the teleport target, so the pill
+	 *  stays on the teleported-to entry while heading offsets are measured
+	 *  and line-based estimates settle. */
+	lastNavigationTime = 0;
+	lastNavigationScrollTop = -1;
 
 	constructor(
 		containerEl: HTMLElement,
