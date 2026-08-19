@@ -119,6 +119,12 @@ export class TocState {
 	navigationTimer = 0;
 	/** true while programmatic scroll is in progress */
 	isJumping = false;
+	/** Timestamp (ms) when heading positions last changed.  The spy's
+	 *  expand/collapse path is suppressed briefly after a position change so
+	 *  that estimated heading offsets (which shift as sections lazy-mount) do
+	 *  not cause the indicator to briefly highlight a wrong heading and
+	 *  toggle expand/collapse before positions settle. */
+	positionsStableSince = 0;
 
 	constructor(
 		containerEl: HTMLElement,

@@ -1,6 +1,7 @@
 import { TocState } from './state';
 import { HEIGHT_PER_LINE } from './types';
 import { pickActiveIndex } from '../utils/toc';
+import { DebugLog } from '../utils/debug';
 
 /** How close to the panel edge the active row may get before the panel
  *  scrolls to keep it visible (keepActiveInView), and how far from the edge
@@ -21,6 +22,9 @@ const CENTER_SCROLL_SETTLE_MS = 50;
  *  through the virtual offsets + the window's row maps instead of direct row
  *  DOM lookups. */
 export class TocSpy {
+	/** Last bestIndex reported by pickActiveIndex; used to log only on change. */
+	private _prevSpyIndex = -1;
+
 	constructor(private state: TocState) {}
 
 	/** Wire the scroll listener, the frame callback, and the viewport
@@ -112,6 +116,7 @@ export class TocSpy {
 		if (!s.positionsDirty && layoutVersion === s.lastLayoutVersion) return;
 		s.positionsDirty = false;
 		s.lastLayoutVersion = layoutVersion;
+		s.positionsStableSince = performance.now();
 		this.calculatePositions();
 	}
 
@@ -136,21 +141,14 @@ export class TocSpy {
 		}
 	}
 
-	/** Called once per rAF frame on scroll */
+/** Called once per rAF frame on scroll */
 	onScrollTick(): void {
 		const s = this.state;
 		if (s.isJumping) return;
 
 		this.updatePositionsIfDirty();
 
-		// Use the manager's per-frame viewport snapshot instead of reading
-		// scrollTop here: the manager already read it in runFrame (next to its
-		// own writes), and a second read in the same frame forces a second
-		// layout flush — including on frames where processUpdates just dirtied
-		// the layout. The snapshot is from this same frame, so it is exact.
 		const scrollTop = s.positionSource?.getScrollTop() ?? s.scrollContainer.scrollTop;
-
-		// find active heading by position
 		const viewportHeight = s.viewportHeight;
 		const bestIndex = pickActiveIndex(s.headingPositions, scrollTop, viewportHeight);
 
@@ -168,17 +166,18 @@ export class TocSpy {
 
 		const mode = s.settings?.autoExpandMode ?? 'disabled';
 
-		// Update highlight immediately (tracks scroll in real-time). When the
-		// active entry is hidden (collapsed under an ancestor, or all rows
-		// collapsed), fall back to the nearest visible ancestor.
 		const highlightIndex = this.visibleAncestor(bestIndex, mode !== 'disabled');
+
+		// Debug: log only when the active heading changes
+		if (bestIndex !== this._prevSpyIndex) {
+			const entry = s.entries[bestIndex];
+			const posAge = Math.round(performance.now() - s.positionsStableSince);
+			const label = entry ? `${entry.file.basename}#${entry.text}` : '?';
+			DebugLog.log('SPY', '', bestIndex, label, `scroll=${Math.round(scrollTop)}`, `posAge=${posAge}`);
+			this._prevSpyIndex = bestIndex;
+		}
+
 		this.updateHighlight(highlightIndex);
-		// During a fast flick the active row can leave the panel viewport and
-		// the pill vanishes until the settle-centering runs. Pin it back with
-		// an instant scrollTop write (no smooth animation — that is what stole
-		// the book's frame budget), so the indicator stays visible while the
-		// gesture is still moving. Runs only when the row actually crosses an
-		// edge, so it is one cheap write per heading change.
 		this.keepActiveInView(highlightIndex);
 
 		// Center the active item once the scroll settles. Centering inside the
@@ -191,8 +190,19 @@ export class TocSpy {
 			this.scheduleCenterScroll(highlightIndex);
 		}
 
-		// Debounce expand/collapse: wait for scroll to settle (30ms)
-		if (bestIndex !== s.pendingPathIndex) {
+		// Debounce expand/collapse: wait for scroll to settle (30ms).
+		// Also suppress when:
+		//  1. Heading positions were recently recalculated (300ms window) —
+		//     sections lazy-mounting shift estimates.
+		//  2. The active entry's heading offset hasn't been measured yet
+		//     (headingOffsets map) — its position is a line-based estimate
+		//     which can be wildly off after lazy section mounts.
+		// Expanding/collapsing on a transient wrong heading causes visible
+		// flicker (the user sees the indicator jump to a wrong section).
+		const POSITIONS_SETTLE_MS = 300;
+		const positionsStable = (performance.now() - s.positionsStableSince) > POSITIONS_SETTLE_MS;
+		const offsetMeasured = s.headingOffsets.has(bestIndex);
+		if (bestIndex !== s.pendingPathIndex && positionsStable && offsetMeasured) {
 			s.pendingPathIndex = bestIndex;
 			window.clearTimeout(s.activePathTimer);
 			s.activePathTimer = window.setTimeout(() => {

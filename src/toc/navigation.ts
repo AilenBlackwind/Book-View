@@ -57,6 +57,13 @@ export class TocNavigator {
 			}
 
 			this.spy.calculatePositions();
+			// Set activeEntryIndex BEFORE applyVisibility: the re-render
+			// destroys and recreates rows, then calls reapplyHighlight()
+			// which reads activeEntryIndex to re-host the highlight pill.
+			// Without this, the first click after load (activeEntryIndex=-1)
+			// leaves the pill orphaned and the next spy tick highlights a
+			// wrong heading based on stale estimates.
+			s.activeEntryIndex = entryIndex;
 			this.spy.updateHighlight(entryIndex);
 
 			// Apply auto-expand for the clicked heading
@@ -66,12 +73,47 @@ export class TocNavigator {
 				s.applyVisibility();
 			}
 		} finally {
+			// Wait for the scroll position to stabilize after applyVisibility
+			// may have triggered re-layout (lazy renders, height changes).
+			// Without this the spy wakes up on an intermediate scrollTop,
+			// momentarily highlights a wrong heading and toggles expand/collapse.
+			await this.waitForScrollSettle();
 			window.clearTimeout(s.navigationTimer);
 			s.navigationTimer = window.setTimeout(() => {
 				s.navigating = false;
 				s.isJumping = false;
-			}, 200);
+			}, 50);
 		}
+	}
+
+	/**
+	 * Wait until the book's scrollTop has not changed for several
+	 * consecutive frames.  After `applyVisibility()` re-renders rows the
+	 * lazy content can still shift the layout for a frame or two; this
+	 * prevents the spy from firing on an intermediate position.
+	 */
+	private waitForScrollSettle(): Promise<void> {
+		const s = this.state;
+		return new Promise<void>((resolve) => {
+			let stableFrames = 0;
+			let prev = s.scrollContainer.scrollTop;
+			const STABLE_FRAMES = 4;
+			const check = () => {
+				const cur = s.scrollContainer.scrollTop;
+				if (Math.abs(cur - prev) < 1) {
+					stableFrames++;
+					if (stableFrames >= STABLE_FRAMES) {
+						resolve();
+						return;
+					}
+				} else {
+					stableFrames = 0;
+					prev = cur;
+				}
+				window.requestAnimationFrame(check);
+			};
+			window.requestAnimationFrame(check);
+		});
 	}
 
 	/**
