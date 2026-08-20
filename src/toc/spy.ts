@@ -100,18 +100,6 @@ export class TocSpy {
 	 *  on scrollTop, so recomputing them was pure O(entries) waste per frame. */
 	updatePositionsIfDirty(): void {
 		const s = this.state;
-		// While a gesture is active the section offsets are still shifting:
-		// sections mount into the viewport and report measured heights, and
-		// each height correction bumps the layout version (the compensating
-		// scrollTop write is itself deferred until the gesture ends). If we
-		// recomputed from those live offsets every frame, headings near the
-		// trigger line crossed it back and forth as estimates overshot and
-		// undershot, flipping the pill between two adjacent entries. Freeze the
-		// last settled positions for the gesture: pickActiveIndex then tracks
-		// the scroll alone (positions stay monotonic), and the frame after the
-		// gesture ends recomputes once from the final offsets. The heading
-		// measurements are deferred the same way (TocMeasurer.onTagFrame).
-		if (s.positionSource?.isGestureActive()) return;
 		const layoutVersion = s.positionSource?.getLayoutVersion() ?? -1;
 		if (!s.positionsDirty && layoutVersion === s.lastLayoutVersion) return;
 		s.positionsDirty = false;
@@ -160,8 +148,8 @@ export class TocSpy {
 		if (s.lastNavigationTime > 0) {
 			if (s.positionSource?.isAdjustingScroll?.()) return;
 			const scrollDelta = Math.abs(scrollTop - s.lastNavigationScrollTop);
-			const SCROLL_RELEASE_PX = viewportHeight * 0.4;
-			const MAX_GRACE_MS = 2000;
+			const SCROLL_RELEASE_PX = viewportHeight * 0.15;
+			const MAX_GRACE_MS = 1000;
 			const elapsed = performance.now() - s.lastNavigationTime;
 			if (scrollDelta < SCROLL_RELEASE_PX && elapsed < MAX_GRACE_MS) return;
 			s.lastNavigationTime = 0;
@@ -205,32 +193,18 @@ export class TocSpy {
 			this.scheduleCenterScroll(highlightIndex);
 		}
 
-		// Debounce expand/collapse: wait for scroll to settle (30ms).
-		// Also suppress when heading positions were recently recalculated
-		// (300ms window) — sections lazy-mounting shift estimates.
-		// NOTE: do NOT gate on offsetMeasured (headingOffsets.has(bestIndex)).
-		// Collapsed headings have display:none, so tagHeadings skips them and
-		// their offsets are never measured — gating on it creates a deadlock
-		// where expand/collapse can never fire for collapsed entries.  The
-		// positionsStable window is sufficient: once positions have been stable
-		// for 300ms the line-based estimates are close enough to pick the right
-		// heading, and the 30ms debounce after that prevents transient flicker.
-		const POSITIONS_SETTLE_MS = 100;
-		const positionsStable = (performance.now() - s.positionsStableSince) > POSITIONS_SETTLE_MS;
-		if (bestIndex !== s.pendingPathIndex && positionsStable) {
+		// Apply expand/collapse path immediately so sections expand while
+		// scrolling into them, not 30ms after the scroll stops.
+		if (bestIndex !== s.pendingPathIndex) {
 			s.pendingPathIndex = bestIndex;
-			window.clearTimeout(s.activePathTimer);
-			s.activePathTimer = window.setTimeout(() => {
-				s.pendingPathIndex = -1;
-				const newPath = mode !== 'disabled'
-					? s.computeActivePath(s.activeEntryIndex)
-					: new Set<number>();
+			const newPath = mode !== 'disabled'
+				? s.computeActivePath(s.activeEntryIndex)
+				: new Set<number>();
 
-				if (!s.setsEqual(s.activePathSet, newPath)) {
-					s.activePathSet = newPath;
-					s.applyVisibility();
-				}
-			}, 30);
+			if (!s.setsEqual(s.activePathSet, newPath)) {
+				s.activePathSet = newPath;
+				s.applyVisibility();
+			}
 		}
 
 		// Fade highlight indicator after idle

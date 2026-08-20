@@ -118,18 +118,13 @@ export class TocMeasurer {
 		const s = this.state;
 		s.tagFrameRequested = false;
 		if (s.pendingTagHeadings.length === 0) return;
-		// Defer the rect reads while the user is actively scrolling. Each
-		// getBoundingClientRect on a section inside the huge transformed
-		// container forces a layout flush; inside a gesture that lands between
-		// scroll frames, exactly when the main thread is already overloaded.
-		// The line-based fallback keeps the active-heading highlight correct,
-		// and the settle resumes the drain (the re-requested frame runs once
-		// scroll events stop).
-		if (s.positionSource?.isGestureActive()) {
-			s.tagFrameRequested = true;
-			s.positionSource.requestFrame();
-			return;
-		}
+		// Heading within-section offsets are stable once the section is rendered
+		// (they measure the heading's position within its section DOM). Unlike
+		// section offsets which shift as lazy loads report measured heights,
+		// heading offsets don't cause pill oscillation — so allow the rect reads
+		// even during a gesture. This lets the spy recalculate positions from
+		// real measurements instead of stale line-based estimates on the first
+		// scroll, preventing the indicator from jumping after the gesture ends.
 		const t0 = performance.now();
 		const timeLimit = t0 + TAG_MS_BUDGET;
 		let rects = 0;

@@ -14,5 +14,6 @@ export function stripMarkdown(text: string): string {
 		.replace(/~~(.+?)~~/g, '$1')
 		.replace(/\*\*(.+?)\*\*/g, '$1')
 		.replace(/\*(.+?)\*/g, '$1')
-		.replace(/`(.+?)`/g, '$1');
+		.replace(/`(.+?)`/g, '$1')
+		.replace(/<[^>]+>/g, '');
 }

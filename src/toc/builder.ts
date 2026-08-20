@@ -210,7 +210,7 @@ export class TocBuilder {
 			for (const level of ancestorLevels) {
 				const pos = GUIDE_POSITIONS[level - 1] ?? 0;
 				gradients.push(
-					`linear-gradient(to right, color-mix(in srgb, var(--h${level}-color) 70%, transparent) 0.5px, transparent 0.5px)`,
+					`linear-gradient(to right, color-mix(in srgb, var(--h${level}-color) 70%, transparent) 1px, transparent 1px)`,
 				);
 				positions.push(`${pos}px 0`);
 				sizes.push('1px 100%');

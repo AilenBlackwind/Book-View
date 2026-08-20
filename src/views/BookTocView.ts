@@ -65,12 +65,15 @@ export class BookTocView extends ItemView {
 		DebugLog.log('TOC bind', book.filePath || '', force ? 1 : 0, this.boundBook === book ? 1 : 0, this.dbgBinds);
 		if (book === this.boundBook && !force) return;
 
-		this.unbind();
-
+		// Verify the book is ready before tearing down any existing controller.
+		// If bind() unbinds first and then discovers the book isn't loaded yet,
+		// the panel is left empty with no controller until setCurrentBook re-binds.
 		const container = book.getContentContainer();
 		const manager = book.getAbsoluteManager();
 		const files = book.getCurrentFiles();
 		if (!container || !manager || files.length === 0) return;
+
+		this.unbind();
 
 		this.boundBook = book;
 		this.contentEl.empty();

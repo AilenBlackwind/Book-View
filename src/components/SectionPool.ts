@@ -549,16 +549,26 @@ export class SectionPool {
 		const readPromises: Promise<void>[] = [];
 		for (const link of links) {
 			if (link.type === 'broken') {
-				const el = this.host.spacerEl.createDiv({ cls: 'book-section-warning' });
+				const path = `__book-warning__${link.display}`;
+				const el = this.host.spacerEl.createDiv({
+					cls: 'book-section-warning book-section-absolute',
+					attr: { 'data-path': path },
+				});
 				el.createSpan({ text: '❌ ' });
 				el.createSpan({ cls: 'book-warning-text', text: `Note not found: ${link.display}` });
+				this.addWarningSection(path, el);
 				continue;
 			}
 
 			if (link.type === 'empty') {
-				const el = this.host.spacerEl.createDiv({ cls: 'book-section-warning' });
+				const path = `__book-warning__${link.file.path}`;
+				const el = this.host.spacerEl.createDiv({
+					cls: 'book-section-warning book-section-absolute',
+					attr: { 'data-path': path },
+				});
 				el.createSpan({ text: '⚠️ ' });
 				el.createSpan({ cls: 'book-warning-text', text: `Empty note: ${link.file.path}` });
+				this.addWarningSection(path, el);
 				continue;
 			}
 
@@ -616,6 +626,31 @@ export class SectionPool {
 
 		this.schedulePreRender();
 		return readPromises;
+	}
+
+	private addWarningSection(path: string, el: HTMLElement): void {
+		const WARNING_HEIGHT = 44;
+		const data: SectionData = {
+			el,
+			component: null,
+			offset: 0,
+			height: WARNING_HEIGHT,
+			startsWithHeading: false,
+			endsWithHeading: false,
+			firstType: 'text',
+			lastType: 'text',
+			foldHeadingHeight: 0,
+			heavy: false,
+			placeholder: false,
+			renderGen: 0,
+			mtime: 0,
+			heightTrusted: false,
+			wasHidden: false,
+			deferralCount: 0,
+			renderFailures: 0,
+		};
+		this.host.sections.set(path, data);
+		this.host.fileOrder.push(path);
 	}
 
 	enqueueRender(path: string): void {
