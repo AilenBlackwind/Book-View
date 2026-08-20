@@ -117,6 +117,9 @@ export class TocState {
 	// --- Navigation guard ---
 	navigating = false;
 	navigationTimer = 0;
+	/** Monotonically increasing counter; incremented on each scrollToHeading
+	 *  call so in-flight async loops can detect they've been superseded. */
+	navigationGeneration = 0;
 	/** true while programmatic scroll is in progress */
 	isJumping = false;
 	/** Timestamp (ms) when heading positions last changed.  The spy's
@@ -164,6 +167,7 @@ export class TocState {
 		this.activePathSet.clear();
 		this.activeEntryIndex = -1;
 		this.isJumping = false;
+		this.navigationGeneration++;
 		this.headingOffsets.clear();
 		this.defaultLevel = this.settings?.tocCollapsedLevel ?? 0;
 		this.allRowsHidden = false;

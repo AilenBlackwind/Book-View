@@ -13,6 +13,18 @@ export class TocNavigator {
 		const entry = s.entries[entryIndex];
 		if (!entry || !s.positionSource) return;
 
+		// Cancel any in-flight navigation: each new click supersedes the
+		// previous one.  The old async loop will see the stale generation
+		// and bail out at its next checkpoint.
+		const gen = ++s.navigationGeneration;
+
+		// If a previous navigation is still in-flight, let one frame pass
+		// so its generation check fires and it bails, then proceed.
+		if (s.navigating) {
+			await new Promise<void>((r) => window.requestAnimationFrame(() => r()));
+			if (s.navigationGeneration !== gen) return;
+		}
+
 		s.navigating = true;
 		s.isJumping = true;
 		try {
@@ -53,6 +65,7 @@ export class TocNavigator {
 
 			if (targetHeading) {
 				await this.settleScrollToHeading(targetHeading as HTMLElement);
+				if (s.navigationGeneration !== gen) return;
 				this.highlightHeading(targetHeading as HTMLElement);
 			}
 
@@ -88,10 +101,12 @@ export class TocNavigator {
 			// momentarily highlights a wrong heading and toggles expand/collapse.
 			await this.waitForScrollSettle();
 			window.clearTimeout(s.navigationTimer);
-			s.navigationTimer = window.setTimeout(() => {
-				s.navigating = false;
-				s.isJumping = false;
-			}, 50);
+			if (s.navigationGeneration === gen) {
+				s.navigationTimer = window.setTimeout(() => {
+					s.navigating = false;
+					s.isJumping = false;
+				}, 50);
+			}
 		}
 	}
 

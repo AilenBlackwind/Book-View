@@ -30,6 +30,7 @@ export class TocBuilder {
 
 	build(): void {
 		const s = this.state;
+		this.labelCache.clear();
 		s.entries = buildTocEntries(s.app, s.files);
 		s.entryByPathLine = buildEntryByPathLine(s.entries);
 		s.defaultLevel = s.settings?.tocCollapsedLevel ?? 0;

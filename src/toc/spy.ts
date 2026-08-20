@@ -376,6 +376,7 @@ export class TocSpy {
 		}
 		window.clearTimeout(s.fadeTimer);
 		window.clearTimeout(s.centerScrollTimer);
+		window.clearTimeout(s.activePathTimer);
 		s.viewportResizeObserver?.disconnect();
 		s.viewportResizeObserver = null;
 		s.tocResizeObserver?.disconnect();
