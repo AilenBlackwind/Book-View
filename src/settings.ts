@@ -36,6 +36,7 @@ export interface BookViewSettings {
 	wheelFlickEnabled: boolean;
 	wheelFlickStrength: number;
 	wheelFlickFriction: number;
+	wheelFlickPrecision: boolean;
 	wheelShieldEnabled: boolean;
 	menuProfiles: MenuProfile[];
 	editorModifiers: ModifierConfig;
@@ -54,6 +55,7 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	wheelFlickEnabled: true,
 	wheelFlickStrength: 2,
 	wheelFlickFriction: 0.92,
+	wheelFlickPrecision: true,
 	wheelShieldEnabled: true,
 	menuProfiles: [
 		{ name: 'Main', modifiers: { alt: false, ctrl: false, shift: false, meta: false }, scripts: [] },

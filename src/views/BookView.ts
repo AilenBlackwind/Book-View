@@ -657,6 +657,7 @@ export class BookView extends FileView {
 				enabled: s?.wheelFlickEnabled ?? true,
 				strength: s?.wheelFlickStrength ?? 2,
 				friction: s?.wheelFlickFriction ?? 0.92,
+				precision: s?.wheelFlickPrecision ?? false,
 				shield: s?.wheelShieldEnabled ?? true,
 			};
 		});

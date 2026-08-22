@@ -7,6 +7,9 @@ export interface WheelFlickConfig {
 	strength: number;
 	/** Per-frame velocity decay (higher = longer glide). */
 	friction: number;
+	/** Disable combo stacking: every notch travels exactly strength × its
+	 *  native delta, independent of timing. For precise short scrolls. */
+	precision: boolean;
 	/** Block third-party wheel listeners (smooth-scroll plugins) from seeing
 	 *  wheel events over the book container even when acceleration is off. */
 	shield: boolean;
@@ -151,14 +154,24 @@ export class WheelAccelerator {
 		evt.stopImmediatePropagation();
 
 		const now = Date.now();
-		this.combo = now - this.lastNotchAt < COMBO_WINDOW_MS ? Math.min(this.combo + COMBO_STEP, COMBO_MAX) : 1;
+		if (cfg.precision) {
+			// Precision mode: no combo stacking — a notch always travels
+			// exactly px × strength, whatever happened in the last 200ms.
+			this.combo = 1;
+		} else {
+			this.combo = now - this.lastNotchAt < COMBO_WINDOW_MS ? Math.min(this.combo + COMBO_STEP, COMBO_MAX) : 1;
+		}
 		this.lastNotchAt = now;
 
 		const px = evt.deltaMode === WheelEvent.DOM_DELTA_LINE ? dy * LINE_HEIGHT_PX : dy;
 
 		// A notch in the opposite direction kills the current flick instantly.
+		// The stacked combo resets with it: without this, a small "scroll back
+		// a bit" notch right after two fast forward notches would travel at
+		// combo 2.5× and overshoot wildly.
 		if (this.velocity !== 0 && Math.sign(px) !== Math.sign(this.velocity)) {
 			this.velocity = 0;
+			this.combo = 1;
 		}
 
 		// The impulse is sized so total flick travel equals px * strength *

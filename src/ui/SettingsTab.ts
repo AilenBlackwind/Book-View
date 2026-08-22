@@ -219,6 +219,18 @@ export class BookViewSettingTab extends PluginSettingTab {
 			.setHeading();
 
 		new Setting(el)
+			.setName('Wheel flick precision mode')
+			.setDesc('Disable combo stacking: every notch travels exactly the same distance regardless of timing. Best for precise short scrolls.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.wheelFlickPrecision)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.wheelFlickPrecision = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
 			.setName('Shield wheel from other plugins')
 			.setDesc('Hide wheel events over the book from other plugins (smooth-scroll tools) that animate scrolling and break it. Keep this on while such plugins are installed: their writes are blocked inside the book anyway, so without the shield they would cancel native scrolling and freeze it instead.')
 			.addToggle((toggle) =>
