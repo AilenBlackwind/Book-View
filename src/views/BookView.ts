@@ -1,6 +1,7 @@
 import { Component, FileView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
+import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
 import { HEIGHT_PER_LINE } from '../toc/types';
 import { WheelAccelerator } from '../components/WheelAccelerator';
 import { showScriptMenu } from '../ui/ContextMenu';
@@ -23,6 +24,10 @@ export class BookView extends FileView {
 	readonly instanceId = ++BookView.nextInstanceId;
 	absoluteManager: AbsoluteSectionManager | null = null;
 	private contentContainer: HTMLElement | null = null;
+	/** Owns the book container's scroll accessors: foreign scrollTop/scrollTo
+	 *  writes (third-party smooth-scroll plugins) are dropped, internal ones
+	 *  go through guardedScrollWrite. */
+	private scrollGuard: ScrollGuard | null = null;
 	private wheelAccelerator: WheelAccelerator | null = null;
 	private currentFiles: TFile[] = [];
 	private manifestPaths: Set<string> = new Set();
@@ -325,7 +330,9 @@ export class BookView extends FileView {
 
 		const sectionOffset = manager.getOffset(filePath) ?? 0;
 		const estimatedY = sectionOffset + line * HEIGHT_PER_LINE;
-		container.scrollTo({ top: Math.max(0, estimatedY - 100), behavior: 'auto' });
+		guardedScrollWrite(container, () => {
+			container.scrollTo({ top: Math.max(0, estimatedY - 100), behavior: 'auto' });
+		});
 
 		if (opts.current) this.clearCurrentMark();
 
@@ -355,7 +362,9 @@ export class BookView extends FileView {
 		if (!manager || !container) return;
 
 		const sectionOffset = manager.getOffset(filePath) ?? 0;
-		container.scrollTo({ top: Math.max(0, sectionOffset - 20), behavior: 'auto' });
+		guardedScrollWrite(container, () => {
+			container.scrollTo({ top: Math.max(0, sectionOffset - 20), behavior: 'auto' });
+		});
 
 		const selector = `.book-section-placeholder[data-path="${CSS.escape(filePath)}"]`;
 		for (let attempt = 0; attempt < 60; attempt++) {
@@ -372,7 +381,9 @@ export class BookView extends FileView {
 					this.flashSectionTop(section);
 					return;
 				}
-				container.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
+				guardedScrollWrite(container, () => {
+					container.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
+				});
 			}
 			await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 		}
@@ -633,6 +644,11 @@ export class BookView extends FileView {
 
 		this.contentContainer = this.contentEl.createDiv({ cls: 'book-content-container' });
 
+		// Install the scroll guard before any writer exists (accelerator,
+		// manager, ToC navigation all go through guardedScrollWrite).
+		this.scrollGuard = new ScrollGuard(this.contentContainer);
+		this.scrollGuard.install();
+
 		this.startFindObserver();
 
 		this.wheelAccelerator = new WheelAccelerator(this.contentContainer, () => {
@@ -641,6 +657,7 @@ export class BookView extends FileView {
 				enabled: s?.wheelFlickEnabled ?? true,
 				strength: s?.wheelFlickStrength ?? 2,
 				friction: s?.wheelFlickFriction ?? 0.92,
+				shield: s?.wheelShieldEnabled ?? true,
 			};
 		});
 
@@ -668,6 +685,7 @@ export class BookView extends FileView {
 			file,
 			settings?.loadMargin,
 			{ get: this.plugin?.getPersistedHeight, put: this.plugin?.persistHeight },
+			this.scrollGuard,
 		);
 		if (this.plugin?.themeSpacings) {
 			this.absoluteManager.themeSpacings = this.plugin.themeSpacings;
@@ -881,7 +899,9 @@ export class BookView extends FileView {
 			window.requestAnimationFrame(() => {
 				if (!this.contentContainer) return;
 				const maxScroll = this.contentContainer.scrollHeight - this.contentContainer.clientHeight;
-				this.contentContainer.scrollTop = Math.min(target, Math.max(0, maxScroll));
+				guardedScrollWrite(this.contentContainer, () => {
+					this.contentContainer!.scrollTop = Math.min(target, Math.max(0, maxScroll));
+				});
 			});
 		}
 	}
@@ -903,6 +923,10 @@ export class BookView extends FileView {
 		if (this.wheelAccelerator) {
 			this.wheelAccelerator.destroy();
 			this.wheelAccelerator = null;
+		}
+		if (this.scrollGuard) {
+			this.scrollGuard.uninstall();
+			this.scrollGuard = null;
 		}
 		this.currentFiles = [];
 		this.manifestPaths.clear();

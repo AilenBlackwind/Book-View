@@ -4,6 +4,7 @@ import type { HeadingNode } from '../utils/fold';
 import { FoldController } from './FoldController';
 import { SectionPool } from './SectionPool';
 import type { SectionData, HeightPersistence } from './SectionPool';
+import { ScrollGuard, type ScrollGuardEvent } from './ScrollGuard';
 import { SectionLayout } from './SectionLayout';
 import { estimateHeight } from '../utils/content';
 import type { ThemeSpacings } from '../utils/theme';
@@ -75,10 +76,24 @@ export class AbsoluteSectionManager {
 	private loadMargin: number;
 	private persistence: HeightPersistence;
 
-	/** True while the debug scrollTop/scrollTo probe is installed on the
-	 *  container. Installed only while DebugLog is enabled (see constructor). */
-	private scrollProbeInstalled = false;
-	private dbgProbeUnsub: (() => void) | null = null;
+	/** Debug: scroll-source diagnostics.
+	 *  scrollTop/scrollTo writer logging is fed by the ScrollGuard's event
+	 *  hook (the guard owns the container's accessors), including foreign
+	 *  writes it blocks. */
+	private dbgFs = 0;
+	private dbgUs = 0;
+	private dbgHs = 0;
+	private dbgSps = 0;
+	private dbgSev = 0;
+	private dbgSevB = 0;
+	private dbgT0 = 0;
+	private dbgSpam = new Map<string, number>();
+	// Debug: scroll writer diagnostics (fed by the ScrollGuard).
+	private dbgST = 0;
+	private dbgScrollToCalls = 0;
+	private dbgWriters: string[] = [];
+	/** Debug: foreign writes blocked by the ScrollGuard in the last window. */
+	private dbgBlk = 0;
 
 	/** Theme-derived vertical gaps, owned by the SectionLayout. */
 	get themeSpacings(): ThemeSpacings {
@@ -123,6 +138,8 @@ export class AbsoluteSectionManager {
 	private lastScrollTop = 0;
 	private lastClientHeight = 0;
 	private boundScrollHandler: ((evt: Event) => void) | null = null;
+	/** Timer that removes the is-scrolling class after scrolling settles. */
+	private scrollIdleTimer = 0;
 	private boundClickHandler: ((evt: MouseEvent) => void) | null = null;
 	/** Set per scroll event by boundScrollHandler (which runs before the spy's
 	 *  scroll listener): true when the event came from a compensation write.
@@ -139,20 +156,6 @@ export class AbsoluteSectionManager {
 	private frameCallbacks: (() => void)[] = [];
 	private pool: SectionPool;
 
-	// Debug: scroll-source diagnostics.
-	private dbgFs = 0;
-	private dbgUs = 0;
-	private dbgHs = 0;
-	private dbgSps = 0;
-	private dbgSev = 0;
-	private dbgSevB = 0;
-	private dbgT0 = 0;
-	private dbgSpam = new Map<string, number>();
-	// Debug: scroll writer probe (who sets scrollTop / calls scrollTo).
-	private dbgST = 0;
-	private dbgScrollToCalls = 0;
-	private dbgWriters: string[] = [];
-	private dbgStackCaptured = 0;
 	// Debug: wheel events (user scrolling input) on the book container.
 	private dbgWheel = 0;
 	/** Debug: scrollTop compensations skipped because a gesture was active
@@ -199,78 +202,6 @@ export class AbsoluteSectionManager {
 		DebugLog.log(msg, path, a, b, c, d);
 	}
 
-	// Debug: wraps scrollTop/scrollTo/scrollBy on the book container to
-	// record who writes the scroll position. Native browser adjustments
-	// (scroll anchoring, user input, scrollIntoView) bypass these JS hooks, so
-	// if `top` climbs while st/to are 0 the writer is external.
-	private installScrollWriterProbe(): void {
-		if (this.scrollProbeInstalled) return;
-		const el = this.scrollContainer;
-		// Debug probe: aliasing `this` is intentional here — the accessor
-		// functions below run with `this` = the element, not the manager.
-		// eslint-disable-next-line @typescript-eslint/no-this-alias -- see above
-		const self = this;
-		const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
-		if (desc?.set && desc.get) {
-			// Narrow the descriptor so the probe can re-bind the accessors to
-			// the element instance (kept attached to `sd` for the lint rule).
-			const sd = desc as { get: () => number; set: (v: number) => void };
-			Object.defineProperty(el, 'scrollTop', {
-				configurable: true,
-				get() {
-					return sd.get.call(this);
-				},
-				set(v: number) {
-					if (DebugLog.enabled) {
-						self.dbgST++;
-						if (self.dbgStackCaptured < 4) {
-							self.dbgStackCaptured++;
-							self.dbgWriters.push(
-								`scrollTop=${Math.round(v)} ${self.stackLabel()}`,
-							);
-						} else {
-							// Every write, value-only: the per-second `writers`
-							// stream then shows the full up/down sequence (the
-							// 4-write stack cap otherwise hides the bounce
-							// writer that fires mid-second).
-							self.dbgWriters.push(`scrollTop=${Math.round(v)}`);
-						}
-					}
-					sd.set.call(this, v);
-				},
-			});
-		}
-		const wrap = (name: 'scrollTo' | 'scrollBy', original: (...a: unknown[]) => void): void => {
-			(el as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
-				if (DebugLog.enabled) {
-					self.dbgScrollToCalls++;
-					if (self.dbgStackCaptured < 4) {
-						self.dbgStackCaptured++;
-						self.dbgWriters.push(`${name} ${self.stackLabel()}`);
-					}
-				}
-				original(...args);
-			};
-		};
-		wrap('scrollTo', (el.scrollTo as (...a: unknown[]) => void).bind(el));
-		wrap('scrollBy', (el.scrollBy as (...a: unknown[]) => void).bind(el));
-		this.scrollProbeInstalled = true;
-	}
-
-	/** Undo installScrollWriterProbe: drop the instance-level overrides so the
-	 *  element falls back to the native Element.prototype accessors/methods. */
-	private removeScrollWriterProbe(): void {
-		const el = this.scrollContainer as unknown as Record<string, unknown>;
-		delete el.scrollTop;
-		delete el.scrollTo;
-		delete el.scrollBy;
-		this.scrollProbeInstalled = false;
-	}
-
-	private stackLabel(): string {
-		return new Error().stack?.split('\n').slice(2, 5).join(' | ') ?? '';
-	}
-
 	/** Records a measured height delivered by the SectionPool's resize observer. */
 	reportSectionHeight(path: string, newHeight: number): void {
 		this.dbgHs++;
@@ -295,6 +226,7 @@ export class AbsoluteSectionManager {
 		masterFile: TFile,
 		loadMargin: number = 800,
 		persistence: HeightPersistence = {},
+		guard: ScrollGuard | null = null,
 	) {
 		this.scrollContainer = scrollContainer;
 		this.links = links;
@@ -306,17 +238,24 @@ export class AbsoluteSectionManager {
 		this.scrollContainer.addClass('book-absolute-container');
 		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
 		ensureGlobalFrameProbe();
-		// The scrollTop writer probe is debug-only: never wrap the container's
-		// accessors in production. Install/uninstall as debug toggles, so the
-		// `st`/`writers` DBG fields work when logging is enabled later.
-		this.dbgProbeUnsub = DebugLog.onEnabledChange((enabled) => {
-			if (enabled) {
-				this.installScrollWriterProbe();
-			} else {
-				this.removeScrollWriterProbe();
-			}
-		});
-		if (DebugLog.enabled) this.installScrollWriterProbe();
+		// The ScrollGuard owns the container's scroll accessors (installed by
+		// the view before this manager); its event hook feeds the writer
+		// diagnostics here, foreign blocked writes included.
+		if (guard) {
+			guard.onEvent = (e: ScrollGuardEvent) => {
+				if (!DebugLog.enabled) return;
+				if (e.blocked) {
+					this.dbgBlk++;
+					this.dbgWriters.push(`BLOCKED ${e.kind}=${e.value === null ? '' : Math.round(e.value)} ${e.label}`);
+				} else if (e.kind === 'scrollTop') {
+					this.dbgST++;
+					this.dbgWriters.push(`scrollTop=${Math.round(e.value ?? 0)} ${e.label}`);
+				} else {
+					this.dbgScrollToCalls++;
+					this.dbgWriters.push(`${e.kind} ${e.label}`);
+				}
+			};
+		}
 		this.scrollContainer.addEventListener(
 			'wheel',
 			() => {
@@ -433,6 +372,14 @@ export class AbsoluteSectionManager {
 				// reclaim far sections once the gesture settles.
 				this.pool.scheduleIdleUnload();
 			}
+			// Pause CSS animations while scrolling to reduce compositing work.
+			// The is-scrolling class is removed 200ms after the last scroll
+			// event so animations resume once the gesture settles.
+			this.scrollContainer.classList.add('is-scrolling');
+			window.clearTimeout(this.scrollIdleTimer);
+			this.scrollIdleTimer = window.setTimeout(() => {
+				this.scrollContainer.classList.remove('is-scrolling');
+			}, 200);
 		};
 		this.scrollContainer.addEventListener('scroll', this.boundScrollHandler, { passive: true });
 
@@ -703,7 +650,7 @@ export class AbsoluteSectionManager {
 		const writers = this.dbgWriters.splice(0).join(' ;; ');
 		this.dbg(
 			'DBG', '',
-			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} w=${this.dbgWheel}`,
+			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} blk=${this.dbgBlk} w=${this.dbgWheel}`,
 			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} rm=${Math.round(renderMs)}ms ab=${aborts} ph=${placeholders} up=${upgrades} mounts=${mounts} mh=${Math.round(mountH)}`,
 			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
 			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${this.dbgTagMs.toFixed(1)}ms rects=${this.dbgTagRects} fps=${this.dbgFps} dc=${this.dbgDeferComp} ac=${this.dbgAnchorDuringGesture}`,
@@ -725,8 +672,8 @@ export class AbsoluteSectionManager {
 		this.dbgRestoreMs = 0;
 		this.dbgTagMs = 0;
 		this.dbgScrollToCalls = 0;
+		this.dbgBlk = 0;
 		this.dbgWheel = 0;
-		this.dbgStackCaptured = 0;
 		this.dbgSpam.clear();
 		this.dbgFps = dbgGlobalFrames;
 		this.dbgTagRects = 0;
@@ -852,11 +799,6 @@ export class AbsoluteSectionManager {
 
 	destroy(): void {
 		this.destroyed = true;
-		if (this.dbgProbeUnsub) {
-			this.dbgProbeUnsub();
-			this.dbgProbeUnsub = null;
-		}
-		this.removeScrollWriterProbe();
 		this.frameCallbacks.length = 0;
 		if (this.rafId) {
 			cancelAnimationFrame(this.rafId);

@@ -1,6 +1,7 @@
 import { TocState } from './state';
 import { TocSpy } from './spy';
 import { HEIGHT_PER_LINE } from './types';
+import { guardedScrollWrite } from '../components/ScrollGuard';
 
 /** Click-navigation to a ToC entry: jump the book to the heading, settle the
  *  scroll once async renders stop shifting the layout, and flash a highlight
@@ -31,7 +32,9 @@ export class TocNavigator {
 			const sectionOffset = s.positionSource.getOffset(entry.file.path) ?? 0;
 			const estimatedY = sectionOffset + entry.line * HEIGHT_PER_LINE;
 
-			s.scrollContainer.scrollTo({ top: Math.max(0, estimatedY - 20), behavior: 'auto' });
+			guardedScrollWrite(s.scrollContainer, () => {
+				s.scrollContainer.scrollTo({ top: Math.max(0, estimatedY - 20), behavior: 'auto' });
+			});
 
 			let targetHeading: Element | null = s.positionSource.resolveHeadingEl?.(entry) ?? null;
 			if (!targetHeading) {
@@ -156,9 +159,11 @@ export class TocNavigator {
 				(headingRect.top - containerRect.top) -
 				20;
 			if (Math.abs(s.scrollContainer.scrollTop - target) < 1) break;
-			s.scrollContainer.scrollTo({
-				top: Math.max(0, target),
-				behavior: 'auto',
+			guardedScrollWrite(s.scrollContainer, () => {
+				s.scrollContainer.scrollTo({
+					top: Math.max(0, target),
+					behavior: 'auto',
+				});
 			});
 			await new Promise<void>((resolve) =>
 				window.requestAnimationFrame(() => resolve()),

@@ -2,6 +2,7 @@ import type { FoldMode } from '../utils/fold';
 import type { SectionData } from './SectionPool';
 import { OVERSCAN_TOP, PRERENDER_WINDOW } from './SectionPool';
 import { FALLBACK_FOLD_HEADING_HEIGHT } from './FoldController';
+import { guardedScrollWrite } from './ScrollGuard';
 import type { ThemeSpacings } from '../utils/theme';
 import { DEFAULT_THEME_SPACINGS } from '../utils/theme';
 
@@ -331,7 +332,11 @@ export class SectionLayout {
 		// right after the scroll stopped. The synchronous reflow is paid
 		// once per settle update — acceptable now that updates are deferred
 		// while the user is actively scrolling.
-		this.host.scrollContainer.scrollTop = target;
+		// Guarded: the ScrollGuard drops foreign scrollTop writes on the
+		// container; our own compensation must go through run().
+		guardedScrollWrite(this.host.scrollContainer, () => {
+			this.host.scrollContainer.scrollTop = target;
+		});
 		return true;
 	}
 

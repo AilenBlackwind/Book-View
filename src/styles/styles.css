@@ -1020,4 +1020,15 @@ mark.book-search-all {
 	100% { box-shadow: 0 0 0 0 transparent; }
 }
 
+/* Pause CSS animations inside the book while the user is scrolling. The
+   is-scrolling class is toggled by AbsoluteSectionManager.boundScrollHandler
+   and removed 200ms after the last scroll event. Animations with heavy paint
+   (text-shadow, color transitions, scale transforms) compete with the scroll
+   compositor and cause micro-stutters — pausing them eliminates the contention. */
+.book-content-container.is-scrolling *,
+.book-content-container.is-scrolling *::before,
+.book-content-container.is-scrolling *::after {
+	animation-play-state: paused !important;
+}
+
 

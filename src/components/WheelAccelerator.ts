@@ -1,9 +1,14 @@
+import { guardedScrollWrite } from './ScrollGuard';
+
 export interface WheelFlickConfig {
 	enabled: boolean;
 	/** Total scroll distance per notch, as a multiple of the native amount. */
 	strength: number;
 	/** Per-frame velocity decay (higher = longer glide). */
 	friction: number;
+	/** Block third-party wheel listeners (smooth-scroll plugins) from seeing
+	 *  wheel events over the book container even when acceleration is off. */
+	shield: boolean;
 }
 
 export type WheelFlickConfigGetter = () => WheelFlickConfig;
@@ -22,16 +27,29 @@ const STOP_VELOCITY = 0.5;
  * Two design rules keep it conflict-free:
  *
  * 1. One capture-phase interceptor on window, registered at plugin onload.
- *    It only acts on events targeted at a `.book-content-container` that has
- *    an active accelerator, and there calls preventDefault() +
- *    stopImmediatePropagation(). This neutralizes bubble-phase listeners and
- *    any capture listeners registered after us (i.e. typical wheel/smooth-
- *    scroll plugins) WITHOUT affecting anything outside the book view.
+ *    It acts only on events targeted at a `.book-content-container`. There
+ *    are two independent layers:
+ *
+ *    - Shield (cfg.shield): stopImmediatePropagation() for every vertical
+ *      wheel over the container, regardless of the accelerator toggle, so
+ *      third-party smooth-scroll plugins never see the event. No
+ *      preventDefault while acceleration is off — native scrolling keeps its
+ *      exact feel. If a foreign handler registered before ours already
+ *      preventDefault-ed the event, the native-equivalent delta is applied
+ *      manually under the ScrollGuard token.
+ *    - Acceleration (cfg.enabled): preventDefault + the flick impulse.
+ *
+ *    The event shield is belt-and-suspenders: the ScrollGuard on the
+ *    container already drops foreign scrollTop/scrollTo writes no matter who
+ *    writes or in which order plugins loaded. Stopping propagation first
+ *    merely avoids wasted work and prevents a foreign handler from
+ *    cancelling the default action.
  *
  * 2. The animation loop never captures a baseline scrollTop. Every frame it
  *    reads the CURRENT scrollTop and adds velocity, so an external write
  *    (scroll anchoring compensation, TOC jump) is absorbed into the motion
- *    instead of being overwritten — the two writers compose additively.
+ *    instead of being overwritten — the two writers compose additively. Its
+ *    own write goes through guardedScrollWrite so the guard lets it pass.
  */
 export class WheelAccelerator {
 	private static instances = new Map<HTMLElement, WheelAccelerator>();
@@ -72,20 +90,39 @@ export class WheelAccelerator {
 
 	private handleWheel(evt: WheelEvent): void {
 		const cfg = this.getConfig();
-		if (!cfg.enabled) return;
 		// ctrl = zoom, shift = horizontal scroll: leave both native.
 		if (evt.ctrlKey || evt.shiftKey) return;
 
 		const dy = evt.deltaY;
 		if (dy === 0) return;
 
+		// Nested scrollables (embeds, code blocks…) keep native behavior.
+		if (this.findScrollableTarget(evt.target) !== this.container) return;
+
+		// Shield: claim every vertical wheel over the book container from other
+		// listeners, BEFORE any delta classification or accelerator gating.
+		// With acceleration off only propagation is stopped (no preventDefault),
+		// so the browser's native scroll keeps its exact native feel while
+		// third-party smooth-scroll plugins are locked out.
+		if (cfg.shield) {
+			evt.stopImmediatePropagation();
+			// A foreign capture handler registered before ours may have run
+			// first and cancelled the default action. With acceleration off,
+			// apply the native-equivalent delta ourselves under the guard
+			// token; otherwise the wheel would do nothing at all.
+			if (!cfg.enabled && evt.defaultPrevented) {
+				const px = evt.deltaMode === WheelEvent.DOM_DELTA_LINE ? dy * LINE_HEIGHT_PX : dy;
+				guardedScrollWrite(this.container, () => {
+					this.container.scrollTop += px;
+				});
+				return;
+			}
+		}
+
 		// Trackpads and high-resolution wheels emit many small pixel deltas;
 		// leave them native so two-finger scrolling keeps its native feel.
 		const isNotch = evt.deltaMode === WheelEvent.DOM_DELTA_LINE || Math.abs(dy) >= NOTCH_THRESHOLD_PX;
-		if (!isNotch) return;
-
-		// Nested scrollables (embeds, code blocks…) keep native behavior.
-		if (this.findScrollableTarget(evt.target) !== this.container) return;
+		if (!isNotch || !cfg.enabled) return;
 
 		// Edge chaining: at the boundary in the flick direction, let the event
 		// propagate natively so parent scrollers can take over.
@@ -149,7 +186,9 @@ export class WheelAccelerator {
 			this.cachedMaxScroll = maxScroll;
 		}
 		const next = Math.min(Math.max(c.scrollTop + this.velocity, 0), maxScroll);
-		c.scrollTop = next;
+		guardedScrollWrite(c, () => {
+			c.scrollTop = next;
+		});
 		this.velocity *= this.getConfig().friction;
 		const atEdge = (next <= 0 && this.velocity < 0) || (next >= maxScroll && this.velocity > 0);
 		if (Math.abs(this.velocity) < STOP_VELOCITY || atEdge) {

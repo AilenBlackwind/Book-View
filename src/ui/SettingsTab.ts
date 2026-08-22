@@ -219,6 +219,18 @@ export class BookViewSettingTab extends PluginSettingTab {
 			.setHeading();
 
 		new Setting(el)
+			.setName('Shield wheel from other plugins')
+			.setDesc('Hide wheel events over the book from other plugins (smooth-scroll tools) that animate scrolling and break it. Keep this on while such plugins are installed: their writes are blocked inside the book anyway, so without the shield they would cancel native scrolling and freeze it instead.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.wheelShieldEnabled)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.wheelShieldEnabled = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
 			.setName('Wheel flick acceleration')
 			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks.')
 			.addToggle((toggle) =>
