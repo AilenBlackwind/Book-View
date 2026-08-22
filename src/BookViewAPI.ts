@@ -89,13 +89,35 @@ export class BookViewAPI {
 	}
 
 	getSelectedText(): string {
-		return this.context.selection;
+		if (this.context.selection) return this.context.selection;
+		// Fallback for hotkey/palette triggers (no right-click context):
+		// read the live DOM selection so hotkey users get the same data.
+		return window.getSelection()?.toString() ?? "";
 	}
 
 	/** ToC entries of the active book, resolved through the coordinator (the
 	 *  BookView no longer owns a ToC controller since the sidebar spike). */
 	private getEntries(): TocEntry[] {
 		return this.findActiveBookView()?.plugin?.tocCoordinator?.getEntries() ?? [];
+	}
+
+	/** Flat ToC listing of the active book in render order. Use the returned
+	 *  `index` to call `getAtomsUnderHeading(index)` programmatically. */
+	getToc(): { index: number; title: string; level: number; filePath: string }[] {
+		return this.getEntries().map((e, i) => ({
+			index: i,
+			title: e.text,
+			level: e.level,
+			filePath: e.file.path,
+		}));
+	}
+
+	/** File paths of all notes linked in the current book, in render order.
+	 *  Cheaper than `getAllAtoms()` when only paths are needed. */
+	getFilePaths(): string[] {
+		const bv = this.findActiveBookView();
+		if (!bv) return [];
+		return bv.getCurrentFiles().map((f) => f.path);
 	}
 
 	async getAtomsUnderHeading(entryIndex?: number): Promise<Atom[]> {
@@ -175,6 +197,10 @@ export class BookViewAPI {
 			const content = await this.app.vault.cachedRead(file);
 			const lines = content.split('\n');
 
+			// Apply in reverse line order: multi-line replacements (newText
+			// containing \n) shift subsequent indices; sorting descending
+			// ensures each edit targets its original line.
+			fileChanges.sort((a, b) => b.line - a.line);
 			for (const change of fileChanges) {
 				if (change.line >= 0 && change.line < lines.length) {
 					lines[change.line] = change.newText;

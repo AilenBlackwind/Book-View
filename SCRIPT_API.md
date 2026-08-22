@@ -14,19 +14,17 @@ Once configured, right-click inside Book View **with the profile's modifier comb
 
 ## Accessing the API
 
-From any Obsidian script context (QuickAdd macro, Templater, etc.):
+Two equivalent ways — use whichever fits your script context:
 
 ```typescript
+// Canonical Obsidian plugin access (typed)
+const bv = app.plugins.plugins["book-view"]?.api;
+
+// Global alias (untyped, works everywhere)
 const bv = (window as any).BookView;
 ```
 
-Or in a typed context:
-
-```typescript
-declare const window: Window & { BookView?: BookViewAPI };
-const bv = window.BookView;
-if (!bv) return;
-```
+Both point to the same `BookViewAPI` instance.
 
 ## Types
 
@@ -40,21 +38,53 @@ interface Atom {
 interface Change {
   filePath: string;  // target file path
   line: number;      // 0-based line number to replace
-  newText: string;   // replacement text for that line
+  newText: string;   // replacement text for that line (can contain \n for multi-line)
+}
+
+interface TocEntryInfo {
+  index: number;     // ToC entry index (usable in getAtomsUnderHeading)
+  title: string;     // heading text
+  level: number;     // heading level (1-6)
+  filePath: string;  // vault-relative path of the containing note
 }
 ```
+
+> **Note:** an "Atom" represents **one line** of text across the merged book document — not an entire note. This per-line model lets scripts target exact positions within files.
 
 ## Methods
 
 ### `getSelectedText(): string`
 
-Returns the text selection captured when the script was triggered from the right-click menu. It is a snapshot, not a live DOM read: it is empty until a script is invoked from the context menu (or `setContext()` is called).
+Returns the selected text at trigger time.
+
+- When triggered from the right-click menu: returns the captured selection snapshot.
+- When triggered from a hotkey or palette: falls back to reading the live DOM selection (`window.getSelection()`).
 
 ```typescript
 const selected = bv.getSelectedText();
 if (selected) {
   console.log("User selected:", selected);
 }
+```
+
+### `getToc(): TocEntryInfo[]`
+
+Returns the flat ToC of the active book in render order. Use the returned `index` to call `getAtomsUnderHeading(index)` programmatically (e.g. from a hotkey or QuickAdd suggester).
+
+```typescript
+const toc = bv.getToc();
+for (const entry of toc) {
+  console.log(`[${entry.index}] ${"#".repeat(entry.level)} ${entry.title} (${entry.filePath})`);
+}
+```
+
+### `getFilePaths(): string[]`
+
+Returns the file paths of all notes linked in the current Book View, in render order. Cheaper than `getAllAtoms()` when only paths are needed.
+
+```typescript
+const paths = bv.getFilePaths();
+console.log(`Book contains ${paths.length} notes`);
 ```
 
 ### `getAtomsUnderHeading(entryIndex?: number): Promise<Atom[]>`
@@ -70,7 +100,7 @@ Each `Atom` represents **one line** of a file. Files are read via `vault.cachedR
 // Get atoms under the heading the user right-clicked
 const atoms = await bv.getAtomsUnderHeading();
 
-// Or specify an explicit ToC index
+// Or specify an explicit ToC index (from getToc())
 const atoms = await bv.getAtomsUnderHeading(3);
 
 for (const atom of atoms) {
@@ -91,10 +121,12 @@ console.log(`Total lines across all atoms: ${atoms.length}`);
 
 Opens a preview modal showing all proposed changes. The user reviews and clicks **Apply** to commit.
 
+> **For safety, replaceText always requires user confirmation through the preview modal** — there is no silent mode. This is intentional.
+
 - `changes` — array of `Change` objects (one per line to replace)
 - `onApplied` — optional callback receiving the list of file paths that were modified
-
-After applying, Book View automatically re-renders affected sections.
+- Changes are applied in reverse line order per file, so multi-line replacements (`newText` containing `\n`) do not shift subsequent edit targets
+- After applying, Book View automatically re-renders affected sections
 
 ```typescript
 const atoms = await bv.getAtomsUnderHeading();
@@ -127,17 +159,25 @@ bv.getContext();       // { selection: string, entryIndex: number }
 
 ## Full Example: QuickAdd Macro
 
-Create a QuickAdd macro that replaces a word across all atoms under a heading:
+Create a QuickAdd macro that replaces a word across all atoms under a heading chosen by the user:
 
 ```typescript
 // In a QuickAdd macro user script, `params` provides `app`, `quickAddApi`, `obsidian`:
 const bv = (window as any).BookView;
 if (!bv) return;
 
-const selected = bv.getSelectedText();
+// Let the user pick a section programmatically
+const toc = bv.getToc();
+const picked = await quickAddApi.suggester(
+  (entry) => `${"#".repeat(entry.level)} ${entry.title}`,
+  toc,
+);
+if (!picked) return;
+
+const selected = bv.getSelectedText() || "TODO";
 const replacement = await quickAddApi.inputPrompt("Replace with:");
 
-const atoms = await bv.getAtomsUnderHeading();
+const atoms = await bv.getAtomsUnderHeading(picked.index);
 
 const changes = atoms
   .filter(a => a.text.includes(selected))
@@ -158,8 +198,8 @@ const bv = app.plugins.plugins["book-view"]?.api
   ?? window.BookView;
 if (!bv) return;
 
-const atoms = await bv.getAllAtoms();
-const count = atoms.filter(a => a.text.includes("TODO")).length;
-tR += `Found ${count} lines containing "TODO"`;
+const paths = bv.getFilePaths();
+const count = paths.length;
+tR += `Book contains ${count} notes`;
 %>
 ```
