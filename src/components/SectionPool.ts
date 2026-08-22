@@ -3,6 +3,7 @@ import { ManifestLink } from './ManifestParser';
 import type { FoldMode } from '../utils/fold';
 import { estimateHeight, startsWithHeading, endsWithHeading, guessFirstType, guessLastType } from '../utils/content';
 import { getFirstContentElement, getLastContentElement, getHeaderLevel } from '../utils/dom';
+import { DebugLog } from '../utils/debug';
 
 export const OVERSCAN_TOP = 2500;
 
@@ -561,6 +562,11 @@ export class SectionPool {
 
 	render(links: ManifestLink[]): Promise<void>[] {
 		const readPromises: Promise<void>[] = [];
+		// Debug: persisted-height lookup outcome for this build batch. A cold
+		// start with a warm data.json should show hit ≈ notes, miss ≈ 0; the
+		// width-0 lookup bug showed miss = every note.
+		let persistHits = 0;
+		let persistMisses = 0;
 		for (const link of links) {
 			if (link.type === 'broken') {
 				const path = `__book-warning__${link.display}`;
@@ -595,8 +601,16 @@ export class SectionPool {
 			});
 
 			const mtime = file.stat.mtime;
-			const cached = this.host.heightCache.get(path) ?? this.host.persistence.get?.(path, mtime, this.host.getContainerWidth());
+			const sessionCached = this.host.heightCache.get(path);
+			const persisted = sessionCached === undefined
+				? this.host.persistence.get?.(path, mtime, this.host.getContainerWidth())
+				: undefined;
+			const cached = sessionCached ?? persisted;
 			const estimated = cached ?? 35;
+			if (sessionCached === undefined) {
+				if (persisted !== undefined) persistHits++;
+				else persistMisses++;
+			}
 
 			const data: SectionData = {
 				el,
@@ -636,6 +650,24 @@ export class SectionPool {
 			readPromises.push(p);
 
 			this.observer.observe(el);
+		}
+
+		if (persistHits + persistMisses > 0) {
+			// startup() is captured even when debug logging is off — the book
+			// usually opens before the user toggles the log, which hid this
+			// line exactly when it mattered.
+			DebugLog.startup(
+				'PERSIST',
+				`hit=${persistHits} miss=${persistMisses}`,
+				`w=${Math.round(this.host.getContainerWidth())}`,
+			);
+			DebugLog.log(
+				'PERSIST',
+				'',
+				`hit=${persistHits}`,
+				`miss=${persistMisses}`,
+				`w=${Math.round(this.host.getContainerWidth())}`,
+			);
 		}
 
 		this.schedulePreRender();

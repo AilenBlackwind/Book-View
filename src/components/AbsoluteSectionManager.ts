@@ -231,6 +231,12 @@ export class AbsoluteSectionManager {
 		guard: ScrollGuard | null = null,
 	) {
 		this.scrollContainer = scrollContainer;
+		// Seed the container width synchronously: persistence lookups in
+		// pool.render() are keyed on it, and the ResizeObserver that normally
+		// maintains lastContainerWidth fires only after construction — so the
+		// very first render looked heights up with width 0, missing every
+		// stored record and re-measuring the whole book on each cold start.
+		this.lastContainerWidth = scrollContainer.clientWidth;
 		this.links = links;
 		this.app = app;
 		this.masterFile = masterFile;

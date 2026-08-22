@@ -38,27 +38,65 @@ export default class BookViewPlugin extends Plugin {
 	 *  barrier, so a stale memo is harmless. */
 	private themeSpacingsReady: Promise<void> | null = null;
 
-	getPersistedHeight = (path: string, mtime: number, width: number): number | undefined => {
+	getPersistedHeight = (path: string, mtime: number, _width: number): number | undefined => {
 		const rec = this.heightStore[path];
-		// Legacy entries (w === -1) predate width-keying: their height was
-		// measured at some width, which is closer to reality than an estimate.
-		return rec && rec.m === mtime && (rec.w === -1 || Math.abs(rec.w - width) <= 2) ? rec.h : undefined;
+		if (!rec) return undefined;
+		// mtime compared with a 2ms tolerance: strict equality misses files
+		// whose stored value was rounded differently than the current stat
+		// (sync tools / copies produce fractional mtimes).
+		if (Math.abs(rec.m - mtime) > 2) return undefined;
+		// Width is deliberately NOT matched: the old ±2px check invalidated
+		// the entire store whenever the pane resized (PERSIST miss=272 at
+		// w=980 vs stored 920). A height measured at a somewhat different
+		// width is still far closer to reality than the text heuristic, and
+		// the ResizeObserver corrects the residual once on mount, writing the
+		// record back with the fresh width — the cache self-heals after any
+		// layout change.
+		return rec.h;
 	};
 
 	persistHeight = (path: string, mtime: number, width: number, height: number): void => {
 		const rec = this.heightStore[path];
 		if (rec && rec.m === mtime && rec.w === width && Math.abs(rec.h - height) < 1) return;
 		this.heightStore[path] = { m: mtime, h: height, w: width };
+		// Cap the store: a multi-book vault easily exceeds 1000 distinct
+		// notes, and FIFO eviction at the old 1000 cap rotated entries between
+		// books, so notes re-measured (and re-jumped) on every other visit.
+		// 5000 entries ≈ 0.5MB of data.json — negligible.
 		const keys = Object.keys(this.heightStore);
-		if (keys.length > 1000) {
+		if (keys.length > 5000) {
 			const oldest = keys[0];
 			if (oldest) delete this.heightStore[oldest];
 		}
 		window.clearTimeout(this.saveHeightsTimer);
 		this.saveHeightsTimer = window.setTimeout(() => {
-			void this.saveData(Object.assign({}, this.settings, { measuredHeights: this.heightStore }));
+			this.saveHeightsTimer = 0;
+			void this.saveNow();
 		}, 2000);
 	};
+
+	/** Single funnel for every plugin-data write. Logs the outcome into the
+	 *  always-on startup log: saveData failures were previously swallowed by
+	 *  `void`, which left data.json frozen for weeks without any visible
+	 *  symptom except heights re-measuring on every launch. */
+	private saveNow(): Promise<void> {
+		const payload = Object.assign({}, this.settings, { measuredHeights: this.heightStore });
+		return this.saveData(payload)
+			.then(() => {
+				DebugLog.startup('saveData ok', 'heights=', Object.keys(this.heightStore).length);
+			})
+			.catch((err) => {
+				DebugLog.startup('saveData FAILED', String(err instanceof Error ? err.message : err));
+			});
+	}
+
+	/** Write pending height changes immediately (used on unload). */
+	private flushHeights(): Promise<void> {
+		if (!this.saveHeightsTimer) return Promise.resolve();
+		window.clearTimeout(this.saveHeightsTimer);
+		this.saveHeightsTimer = 0;
+		return this.saveNow();
+	}
 
 	async onload() {
 		DebugLog.startup('plugin load');
@@ -308,7 +346,11 @@ export default class BookViewPlugin extends Plugin {
 	onunload() {
 		delete window.BookView;
 		this.api = null;
-		window.clearTimeout(this.saveHeightsTimer);
+		// Flush pending height measurements instead of dropping them: the
+		// 2s debounce regularly outlived short sessions, so the tail of
+		// measured heights was lost on every close. Fire-and-forget: the
+		// write starts here and completes after the plugin is gone.
+		void this.flushHeights();
 		DebugLog.setEnabled(false);
 	}
 
@@ -329,12 +371,12 @@ export default class BookViewPlugin extends Plugin {
 		if (data?.tocAutoCollapse !== undefined && data.autoExpandMode === undefined) {
 			this.settings.autoExpandMode = data.tocAutoCollapse ? 'expand-collapse-level' : 'disabled';
 			delete (this.settings as unknown as Record<string, unknown>).tocAutoCollapse;
-			void this.saveData(Object.assign({}, this.settings, { measuredHeights: this.heightStore }));
+			void this.saveNow();
 		}
 	}
 
 	async saveSettings() {
-		await this.saveData(Object.assign({}, this.settings, { measuredHeights: this.heightStore }));
+		await this.saveNow();
 		this.refreshAllTocs();
 	}
 
