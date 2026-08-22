@@ -24,6 +24,8 @@ const CENTER_SCROLL_SETTLE_MS = 50;
 export class TocSpy {
 	/** Last bestIndex reported by pickActiveIndex; used to log only on change. */
 	private _prevSpyIndex = -1;
+	/** rAF id for a deferred applyVisibility (see scheduleApplyVisibility). */
+	private visibilityRafId = 0;
 
 	constructor(private state: TocState) {}
 
@@ -167,6 +169,13 @@ export class TocSpy {
 
 		s.activeEntryIndex = bestIndex;
 
+		// ToC panel hidden — pure tracking, zero DOM touches. Every classList
+		// toggle, element reparent, and tree rebuild here competes with section
+		// mounting for frame budget, turning imperceptible gap corrections into
+		// felt micro-stalls. The stale pendingPathIndex/activePathSet ensures a
+		// full catch-up on the first spy tick after the panel becomes visible.
+		if (s.tocViewportHeight <= 0) return;
+
 		const mode = s.settings?.autoExpandMode ?? 'disabled';
 
 		const highlightIndex = this.visibleAncestor(bestIndex, mode !== 'disabled');
@@ -194,7 +203,9 @@ export class TocSpy {
 		}
 
 		// Apply expand/collapse path immediately so sections expand while
-		// scrolling into them, not 30ms after the scroll stops.
+		// scrolling into them — unless sections are actively mounting fresh
+		// (first visit into new territory), in which case the ToC rebuild
+		// shifts by one frame to avoid compounding with markdown renders.
 		if (bestIndex !== s.pendingPathIndex) {
 			s.pendingPathIndex = bestIndex;
 			const newPath = mode !== 'disabled'
@@ -203,7 +214,7 @@ export class TocSpy {
 
 			if (!s.setsEqual(s.activePathSet, newPath)) {
 				s.activePathSet = newPath;
-				s.applyVisibility();
+				this.scheduleApplyVisibility(s);
 			}
 		}
 
@@ -263,14 +274,47 @@ export class TocSpy {
 
 			// Host the highlight bar inside the active row: it then follows the
 			// item automatically through collapse/expand and window re-renders,
-			// so it can never sit on a stale cached position.
-			if (s.highlightEl) {
-				const li = s.rowByEntry.get(index);
-				if (li && s.highlightEl.parentElement !== li) {
-					li.appendChild(s.highlightEl);
-				}
+			// so it can never sit on a stale cached position. Created lazily
+			// directly in its target <li>: eager creation left it as a
+			// full-width child of containerEl for one frame before being
+			// reparented — a visible flash.
+			const li = s.rowByEntry.get(index);
+			if (!li) return;
+			if (!s.highlightEl) {
+				s.highlightEl = li.createDiv({ cls: 'book-toc-highlight' });
+			} else if (s.highlightEl.parentElement !== li) {
+				li.appendChild(s.highlightEl);
 			}
 		}
+	}
+
+	/** Apply the active path's visibility, always deferred past the current
+	 *  frame's paint. Scrolling through a large section crosses multiple
+	 *  headings per gesture; each crossing triggers a path change and a tree
+	 *  rebuild (~3-4ms of DOM row creation). Deferring by rAF was insufficient:
+	 *  both the visibility rAF and the manager's runFrame rAF land in the SAME
+	 *  frame batch, so applyVisibility's DOM mutation dirties the layout that
+	 *  runFrame's scrollTop read then force-reflows (9ms, 503 elements).
+	 *  setTimeout breaks out of the rAF batch: the mutation lands AFTER the
+	 *  current frame paints, so the browser pre-computes the layout during
+	 *  the normal rendering pipeline and the next frame's read is clean. */
+	private scheduleApplyVisibility(s: TocState): void {
+		// Initial application must be synchronous: deferring past paint makes
+		// the ToC render collapsed/empty then snap open — a visible flash.
+		// After the first applyVisibility, rowByEntry is populated and every
+		// subsequent call goes through the setTimeout deferral.
+		if (!s.rowByEntry.size) {
+			s.applyVisibility();
+			return;
+		}
+		if (this.visibilityRafId) return;
+		this.visibilityRafId = window.setTimeout(() => {
+			this.visibilityRafId = 0;
+			s.applyVisibility();
+			// Flush layout dirtied by the tree rebuild so the next rAF's
+			// scrollTop reads find a clean layout instead of force-reflowing.
+			void s.containerEl.offsetHeight;
+		}, 0);
 	}
 
 	/** Re-apply the highlight after a window render replaced the row elements
@@ -344,6 +388,10 @@ export class TocSpy {
 		const s = this.state;
 		s.positionSource?.removeFrameCallback(this.onFrameTick);
 		s.tickScheduled = false;
+		if (this.visibilityRafId) {
+			window.clearTimeout(this.visibilityRafId);
+			this.visibilityRafId = 0;
+		}
 		if (s.scrollHandler) {
 			s.scrollContainer.removeEventListener('scroll', s.scrollHandler);
 			s.scrollHandler = null;

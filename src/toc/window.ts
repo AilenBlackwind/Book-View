@@ -34,13 +34,21 @@ export class TocWindow {
 	 *  the initial row window. */
 	mount(): void {
 		const s = this.state;
+		// Scope layout invalidation to this panel: applyVisibility mutates ToC
+		// rows + highlight + scrollTop, and without containment each mutation
+		// wakes layout from <body> down (500+ elements, ~9ms forced reflow).
+		// With containment the browser scopes the reflow to this subtree.
+		s.containerEl.addClass('bv-contain-layout');
 		const tocEl = s.containerEl.createDiv({ cls: 'book-toc' });
 		if (s.settings?.tocGuides) {
 			tocEl.addClass('book-toc-guides');
 		}
 		this.spacerEl = tocEl.createDiv({ cls: 'book-toc-spacer' });
 		this.listEl = this.spacerEl.createDiv({ cls: 'book-toc-list' });
-		s.highlightEl = s.containerEl.createDiv({ cls: 'book-toc-highlight' });
+		// highlightEl is NOT created here — it's lazily created by
+		// updateHighlight when it has a proper parent row to live in.
+		// Creating it eagerly left it as a full-width child of containerEl
+		// for one frame before being reparented — a visible flash.
 		this.render();
 	}
 

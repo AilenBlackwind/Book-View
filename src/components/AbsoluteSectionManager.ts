@@ -149,6 +149,13 @@ export class AbsoluteSectionManager {
 	 *  a write that did not move the book. */
 	private lastScrollWasAdjusting = false;
 	private lastContainerWidth = 0;
+	/** True until the width RO delivers its first observation. The constructor
+	 *  seeds lastContainerWidth from clientWidth (includes padding), but the
+	 *  RO reports contentRect.width (excludes padding) — comparing them on
+	 *  the first tick triggers a false width-change that wipes persisted
+	 *  heights back to estimates. Skip the comparison until the RO baseline
+	 *  is established. */
+	private widthObserverPrimed = false;
 	private pendingHeights: Map<string, number> = new Map();
 	private pendingWidthChange = false;
 	private rafId = 0;
@@ -318,15 +325,15 @@ export class AbsoluteSectionManager {
 		this.containerWidthObserver = new ResizeObserver((entries) => {
 			for (const entry of entries) {
 				const newWidth = entry.contentRect.width;
-				// Debug: does the book container collapse to 0 when the tab
-				// is hidden (background tab), faking a real width change?
 				this.dbg('width-resize', '', Math.round(newWidth), Math.round(this.lastContainerWidth));
-				// A hidden tab reports a 0-sized box (display:none). That is not a
-				// real width change: honoring it mass-resets section heights and
-				// re-queues the whole book for prerender while the user reads
-				// another note. Skip 0-sized observations; the visible width is
-				// compared on the next non-zero observation.
 				if (newWidth === 0) continue;
+				if (!this.widthObserverPrimed) {
+					// First observation: establish the RO baseline (contentRect
+					// units), skip the comparison against the clientWidth seed.
+					this.widthObserverPrimed = true;
+					this.lastContainerWidth = newWidth;
+					continue;
+				}
 				if (this.lastContainerWidth !== 0 && Math.abs(newWidth - this.lastContainerWidth) > 2) {
 					this.pendingWidthChange = true;
 					this.scheduleUpdate();
@@ -547,6 +554,12 @@ export class AbsoluteSectionManager {
 		return this.lastScrollWasAdjusting;
 	}
 
+	/** Timestamp of the last fresh section render — used by the ToC spy to
+	 *  defer tree rebuilds out of frames that are busy with markdown renders. */
+	getLastFreshLoadAt(): number {
+		return this.pool.lastFreshLoadAt;
+	}
+
 	scheduleUpdate(): void {
 		this.updateRequested = true;
 		this.scheduleFrame();
@@ -628,6 +641,21 @@ export class AbsoluteSectionManager {
 		// frame never pays the first layout of freshly mounted heavy content.
 		this.pool.scheduleIoWork();
 		this.dbgFrameMs += performance.now() - t0;
+		// Frame-stall detector: if a single frame exceeded 20ms, log it
+		// immediately with context rather than waiting for the per-second
+		// aggregation, which dilutes a single stall across the window.
+		const frameTotal = performance.now() - t0;
+		if (DebugLog.enabled && frameTotal > 20) {
+			const freshAge = Date.now() - this.pool.lastFreshLoadAt;
+			this.dbg(
+				'STALL',
+				'',
+				`${frameTotal.toFixed(0)}ms`,
+				`upd=${this.updateRequested ? 'pending' : 'done'}`,
+				`fresh=${freshAge < 500 ? `${Math.round(freshAge)}ms` : 'old'}`,
+				`top=${Math.round(scrollTop)}`,
+			);
+		}
 		this.dbgTick();
 	}
 
@@ -704,7 +732,7 @@ export class AbsoluteSectionManager {
 			this.pendingWidthChange = false;
 			let widthResetCount = 0;
 			for (const [path, data] of this.sections) {
-				if (!data.el.querySelector('.markdown-rendered')) {
+				if (!data.el.querySelector('.markdown-rendered') && !data.heightTrusted) {
 					const content = this.rawContent.get(path);
 					if (content) {
 						data.height = estimateHeight(content);

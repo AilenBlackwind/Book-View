@@ -423,6 +423,10 @@ export class SectionPool {
 	private upgradeQueue: string[] = [];
 	private upgradeInFlight = false;
 	private upgradePumpTimer = 0;
+	/** Timestamp of the last fresh (non-cached) section render. The ToC spy
+	 *  uses this to shift tree rebuilds out of frames that are already
+	 *  loaded with markdown rendering work (first-visit freeze). */
+	lastFreshLoadAt = 0;
 
 	// Debug counters (live in the togglable debug layer).
 	dbgIo = 0;
@@ -1022,6 +1026,7 @@ export class SectionPool {
 		data.deferralCount = 0;
 		data.renderFailures = 0;
 		this.host.getOnSectionRendered()?.(path, renderContainer);
+		this.lastFreshLoadAt = Date.now();
 		// Recalculate only when something that affects the layout actually
 		// changed: the heading flags (which drive the gaps), or a fold mode
 		// ('full' sections must be unmounted, 'heading' stubs measured). A

@@ -323,6 +323,19 @@
 .book-toc {
 	padding: 0;
 	overflow-anchor: none;
+	/* Scope layout invalidation to this subtree: applyVisibility's DOM
+	   mutations (row creation/removal) were waking layout from <body> down
+	   (500+ elements), forcing a synchronous reflow when the wheel glide
+	   reads scrollTop in the next rAF. With containment, the reflow scope
+	   shrinks to just the ToC rows (~35 elements). */
+	contain: layout;
+}
+
+/* Applied to the ToC panel's outermost container so that DOM mutations
+   inside (row rebuilds, highlight moves, scrollTop writes) are scoped
+   to this subtree instead of invalidating layout from <body> down. */
+.bv-contain-layout {
+	contain: layout;
 }
 
 /* Virtualized panel: the spacer sets the total scroll height (inline style),
