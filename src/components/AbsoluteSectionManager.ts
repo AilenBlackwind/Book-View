@@ -20,15 +20,17 @@ import { DebugLog } from '../utils/debug';
 // ends.
 const GESTURE_DEFER_MS = 700;
 
-// Compensations larger than this are anchored immediately even mid-gesture.
-// Deferring them (GESTURE_DEFER_MS) makes the slide visible: a section above
-// the viewport that loads taller than its estimate pushes the reading content
-// DOWN by the correction amount, which reads as a "bounce" while scrolling up.
-// Anchoring every correction during the gesture is cheap now that the
-// adjusting-scroll event does not schedule a spy frame and does not extend the
-// gesture window (the one-shot flag is consumed in boundScrollHandler), so the
-// threshold only needs to cover sub-pixel noise — the last value (24px) left
-// many-small-notes areas visibly sliding mid-scroll.
+// Compensations larger than this are anchored immediately even mid-gesture;
+// smaller ones defer to the settle update (GESTURE_DEFER_MS). Deferring makes
+// the slide visible: a section above the viewport that loads taller than its
+// estimate pushes the reading content DOWN by the correction amount, which
+// reads as a "bounce" while scrolling up — so the bar must not be too high.
+// History: 24px left many-small-notes areas visibly sliding mid-scroll; 8px
+// covered sub-pixel noise. A 40px mid-glide bar (deferring most corrections
+// while a flick glides) was tried and reverted: unanchored drift up to 40px
+// per fresh mount moved content under a stationary viewport, and the settle
+// applied the accumulated batch as one visible post-scroll snap. Stable
+// reading content beats exact wheel-travel distances — keep the bar low.
 const GESTURE_ANCHOR_PX = 8;
 
 // Debug: global main-thread frame counter, independent of the book manager.

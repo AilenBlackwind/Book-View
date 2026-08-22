@@ -3,6 +3,18 @@
  * No DOM, no Obsidian imports — safe to unit-test in isolation.
  */
 
+/** Calibration constants fitted against measured heights (DBG height-change
+ *  pairs over a stress book): sub-~450px stub notes render ~15% shorter than
+ *  the raw line-sum (fixed margins dominate there); mid-size and long notes
+ *  match once list items are priced correctly — an earlier long-note boost
+ *  (×1.1) consistently overshot every measured >700px note and was removed.
+ *  Re-fit against fresh pairs rather than touching the per-line prices. */
+const EST_SHORT_PX = 450;
+const EST_SHORT_FACTOR = 0.85;
+/** A wrapped list item costs at most two rows: beyond that the wrap estimate
+ *  outruns reality (nested markers, tight line-height in lists). */
+const EST_LIST_MAX_PX = 52;
+
 /** Rough rendered-height estimate (px) for a markdown source string, used as
  *  the pre-render spacer height before the real height is measured. */
 export function estimateHeight(text: string): number {
@@ -65,7 +77,10 @@ export function estimateHeight(text: string): number {
 			continue;
 		}
 		if (/^(-|\*|\+|\d+\.)\s/.test(trimmed)) {
-			estimated += 26;
+			// A list item costs at least one row; a long item wraps, but no
+			// more than two rows (see EST_LIST_MAX_PX). The flat 26px
+			// under-charged list-heavy container notes by hundreds of px.
+			estimated += Math.max(26, Math.min(Math.ceil(trimmed.length / 85) * 24, EST_LIST_MAX_PX));
 			continue;
 		}
 		if (/!\[.*?\]\(.*?\)|!\[\[.*?\]\]/.test(trimmed)) {
@@ -75,6 +90,9 @@ export function estimateHeight(text: string): number {
 		estimated += Math.ceil(trimmed.length / 85) * 24;
 	}
 
+	// Short-note damping (see the constants above); mid-size and long notes
+	// pass through uncalibrated.
+	if (estimated < EST_SHORT_PX) estimated *= EST_SHORT_FACTOR;
 	return Math.max(35, estimated);
 }
 

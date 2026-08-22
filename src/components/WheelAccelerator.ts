@@ -1,3 +1,4 @@
+import { DebugLog } from '../utils/debug';
 import { guardedScrollWrite } from './ScrollGuard';
 
 export interface WheelFlickConfig {
@@ -18,7 +19,9 @@ const COMBO_STEP = 0.5;
 const COMBO_MAX = 3;
 const NOTCH_THRESHOLD_PX = 40;
 const LINE_HEIGHT_PX = 33;
-const STOP_VELOCITY = 0.5;
+/** Idle time after the last notch before a gesture is considered finished
+ *  and its intended-vs-actual travel is reported (debug probe). */
+const GESTURE_REPORT_DELAY_MS = 300;
 
 /**
  * Turns mouse wheel notches into smooth accelerated flicks inside the book
@@ -70,6 +73,17 @@ export class WheelAccelerator {
 	private destroyed = false;
 	private cachedMaxScroll = 0;
 
+	// Temporary gesture-accuracy probe (DebugLog-gated): accumulates the
+	// intended travel of one wheel gesture (Σ deltaY × strength × combo) and,
+	// after the glide settles, reports it against the actual displacement.
+	// The difference quantifies the "imprecise short scroll" feel — anchor
+	// compensations landing mid-glide shift the resting point away from the
+	// intended travel.
+	private gestStartTop = 0;
+	private gestIntended = 0;
+	private gestTracking = false;
+	private gestReportTimer = 0;
+
 	constructor(
 		private readonly container: HTMLElement,
 		private readonly getConfig: WheelFlickConfigGetter,
@@ -84,6 +98,7 @@ export class WheelAccelerator {
 			window.cancelAnimationFrame(this.rafId);
 			this.rafId = 0;
 		}
+		window.clearTimeout(this.gestReportTimer);
 		this.container.removeEventListener('mousedown', this.kill, { capture: true });
 		WheelAccelerator.instances.delete(this.container);
 	}
@@ -150,7 +165,29 @@ export class WheelAccelerator {
 		// combo: the sum of the geometric velocity series is impulse / (1 - friction).
 		this.velocity += px * cfg.strength * this.combo * (1 - cfg.friction);
 
+		if (!this.gestTracking) {
+			this.gestTracking = true;
+			this.gestStartTop = this.container.scrollTop;
+			this.gestIntended = 0;
+		}
+		this.gestIntended += px * cfg.strength * this.combo;
+		window.clearTimeout(this.gestReportTimer);
+		this.gestReportTimer = window.setTimeout(() => this.reportGesture(), GESTURE_REPORT_DELAY_MS);
+
 		this.startLoop();
+	}
+
+	private reportGesture(): void {
+		this.gestTracking = false;
+		if (!DebugLog.enabled) return;
+		const actual = this.container.scrollTop - this.gestStartTop;
+		DebugLog.log(
+			'GESTURE',
+			'',
+			`intended=${Math.round(this.gestIntended)}`,
+			`actual=${Math.round(actual)}`,
+			`err=${Math.round(actual - this.gestIntended)}`,
+		);
 	}
 
 	private findScrollableTarget(target: EventTarget | null): HTMLElement {
@@ -189,9 +226,17 @@ export class WheelAccelerator {
 		guardedScrollWrite(c, () => {
 			c.scrollTop = next;
 		});
-		this.velocity *= this.getConfig().friction;
+		const friction = this.getConfig().friction;
+		this.velocity *= friction;
 		const atEdge = (next <= 0 && this.velocity < 0) || (next >= maxScroll && this.velocity > 0);
-		if (Math.abs(this.velocity) < STOP_VELOCITY || atEdge) {
+		// Stop when the un-run remainder of the geometric series (v/(1-f))
+		// drops under one pixel: everything past that is sub-pixel drift,
+		// which the fractional scrollTop accumulation still applies frame by
+		// frame, fading out smoothly. Cutting earlier threw away up to ~6px
+		// per gesture (systematic undershoot), and landing the remainder in
+		// one jump read as a hard terminal notch — this cutoff keeps both
+		// accuracy and the smooth decay.
+		if (atEdge || (this.velocity !== 0 && Math.abs(this.velocity) / (1 - friction) < 1)) {
 			this.velocity = 0;
 			return;
 		}

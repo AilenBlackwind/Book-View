@@ -397,6 +397,13 @@ export class SectionPool {
 	// in the DBG timing (which only covers the frame callback). The Set keeps
 	// enqueue/reconcile/drain O(1).
 	private renderQueueSet: Set<string> = new Set();
+	/** Set when a fresh render retyped its first/last element (gap-affecting)
+	 *  but the layout update was deferred to the ResizeObserver's initial
+	 *  report, so the retyped gaps and the real height land in ONE update.
+	 *  Two separate updates produced two opposing anchor compensations per
+	 *  mount (+18px gap nudge, then the −δ height yank) — the scroll
+	 *  micro-oscillation. */
+	private gapsDirty = false;
 	private activeRenderCount = 0;
 	private maxConcurrent = 1;
 	private coldStartTimer = 0;
@@ -503,7 +510,10 @@ export class SectionPool {
 				if (!path) continue;
 
 				const newHeight = entry.borderBoxSize?.[0]?.blockSize ?? el.offsetHeight;
-				if (newHeight <= 0) continue;
+				if (newHeight <= 0) {
+					this.flushGapsDirty();
+					continue;
+				}
 
 				const data = this.host.sections.get(path);
 				if (!data) continue;
@@ -523,10 +533,14 @@ export class SectionPool {
 				// is real, which lets prerender stop revisiting the section.
 				if (Math.abs(newHeight - data.height) < 2) {
 					data.heightTrusted = true;
+					this.flushGapsDirty();
 					continue;
 				}
 
 				this.host.dbg('height-change', path, Math.round(data.height), Math.round(newHeight));
+				// The height-driven update also carries any deferred gap
+				// retypes (see gapsDirty): one recalc, one anchor compensation.
+				this.gapsDirty = false;
 				this.host.reportSectionHeight(path, newHeight);
 			}
 		});
@@ -985,9 +999,24 @@ export class SectionPool {
 		// this gate every section load forced a full recalcOffsets over the
 		// whole book (~25ms on 2000 notes, visible as the pendingHeights=0
 		// 'update' lines in the debug log).
-		if (typeChanged || this.host.getFoldMode(path) !== 'none') {
+		if (this.host.getFoldMode(path) !== 'none') {
 			this.host.scheduleUpdate();
+		} else if (typeChanged) {
+			// Retyped headings change the inter-note gaps, but scheduling an
+			// update for them alone produced the first of two opposing anchor
+			// compensations per mount. The ResizeObserver always delivers at
+			// least one report right after observe(), so defer: that update
+			// then carries the real height AND the retyped gaps together.
+			this.gapsDirty = true;
 		}
+	}
+
+	/** Run the deferred gap-only layout update if no height report merged it
+	 *  in first (see gapsDirty). */
+	private flushGapsDirty(): void {
+		if (!this.gapsDirty) return;
+		this.gapsDirty = false;
+		this.host.scheduleUpdate();
 	}
 
 	/** Current scroll position, read live at most once per LIVE_READ_TTL.
