@@ -789,18 +789,28 @@ export class SectionPool {
 			data.component = null;
 		}
 
-		this.host.rawContent.delete(path);
-		this.host.renderedDomCache.delete(path);
-		const file = this.host.app.vault.getFileByPath(path);
-		if (file instanceof TFile) {
-			data.mtime = file.stat.mtime;
-		}
-		// Keep the last measured height and heading flags until the re-render
-		// produces new measurements: collapsing the height here would shift
-		// everything below without any scroll compensation.
-		data.renderGen++;
-		data.el.empty();
-		void this.loadSection(path);
+	this.host.rawContent.delete(path);
+	this.host.renderedDomCache.delete(path);
+	const file = this.host.app.vault.getFileByPath(path);
+	if (file instanceof TFile) {
+		data.mtime = file.stat.mtime;
+		// Re-read the edited content right away so the drain's content-pending
+		// gate (raw === undefined) never sees this section: without the read
+		// the note deferred on every scroll approach until a full rebuild.
+		void this.host.app.vault.cachedRead(file).then((content) => {
+			if (!this.host.isDestroyed()) this.host.rawContent.set(path, content);
+		});
+	}
+	// Keep the last measured height and heading flags until the re-render
+	// produces new measurements: collapsing the height here would shift
+	// everything below without any scroll compensation.
+	data.renderGen++;
+	data.el.empty();
+	// Route through the render queue instead of calling loadSection directly:
+	// the queue bounds concurrency (activeRenderCount), drops sections that
+	// drifted far from the viewport, and dedupes — a batch edit of N notes
+	// used to start N unbounded full renders at once.
+	this.enqueueRender(path);
 	}
 
 	scheduleIoWork(): void {
@@ -974,6 +984,13 @@ export class SectionPool {
 
 		const content = this.host.rawContent.get(path) ?? await this.host.app.vault.cachedRead(file);
 		if (this.host.isDestroyed() || data.renderGen !== gen) return;
+		// Store the read back into rawContent: refreshSection deletes the
+		// entry on every edit and nothing else repopulates it after the
+		// initial build batch. With the entry absent the drain treats the
+		// section as "content pending" and defers it on every pass while the
+		// user is scrolling — an edited note loaded late each time it was
+		// approached mid-scroll until the whole book was rebuilt.
+		this.host.rawContent.set(path, content);
 		data.placeholder = false;
 		if (content.length >= HEAVY_SECTION_CHARS) {
 			this.host.dbg('heavy', path, content.length, Math.round(data.height));
@@ -981,6 +998,7 @@ export class SectionPool {
 
 		data.startsWithHeading = startsWithHeading(content);
 		data.endsWithHeading = endsWithHeading(content);
+		data.heavy = isHeavyContent(content);
 
 		// Render into a detached container: partial output is never visible
 		// and unloadSection cannot cache half-rendered DOM mid-flight.
