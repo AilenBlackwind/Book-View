@@ -7,6 +7,15 @@ import { DebugLog } from '../utils/debug';
 
 export const OVERSCAN_TOP = 2500;
 
+/** Path prefix of synthetic warning sections (broken/empty notes). These are
+ *  layout-only slots: no file backs them, they never enter the render queue,
+ *  and heading folding must not touch them. */
+export const WARNING_PATH_PREFIX = '__book-warning__';
+
+export function isWarningPath(path: string): boolean {
+	return path.startsWith(WARNING_PATH_PREFIX);
+}
+
 const PRERENDER_BATCH = 4;
 const PRERENDER_DELAY = 60;
 const PRERENDER_SETTLE = 300;
@@ -522,8 +531,11 @@ export class SectionPool {
 
 				const data = this.host.sections.get(path);
 				if (!data) continue;
-				// Ignore stale notifications delivered after unload.
-				if (!data.component) continue;
+				// Skip stale notifications from unloaded regular sections
+				// (component removed). Warning banners have no component but
+				// DO have rendered HTML — their height is measured the same
+				// way as regular sections.
+				if (!data.component && !el.classList.contains('book-section-warning')) continue;
 				// A section collapsed to its own heading (or fully hidden) only
 				// renders its stub; that height must never overwrite data.height,
 				// which always holds the full unfolded height the layout re-expands
@@ -573,7 +585,7 @@ export class SectionPool {
 		let persistMisses = 0;
 		for (const link of links) {
 			if (link.type === 'broken') {
-				const path = `__book-warning__${link.display}`;
+				const path = `${WARNING_PATH_PREFIX}${link.display}`;
 				const el = this.host.spacerEl.createDiv({
 					cls: 'book-section-warning book-section-absolute',
 					attr: { 'data-path': path },
@@ -674,11 +686,25 @@ export class SectionPool {
 			);
 		}
 
+		// Measure warning banner heights after ALL elements are in the DOM.
+		// offsetHeight forces a single layout flush for all measurements —
+		// the heights are correct before the first recalcOffsets runs.
+		for (const path of this.host.fileOrder) {
+			if (!isWarningPath(path)) continue;
+			const data = this.host.sections.get(path);
+			if (!data || data.heightTrusted) continue;
+			const measured = data.el.offsetHeight;
+			if (measured > 0) data.height = measured + 16;
+		}
+
 		this.schedulePreRender();
 		return readPromises;
 	}
 
 	private addWarningSection(path: string, el: HTMLElement): void {
+		// Initial estimate — the ResizeObserver (observed below, same as
+		// regular sections) measures the actual rendered height on the first
+		// layout pass and corrects this via reportSectionHeight.
 		const WARNING_HEIGHT = 44;
 		const data: SectionData = {
 			el,
@@ -701,6 +727,10 @@ export class SectionPool {
 		};
 		this.host.sections.set(path, data);
 		this.host.fileOrder.push(path);
+		// Observe with the same ResizeObserver as regular sections: the RO
+		// measures the actual rendered height on the first layout pass and
+		// corrects the cascade — identical to the note section flow.
+		this.sectionResizeObserver.observe(el);
 	}
 
 	enqueueRender(path: string): void {
@@ -841,6 +871,10 @@ export class SectionPool {
 			const data = this.host.sections.get(path);
 			if (!data) break;
 			if (data.offset > winBottom) break;
+			// Warning banners have no renderable content: enqueueing them would
+			// send loadSection after a non-file path every frame, where it
+			// early-returns and the entry re-queues on the next reconcile.
+			if (isWarningPath(path)) continue;
 			if (!isSectionInWindow(data.offset, data.height, scrollTop, clientHeight, OVERSCAN_TOP, this.host.loadMargin)) continue;
 			// Mirror the IO callback: hidden-by-fold sections are never
 			// rendered or unrendered; heading stubs (book-section-heading-folded)

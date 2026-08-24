@@ -18,8 +18,14 @@
 	position: relative;
 }
 
-/* Combined selector for higher specificity than .book-section-placeholder below. */
-.book-section-placeholder.book-section-absolute {
+/* Combined selector for higher specificity than .book-section-placeholder below.
+   Warning banners (broken/empty notes) share the same absolute positioning:
+   they live in the same translateY cascade as note sections, and without
+   position:absolute here they stay in normal flow at the top of the spacer —
+   their translateY then applies on top of the flow position, dropping each
+   banner below its allocated slot onto the next note's content. */
+.book-section-placeholder.book-section-absolute,
+.book-section-warning.book-section-absolute {
 	position: absolute;
 	width: auto;
 	left: 0;
@@ -184,7 +190,10 @@
 
 .book-section-warning {
 	padding: 12px 16px;
-	margin-bottom: 16px;
+	/* Spacing between warnings is handled by the offset cascade
+	   (WARNING_HEIGHT includes a gap allowance), not by CSS margins —
+	   margins on absolutely positioned elements would desync the visual
+	   layout from the cascade. */
 	margin-left: auto;
 	margin-right: auto;
 	max-width: var(--file-line-width, 750px);
@@ -192,10 +201,22 @@
 	background: var(--background-modifier-error);
 	color: var(--text-normal);
 	font-size: var(--font-ui-small);
+	/* Single-line truncation: long vault-relative paths wrap to 2-3 lines,
+	   overflowing the fixed WARNING_HEIGHT allocation and causing the next
+	   section to overlap the warning text. */
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
-.book-section-warning:last-child {
-	margin-bottom: 0;
+/* Prevent heading negative margins from escaping the section boundary:
+   Obsidian themes pull headings above their container with negative
+   margin-top, which after a short section (warning banner, empty note)
+   lands on top of the previous element. overflow: clip is a hard boundary —
+   content cannot paint outside the section's border box. Unlike
+   overflow: hidden it does not create a scroll container. */
+.book-section-absolute {
+	overflow: clip;
 }
 
 /* Sections are virtualized and only the outer book container scrolls, so the

@@ -1,8 +1,8 @@
 import { App, TFile } from 'obsidian';
 import { ManifestLink } from './ManifestParser';
-import type { HeadingNode } from '../utils/fold';
+import type { FoldMode, HeadingNode } from '../utils/fold';
 import { FoldController } from './FoldController';
-import { SectionPool } from './SectionPool';
+import { SectionPool, isWarningPath } from './SectionPool';
 import type { SectionData, HeightPersistence } from './SectionPool';
 import { ScrollGuard, type ScrollGuardEvent } from './ScrollGuard';
 import { SectionLayout } from './SectionLayout';
@@ -291,7 +291,7 @@ export class AbsoluteSectionManager {
 			loadMargin: this.loadMargin,
 			persistence: this.persistence,
 			isDestroyed: () => this.destroyed,
-			getFoldMode: (path) => this.fold.getFoldMode(path),
+			getFoldMode: (path) => this.foldModeFor(path),
 			foldSectionNeedsFoldStub: (path) => this.fold.sectionNeedsFoldStub(path),
 			foldScheduleHeightMeasure: (path) => this.fold.scheduleFoldHeightMeasure(path),
 			foldTagSection: (path, el) => this.fold.tagFoldIds(path, el),
@@ -313,7 +313,7 @@ export class AbsoluteSectionManager {
 			spacerEl: this.spacerEl,
 			loadMargin: this.loadMargin,
 			isDestroyed: () => this.destroyed,
-			getFoldMode: (path) => this.fold.getFoldMode(path),
+			getFoldMode: (path) => this.foldModeFor(path),
 			foldNextVisibleIndex: (start) => this.fold.nextVisibleIndex(start),
 			foldScheduleHeightMeasure: (path) => this.fold.scheduleFoldHeightMeasure(path),
 			foldApplyPendingRetags: () => this.fold.applyPendingRetags(),
@@ -447,6 +447,17 @@ export class AbsoluteSectionManager {
 			this.toggleFold(foldId);
 		};
 		this.scrollContainer.addEventListener('click', this.boundClickHandler);
+	}
+
+	/** Fold mode for a section path. Warning banners (broken/empty notes) are
+	 *  excluded from heading folding entirely: they have no headings of their
+	 *  own, and isSectionHidden's fallback scan would otherwise pick up the
+	 *  last heading BEFORE the banner — folding it returned 'full', which hid
+	 *  the banner outright and made the pool's resize observer skip its height
+	 *  corrections (getFoldMode !== 'none' gate). */
+	private foldModeFor(path: string): FoldMode {
+		if (isWarningPath(path)) return 'none';
+		return this.fold.getFoldMode(path);
 	}
 
 	render(): void {

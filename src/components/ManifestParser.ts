@@ -36,11 +36,13 @@ export function getManifestLinks(app: App, masterFile: TFile): ManifestLink[] {
 		if (seen.has(resolved.path)) continue;
 		seen.add(resolved.path);
 
-		const fileCache = app.metadataCache.getFileCache(resolved);
 		const content = app.vault.getFileByPath(resolved.path);
+		// Empty detection: stat.size === 0 is the only reliable check.
+		// The metadataCache.sections fallback was a false-positive source on
+		// cold starts — the cache hasn't scanned book notes yet, so sections
+		// was undefined for files that DO have content, producing "Empty
+		// note" warnings that overlapped the real rendered sections.
 		if (content && content.stat.size === 0) {
-			links.push({ type: 'empty', file: resolved });
-		} else if (content && (!fileCache?.sections || fileCache.sections.length === 0)) {
 			links.push({ type: 'empty', file: resolved });
 		} else {
 			links.push({ type: 'file', file: resolved });
