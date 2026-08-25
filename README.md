@@ -4,9 +4,9 @@
 
 ---
 
-**Book-View** is a note virtualization plugin. Native Obsidian embeds aren't suited for displaying dozens—let alone hundreds—of notes in a single continuous scroll via CSS snippets without causing lag. Not to mention that creating a unified table of contents for them usually requires various workarounds.
+**Book-View** is a note virtualization plugin.
 
-**This plugin** takes a note containing a list of links (one per line) and renders them as a single large document (a **Book**) in reading view, automatically generating a working table of contents from all headings across the linked notes. You can edit notes by simply pressing Ctrl + double-clicking anywhere in the book — this opens the standard Obsidian editor with the corresponding note in a separate window. Clicking back on the Book closes the editor.
+Book View renders a sequence of linked notes as a single, continuous long-form document with an automatically generated, unified Table of Contents. Designed for workflows built around atomic notes — such as TTRPG rulebooks, book chapters, or structured research — it lets you read through multiple files in one seamless view and quickly jump into editing individual notes using Ctrl + Double Click.
 
 ===placeholder for a preview animation===
 
