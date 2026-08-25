@@ -166,18 +166,19 @@ export class TocCoordinator {
 
 	/** The book finished loading (or its sections were re-rendered). Forced
 	 *  rebind so a new book loaded into the same BookView instance rebuilds
-	 *  the ToC instead of being swallowed by the bound-book guard. */
+	 *  the ToC instead of being swallowed by the bound-book guard.
+	 *
+	 *  Always force-rebinds: even when the same BookView instance reloads
+	 *  (scheduleReload), its internal contentContainer and absoluteManager
+	 *  are recreated. A skip here would leave the ToC spy attached to the
+	 *  destroyed old manager — scroll tracking and heading clicks would
+	 *  silently break. */
 	setCurrentBook(book: BookView): void {
-		// Debug: the book finished loading; the coordinator rebinds the ToC.
 		DebugLog.log('COORD setCurrentBook', book.filePath || '', book.instanceId);
 		this.lastBook = book;
 		const view = this.getTocView();
 		if (!view) return;
-		// setCurrentBook fires from every loadBook completion, and loadBook can
-		// run several times for the same file during tab churn. Skip the forced
-		// rebuild (unbind + rebuild all ToC entries) when this exact book is
-		// already bound.
-		if (view.getBoundBook() !== book) view.bind(book, true);
+		view.bind(book, true);
 	}
 
 	/** Force-rebuild the bound ToC (e.g. when a book's headings changed).

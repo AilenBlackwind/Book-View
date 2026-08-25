@@ -1,5 +1,5 @@
 import { Component, FileView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
-import { getManifestFiles, getManifestLinks } from '../components/ManifestParser';
+import { getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
 import { HEIGHT_PER_LINE } from '../toc/types';
@@ -586,25 +586,19 @@ export class BookView extends FileView {
 	/** Cheap heuristic: does the raw file content look like it links other
 	 *  notes? Used to distinguish "manifest cache not parsed yet" from a
 	 *  genuinely empty manifest, so the cold-start wait never delays a book
-	 *  that has no links to render. */
-	private async rawContainsLinks(file: TFile): Promise<boolean> {
+	 *  that has no links to render.  Returns the raw content so callers can
+	 *  reuse it instead of reading the file a second time. */
+	private async rawContainsLinks(file: TFile): Promise<{ match: boolean; raw: string }> {
 		try {
 			const content = await this.app.vault.cachedRead(file);
-			return /\[\[|\[[^\]]*\]\(\.\//.test(content);
+			return { match: /\[\[|\[[^\]]*\]\(\.\//.test(content), raw: content };
 		} catch {
-			return false;
+			return { match: false, raw: '' };
 		}
 	}
 
 	private async loadBook(filePath: string, force = false): Promise<void> {
-		// Debug: log every loadBook call with its instance id to catch
-		// duplicate loads of the same book (tab/view churn) vs. fresh instances.
 		DebugLog.log('LOAD', String(this.instanceId), filePath);
-		// Obsidian may call onOpen/setState with the same filePath several times
-		// during a tab switch (open → setState → state re-apply). Each loadBook
-		// tears down the whole book, re-renders every section, and force-rebinds
-		// the ToC. Skip the duplicate work when this exact book is rendered
-		// (unless the manifest itself changed and a rebuild is forced).
 		if (!force && this.loadedPath === filePath && this.absoluteManager && this.currentFiles.length > 0) {
 			DebugLog.log('LOAD skip', String(this.instanceId), filePath);
 			return;
@@ -619,15 +613,14 @@ export class BookView extends FileView {
 		const file = this.app.vault.getFileByPath(filePath);
 		if (!(file instanceof TFile)) return;
 
-		// Cold-start guard: a restored workspace can open the book before the
-		// metadata cache finished scanning the manifest (layout-ready is not
-		// gated on the cache). getManifestLinks then returns [] and the book
-		// would render "No linked notes found" with no event left to reload it.
-		// Wait (bounded) for the manifest's own cache to land. Only wait when
-		// the raw content actually contains link syntax, so a genuinely
-		// linkless manifest still shows the empty state immediately.
+		// Cold-start guard: wait for the metadata cache to finish scanning
+		// the manifest only when the file isn't in the cache at all yet.
+		// Previously this also triggered when the cache existed but had no
+		// links (code-block-only manifests), causing a pointless 4 s timeout.
 		const manifestCache = this.app.metadataCache.getFileCache(file);
-		if (!manifestCache?.links && (await this.rawContainsLinks(file))) {
+		const cacheMissing = manifestCache === null;
+		const { match: hasRawLinks, raw: manifestRaw } = await this.rawContainsLinks(file);
+		if (cacheMissing && hasRawLinks) {
 			DebugLog.log('LOAD wait-metadata', String(this.instanceId), filePath);
 			await this.waitForManifestCache(file);
 		}
@@ -662,8 +655,10 @@ export class BookView extends FileView {
 			};
 		});
 
-		const links = getManifestLinks(this.app, file);
-		const files = getManifestFiles(this.app, file);
+		const links = await getManifestLinks(this.app, file, manifestRaw);
+		const files = links
+			.filter((l): l is { type: 'file'; file: TFile } => l.type === 'file')
+			.map((l) => l.file);
 		if (links.length === 0) {
 			this.contentContainer.createDiv({ cls: 'book-empty', text: 'No linked notes found in manifest.' });
 			return;
@@ -712,9 +707,36 @@ export class BookView extends FileView {
 			const targetFile = this.app.vault.getFileByPath(path);
 			if (!(targetFile instanceof TFile)) return;
 
+			// Estimate the cursor line from the click's relative position
+			// within the section.  The rendered view is not a linear map of
+			// source lines (images, embeds, code blocks all take variable
+			// height), so this is approximate — but for long notes with a
+			// single heading it lands much closer to the target than jumping
+			// to line 0.
+			const rect = placeholder.getBoundingClientRect();
+			const ratio = Math.max(0, Math.min(1, (evt.clientY - rect.top) / rect.height));
+
+			const cache = this.app.metadataCache.getFileCache(targetFile);
+			let totalLines = 1;
+			const lastSection = cache?.sections?.[cache.sections.length - 1];
+			const lastHeading = cache?.headings?.[cache.headings.length - 1];
+			if (lastSection) {
+				totalLines = lastSection.position.end.line + 1;
+			} else if (lastHeading) {
+				totalLines = lastHeading.position.start.line + 50;
+			}
+
+			const targetLine = Math.min(
+				totalLines - 1,
+				Math.round(ratio * totalLines),
+			);
+
 			const leaf = this.app.workspace.openPopoutLeaf();
 			this.popoutLeaf = leaf;
-			void leaf.openFile(targetFile, { state: { mode: 'source' } });
+			void leaf.openFile(targetFile, {
+				state: { mode: 'source' },
+				eState: { line: targetLine, ch: 0 },
+			});
 		});
 
 		// Internal links inside the book: links to other book notes jump to the
@@ -825,6 +847,7 @@ export class BookView extends FileView {
 				this.plugin?.tocCoordinator?.scheduleRefresh();
 			}),
 		);
+
 	}
 
 	private refreshTimers: Map<string, number> = new Map();

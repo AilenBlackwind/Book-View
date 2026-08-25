@@ -4,6 +4,7 @@ import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
 import { BookTocView, VIEW_TYPE_BOOK_TOC } from './views/BookTocView';
 import { TocCoordinator } from './components/TocCoordinator';
 import { getManifestFiles, isBookManifest } from './components/ManifestParser';
+import { registerBookViewCodeBlock } from './components/CodeBlockProcessor';
 import { WheelAccelerator } from './components/WheelAccelerator';
 import { BookViewSettings, DEFAULT_SETTINGS } from './settings';
 import { BookViewSettingTab } from './ui/SettingsTab';
@@ -110,6 +111,10 @@ export default class BookViewPlugin extends Plugin {
 		);
 
 		this.bufferManager = new BufferManager(this.app);
+		registerBookViewCodeBlock(
+			this.app,
+			this.registerMarkdownCodeBlockProcessor.bind(this),
+		);
 		this.api = new BookViewAPI(
 			this.app,
 			() => {
@@ -510,7 +515,7 @@ export default class BookViewPlugin extends Plugin {
 		const manifestFile = this.app.vault.getFileByPath(bv.filePath);
 		if (!(manifestFile instanceof TFile)) return;
 
-		const files = getManifestFiles(this.app, manifestFile);
+		const files = await getManifestFiles(this.app, manifestFile);
 		if (files.length === 0) {
 			new Notice('No linked notes found in this book.');
 			return;

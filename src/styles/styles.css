@@ -458,6 +458,12 @@
 	height: 100%;
 	box-sizing: border-box;
 	padding: 2px 8px;
+	/* Line-height matches the content area (26px row − 4px padding = 22px)
+	   so the text's optical center is always at the row midpoint regardless
+	   of --font-smallest. Without this, the line-box sits flush to the
+	   content-area top and the text drifts vertically as font size changes
+	   while the highlight pill and chevron stay fixed. */
+	line-height: 22px;
 	color: var(--nav-item-color);
 	cursor: pointer;
 	text-decoration: none;
@@ -493,19 +499,12 @@
 
 .book-toc-highlight {
 	position: absolute;
-	/* The pill is hosted inside the active row and follows it through
-	   collapse/expand reflows, so it fills the row instead of using a cached
-	   top/height that would go stale the moment the TOC reflows. The row is
-	   taller than its text (26px vs the ~2px item padding + line box), so the
-	   full-height bar reads as hanging below the text; trim the bottom by the
-	   same amount as the item's top padding to center it on the text. */
-	/* The text's optical center sits above the line-box center (extra
-	   line-height room below the x-height band), so the bar is raised 3px past
-	   the row top to read as centered. The heading row no longer clips (its
-	   overflow:hidden dated from the collapse-animation era; the label itself
-	   is clipped by .book-toc-item), so the raised top keeps its radius. */
-	top: -2px;
-	bottom: 6px;
+	/* Fill the item's content area (padding: 2px 8px) so the pill always
+	   matches the text region regardless of --font-smallest or UI zoom.
+	   Previous hardcoded top:-2px / bottom:6px shifted relative to the
+	   heading text at different font sizes. */
+	top: 2px;
+	bottom: 2px;
 	left: 4px;
 	right: 4px;
 	background: var(--bv-toc-active-color, var(--interactive-accent));
@@ -1063,6 +1062,40 @@ mark.book-search-all {
 .book-content-container.is-scrolling *::before,
 .book-content-container.is-scrolling *::after {
 	animation-play-state: paused !important;
+}
+
+/* ── ```book-view code block ─────────────────────────────────────── */
+
+/* The processor replaces the raw fenced block with a styled list. */
+.book-view-codeblock-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 12px;
+	border-left: 3px solid var(--text-accent, var(--interactive-accent));
+	margin-left: 4px;
+}
+
+.book-view-codeblock-item {
+	display: flex;
+	align-items: center;
+	padding: 2px 0;
+}
+
+.book-view-codeblock-link {
+	color: var(--linkcolor);
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.book-view-codeblock-link:hover {
+	color: var(--linkcolor-hover);
+	text-decoration: underline;
+}
+
+.book-view-codeblock-broken {
+	color: var(--text-error);
+	font-style: italic;
 }
 
 

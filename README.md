@@ -4,9 +4,7 @@
 
 ---
 
-**Book-View** is a note virtualization plugin.
-
-Book View renders a sequence of linked notes as a single, continuous long-form document with an automatically generated, unified Table of Contents. Designed for workflows built around atomic notes — such as TTRPG rulebooks, book chapters, or structured research — it lets you read through multiple files in one seamless view and quickly jump into editing individual notes using Ctrl + Double Click.
+Book View renders a sequence of linked notes as a single, continuous long-form document with an automatically generated, unified Table of Contents. Designed for workflows built around atomic notes — such as TTRPG rulebooks, book chapters, or structured research — it lets you read through multiple files in one seamless view and quickly jump into editing individual notes using **Ctrl/Cmd + Double-click**. This plugin can also be more convenient than regular embeddings at extremely large scales (1,000+ notes in one scroll).
 
 ===placeholder for a preview animation===
 
@@ -19,14 +17,15 @@ Book View renders a sequence of linked notes as a single, continuous long-form d
 
 1. In the note you want to turn into a Book, create a list of links formatted like this:
 
+```markdown
 [[Note 1]]
 [[Note 2]]
 [[Note 3]]
-
+```
 ===placeholder for a screenshot===
 
 2. Open the Command Palette (`Ctrl/Cmd + P`) and run **Book View: Toggle View** (or add `book-view: true` to the frontmatter).
-3. **Open Editor:** `Ctrl + Double Click` anywhere in the book to edit the corresponding note.
+3. **Open Editor:** `Ctrl/Cmd + Double-click` anywhere in the book to edit the corresponding note.
 
 ---
 
