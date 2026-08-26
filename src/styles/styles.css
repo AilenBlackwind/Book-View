@@ -209,13 +209,13 @@
 	text-overflow: ellipsis;
 }
 
-/* Prevent heading negative margins from escaping the section boundary:
-   Obsidian themes pull headings above their container with negative
-   margin-top, which after a short section (warning banner, empty note)
-   lands on top of the previous element. overflow: clip is a hard boundary —
-   content cannot paint outside the section's border box. Unlike
-   overflow: hidden it does not create a scroll container. */
-.book-section-absolute {
+/* Heading negative margins are neutralised by the first-child zero-margin
+   rules below; a global overflow: clip on every section would also clip the
+   fold chevron pseudo-element (left: -19px) and box-shadow / glow effects
+   that intentionally extend past the element box. Warning banners are the
+   exception — they are compact layout-only slots whose margins must never
+   bleed into adjacent sections. */
+.book-section-warning.book-section-absolute {
 	overflow: clip;
 }
 

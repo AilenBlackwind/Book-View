@@ -37,6 +37,13 @@ export class BookView extends FileView {
 	private popoutLeaf: WorkspaceLeaf | null = null;
 	private savedScrollTop: number = -1;
 	private savedContainer: HTMLElement | null = null;
+	private boundPersistScroll: (() => void) | null = null;
+	/** True while loadBook is running and before the persisted scroll position
+	 *  has been restored. The scroll listener must not overwrite the saved
+	 *  position in plugin.scrollPositions with 0 during the initial render
+	 *  (sections mounting → ResizeObserver corrections → synthetic scroll
+	 *  events all carry scrollTop = 0). */
+	private initialLoadInProgress = false;
 	filePath: string = '';
 	plugin: BookViewPlugin | null = null;
 	/** One Component per loadBook, so event listeners bound for a book are
@@ -604,8 +611,17 @@ export class BookView extends FileView {
 			return;
 		}
 		this.cleanup();
+		// Clear in-memory scroll state: cleanup already persisted to
+		// plugin.scrollPositions keyed by filePath, so the next restore
+		// reads the correct per-book value via getScrollPosition(). Keeping
+		// savedScrollTop here would leak the OLD book's scrollTop into the
+		// new book's restore (cleanup saved it, then B's restore consumed it
+		// and set it to -1, then the NEXT book picks up whatever B had).
+		this.savedScrollTop = -1;
+		this.savedContainer = null;
 		this.loadedPath = filePath;
 		this.filePath = filePath;
+		this.initialLoadInProgress = true;
 
 		const comp = new Component();
 		this.loadComponent = comp;
@@ -641,6 +657,17 @@ export class BookView extends FileView {
 		// manager, ToC navigation all go through guardedScrollWrite).
 		this.scrollGuard = new ScrollGuard(this.contentContainer);
 		this.scrollGuard.install();
+
+		// Debounced scroll-position persistence: writes the current scrollTop to
+		// plugin.scrollPositions after 2s of no scrolling (mirrors the height
+		// debounce in main.ts). The position is read back on the next loadBook
+		// when no in-memory save exists (e.g. Obsidian restart).
+		this.boundPersistScroll = () => {
+			if (this.initialLoadInProgress) return;
+			if (!this.contentContainer || !this.plugin || !this.filePath) return;
+			this.plugin.saveScrollPosition(this.filePath, this.contentContainer.scrollTop);
+		};
+		this.contentContainer.addEventListener('scroll', this.boundPersistScroll, { passive: true });
 
 		this.startFindObserver();
 
@@ -848,6 +875,15 @@ export class BookView extends FileView {
 			}),
 		);
 
+		// Restore persisted scroll position on initial load: the
+		// active-leaf-change listener only fires on leaf switches, not on
+		// the first activation (the leaf is already active when loadBook
+		// registers the listener). Defer until sections have mounted and
+		// scrollHeight is non-zero (the pool creates placeholders with
+		// estimated heights synchronously, but the ResizeObserver needs
+		// one paint frame to report real heights).
+		this.schedulePersistedScrollRestore();
+
 	}
 
 	private refreshTimers: Map<string, number> = new Map();
@@ -893,22 +929,49 @@ export class BookView extends FileView {
 		return hash !== prev;
 	}
 
+	/** Wait for the first layout settle (scrollHeight > 0 from measured
+	 *  section heights) then restore the persisted scroll position. Called
+	 *  once at the end of loadBook; the single-rAF inside
+	 *  restoreScrollPosition is not enough because sections haven't mounted
+	 *  yet when loadBook returns — the pool created placeholders but the
+	 *  ResizeObserver hasn't fired. */
+	private schedulePersistedScrollRestore(): void {
+		const container = this.contentContainer;
+		const tryRestore = (attempts: number) => {
+			if (!container || container !== this.contentContainer) return;
+			const sh = container.scrollHeight;
+			const ch = container.clientHeight;
+			if (sh > ch || attempts <= 0) {
+				this.initialLoadInProgress = false;
+				this.restoreScrollPosition();
+			} else {
+				window.requestAnimationFrame(() => tryRestore(attempts - 1));
+			}
+		};
+		window.requestAnimationFrame(() => tryRestore(20));
+	}
+
 	private saveScrollPosition(): void {
+		if (this.initialLoadInProgress) return;
 		if (this.contentContainer) {
-			this.savedScrollTop = this.contentContainer.scrollTop;
+			const scrollTop = this.contentContainer.scrollTop;
+			this.savedScrollTop = scrollTop;
 			this.savedContainer = this.contentContainer;
+			if (this.plugin && this.filePath) {
+				// Don't overwrite a valid saved position with 0 during teardown:
+				// the container may already be detached/emptied (scrollTop=0) by
+				// the time cleanup or leaf-change fires, but the scroll listener
+				// already captured the correct position synchronously.
+				const existing = this.plugin.getScrollPosition(this.filePath);
+				const safeTop = scrollTop ?? 0;
+				if (safeTop <= 0 && existing !== undefined && existing > 0) return;
+				this.plugin.saveScrollPosition(this.filePath, safeTop);
+			}
 		}
 	}
 
 	private restoreScrollPosition(): void {
 		if (!this.contentContainer) return;
-		// Only a rebuild (loadBook replacing contentContainer) makes the saved
-		// position meaningful: the fresh container starts at 0 and the save is
-		// the only record of where the user was. If the same container is still
-		// live, the scroll is either current or was moved intentionally while
-		// the leaf was inactive (e.g. a ToC teleport with the panel focused) —
-		// restoring the stale save would yank the viewport back to it (the
-		// "jump to top after ToC teleport" bug).
 		if (this.savedContainer === this.contentContainer) {
 			DebugLog.log('RESTORE skip', '', this.savedScrollTop);
 			this.savedScrollTop = -1;
@@ -916,10 +979,12 @@ export class BookView extends FileView {
 			return;
 		}
 		this.savedContainer = null;
-		DebugLog.log('RESTORE', '', this.savedScrollTop >= 0 ? this.savedScrollTop : -2);
-		if (this.savedScrollTop >= 0) {
-			const target = this.savedScrollTop;
-			this.savedScrollTop = -1;
+		const target = this.savedScrollTop >= 0
+			? this.savedScrollTop
+			: (this.plugin?.getScrollPosition(this.filePath) ?? -1);
+		DebugLog.log('RESTORE', '', target >= 0 ? target : -2);
+		this.savedScrollTop = -1;
+		if (target >= 0) {
 			window.requestAnimationFrame(() => {
 				if (!this.contentContainer) return;
 				const maxScroll = this.contentContainer.scrollHeight - this.contentContainer.clientHeight;
@@ -931,10 +996,19 @@ export class BookView extends FileView {
 	}
 
 	private cleanup(): void {
+		// Persist the current scroll position before destroying the container:
+		// active-leaf-change does not fire when the same leaf switches views
+		// (e.g. book A → book B in the same pane), so without this the old
+		// book's position is lost until the next Obsidian restart.
+		this.saveScrollPosition();
 		this.loadComponent?.unload();
 		this.loadComponent = null;
 		window.clearTimeout(this.reloadTimer);
 		this.reloadTimer = 0;
+		if (this.contentContainer && this.boundPersistScroll) {
+			this.contentContainer.removeEventListener('scroll', this.boundPersistScroll);
+		}
+		this.boundPersistScroll = null;
 		for (const timer of this.refreshTimers.values()) {
 			window.clearTimeout(timer);
 		}

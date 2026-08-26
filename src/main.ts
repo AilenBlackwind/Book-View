@@ -26,9 +26,11 @@ export default class BookViewPlugin extends Plugin {
 	private lastPointerX = -1;
 	private lastPointerY = -1;
 	heightStore: Record<string, { m: number; h: number; w: number }> = {};
+	scrollPositions: Record<string, number> = {};
 	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
 	tocCoordinator: TocCoordinator | null = null;
 	private saveHeightsTimer = 0;
+	private saveScrollTimer = 0;
 	/** Memoized first theme-spacing measurement. onload used to measure
 	 *  immediately, i.e. before the layout was ready — on a cold start the
 	 *  probe rendered into a DOM whose theme CSS was still settling, so the
@@ -81,7 +83,10 @@ export default class BookViewPlugin extends Plugin {
 	 *  `void`, which left data.json frozen for weeks without any visible
 	 *  symptom except heights re-measuring on every launch. */
 	private saveNow(): Promise<void> {
-		const payload = Object.assign({}, this.settings, { measuredHeights: this.heightStore });
+		const payload = Object.assign({}, this.settings, {
+			measuredHeights: this.heightStore,
+			scrollPositions: this.scrollPositions,
+		});
 		return this.saveData(payload)
 			.then(() => {
 				DebugLog.startup('saveData ok', 'heights=', Object.keys(this.heightStore).length);
@@ -96,6 +101,30 @@ export default class BookViewPlugin extends Plugin {
 		if (!this.saveHeightsTimer) return Promise.resolve();
 		window.clearTimeout(this.saveHeightsTimer);
 		this.saveHeightsTimer = 0;
+		return this.saveNow();
+	}
+
+	/** Persist the last scroll position for a book (debounced, 2s). */
+	saveScrollPosition(bookPath: string, scrollTop: number): void {
+		if (scrollTop < 0) return;
+		this.scrollPositions[bookPath] = Math.round(scrollTop);
+		window.clearTimeout(this.saveScrollTimer);
+		this.saveScrollTimer = window.setTimeout(() => {
+			this.saveScrollTimer = 0;
+			void this.saveNow();
+		}, 2000);
+	}
+
+	/** Retrieve the persisted scroll position for a book, or undefined. */
+	getScrollPosition(bookPath: string): number | undefined {
+		const top = this.scrollPositions[bookPath];
+		return typeof top === 'number' ? top : undefined;
+	}
+
+	private flushScrollPositions(): Promise<void> {
+		if (!this.saveScrollTimer) return Promise.resolve();
+		window.clearTimeout(this.saveScrollTimer);
+		this.saveScrollTimer = 0;
 		return this.saveNow();
 	}
 
@@ -351,25 +380,30 @@ export default class BookViewPlugin extends Plugin {
 	onunload() {
 		delete window.BookView;
 		this.api = null;
-		// Flush pending height measurements instead of dropping them: the
-		// 2s debounce regularly outlived short sessions, so the tail of
-		// measured heights was lost on every close. Fire-and-forget: the
-		// write starts here and completes after the plugin is gone.
 		void this.flushHeights();
+		void this.flushScrollPositions();
 		DebugLog.setEnabled(false);
 	}
 
 	async loadSettings() {
-		const data = await this.loadData() as (Partial<BookViewSettings> & { measuredHeights?: Record<string, { m: number; h: number; w?: number }>; tocAutoCollapse?: boolean }) | null;
+		const data = await this.loadData() as (Partial<BookViewSettings> & {
+			measuredHeights?: Record<string, { m: number; h: number; w?: number }>;
+			scrollPositions?: Record<string, number>;
+			tocAutoCollapse?: boolean;
+		}) | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.heightStore = {};
 		for (const [path, rec] of Object.entries(data?.measuredHeights ?? {})) {
 			if (rec && typeof rec.m === 'number' && typeof rec.h === 'number') {
-				// Records saved before width-keying carry no width; tag them -1
-				// (match any width) so they keep working until re-measured.
 				this.heightStore[path] = typeof rec.w === 'number'
 					? rec as { m: number; h: number; w: number }
 					: { m: rec.m, h: rec.h, w: -1 };
+			}
+		}
+		this.scrollPositions = {};
+		for (const [path, top] of Object.entries(data?.scrollPositions ?? {})) {
+			if (typeof top === 'number' && top >= 0) {
+				this.scrollPositions[path] = top;
 			}
 		}
 

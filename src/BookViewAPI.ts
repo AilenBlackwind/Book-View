@@ -147,9 +147,7 @@ export class BookViewAPI {
 	}
 
 	async getAllAtoms(): Promise<Atom[]> {
-		const bv = this.findActiveBookView();
-		if (!bv) return [];
-		const paths = bv.getCurrentFiles().map((f) => f.path);
+		const paths = this.getFilePaths();
 		return this.readAtomsFromPaths(paths);
 	}
 
@@ -179,6 +177,38 @@ export class BookViewAPI {
 		new ReplacePreviewModal(this.app, changes, () => {
 			void this.applyChanges(changes, onApplied);
 		}).open();
+	}
+
+	/** Raw markdown content of a section (file) as it was read for
+	 *  rendering.  Prefers the in-memory cache inside the section engine
+	 *  (exactly what the user sees) and falls back to `vault.cachedRead`. */
+	async getRawSectionContent(filePath: string): Promise<string | null> {
+		const file = this.app.vault.getFileByPath(filePath);
+		if (!(file instanceof TFile)) return null;
+		const bv = this.findActiveBookView();
+		const cached = bv?.getAbsoluteManager()?.getRawContent(filePath);
+		if (cached != null) return cached;
+		return this.app.vault.cachedRead(file);
+	}
+
+	/** Find-and-replace inside a section's raw markdown.
+	 *  `search` can be a string (literal match) or a RegExp.
+	 *  The replacement is written back to the vault file immediately. */
+	async replaceInSection(
+		filePath: string,
+		search: string | RegExp,
+		replacement: string,
+	): Promise<void> {
+		const file = this.app.vault.getFileByPath(filePath);
+		if (!(file instanceof TFile)) return;
+		const content = await this.app.vault.cachedRead(file);
+		const newContent =
+			typeof search === 'string'
+				? content.replaceAll(search, replacement)
+				: content.replace(search, replacement);
+		if (newContent !== content) {
+			await this.app.vault.modify(file, newContent);
+		}
 	}
 
 	private async applyChanges(changes: Change[], onApplied?: (paths: string[]) => void): Promise<void> {
