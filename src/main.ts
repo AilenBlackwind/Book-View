@@ -12,6 +12,7 @@ import { BufferManager } from './BufferManager';
 import { BookViewAPI } from './BookViewAPI';
 import { DebugLog } from './utils/debug';
 import { ensureGlobalFrameProbe } from './components/AbsoluteSectionManager';
+import { updateManifestLinksOnRename } from './components/LinkUpdater';
 
 export default class BookViewPlugin extends Plugin {
 	settings: BookViewSettings = DEFAULT_SETTINGS;
@@ -360,6 +361,16 @@ export default class BookViewPlugin extends Plugin {
 						void this.activateBookView(file.path, leaf);
 					}
 				}
+			}),
+		);
+
+		// Keep ```book-view code block links in sync when files are renamed:
+		// Obsidian updates [[wikilinks]] in note body but ignores fenced code
+		// blocks, so links inside book-view blocks would silently break.
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (!(file instanceof TFile) || file.extension !== 'md') return;
+				void updateManifestLinksOnRename(this.app, oldPath, file.path);
 			}),
 		);
 
