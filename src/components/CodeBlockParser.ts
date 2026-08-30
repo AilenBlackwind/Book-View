@@ -2,11 +2,14 @@ import { App, TFile } from 'obsidian';
 import type { ManifestLink } from './ManifestParser';
 
 /** A raw link extracted from a ```book-view code block. */
-interface RawCodeBlockLink {
+export interface RawCodeBlockLink {
 	/** The link target as written (wikilink path or markdown href). */
 	target: string;
 	/** Optional display text (alias after `|` in wikilinks, or link text). */
 	display?: string;
+	/** Character offset of this link within the scanned (block) source, used
+	 *  to jump the editor cursor to the matching source line on click. */
+	offset?: number;
 }
 
 /**
@@ -49,11 +52,11 @@ export function parseCodeBlockLinks(source: string): RawCodeBlockLink[] {
 				const pipe = m[1].indexOf('|');
 				const target = (pipe === -1 ? m[1] : m[1].substring(0, pipe)).trim();
 				const display = pipe === -1 ? undefined : m[1].substring(pipe + 1).trim();
-				if (target) results.push({ target, display });
+				if (target) results.push({ target, display, offset: m.index });
 			} else if (m[2] !== undefined && m[3] !== undefined) {
 				const display = m[2].trim();
 				const target = m[3].trim();
-				if (target) results.push({ target, display: display || undefined });
+				if (target) results.push({ target, display: display || undefined, offset: m.index });
 			}
 		}
 	}

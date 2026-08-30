@@ -1080,6 +1080,16 @@ mark.book-search-all {
 	display: flex;
 	align-items: center;
 	padding: 2px 0;
+	/* The row is a click-to-edit affordance in Live Preview: clicking it
+	   moves the editor cursor to the matching source line. */
+	cursor: pointer;
+}
+
+/* Visually hint an editable row when hovering it (already in Live Preview).
+   The link itself keeps its own hover treatment below. */
+.book-view-codeblock-item:hover {
+	background: var(--background-modifier-hover, transparent);
+	border-radius: 3px;
 }
 
 .book-view-codeblock-link {

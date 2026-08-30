@@ -31,6 +31,15 @@ Intro [[BodyLink]]
 		const content = '```book-view\r\n[[A]]\r\n[[B]]\r\n```';
 		expect(parseCodeBlockLinks(content).map((l) => l.target)).toEqual(['A', 'B']);
 	});
+
+	it('records the source offset of each link for click-to-edit line mapping', () => {
+		const inner = '[[A]]\n[[B|Alias]]\nplain line\n[C](/C.md)';
+		const links = parseCodeBlockLinks(inner);
+		expect(links.map((l) => l.offset)).toEqual([0, 6, 29]);
+		const lineOf = (offset: number): number =>
+			inner.slice(0, offset).split('\n').length - 1;
+		expect(links.map((l) => lineOf(l.offset as number))).toEqual([0, 1, 3]);
+	});
 });
 
 describe('frontmatterEndOffset', () => {
