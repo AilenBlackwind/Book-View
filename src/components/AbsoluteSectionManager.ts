@@ -6,7 +6,7 @@ import { SectionPool, isWarningPath } from './SectionPool';
 import type { SectionData, HeightPersistence } from './SectionPool';
 import { ScrollGuard, type ScrollGuardEvent } from './ScrollGuard';
 import { SectionLayout } from './SectionLayout';
-import { estimateHeight } from '../utils/content';
+import { estimateHeight, stripYamlFrontmatter } from '../utils/content';
 import type { ThemeSpacings } from '../utils/theme';
 import { DebugLog } from '../utils/debug';
 
@@ -746,7 +746,10 @@ export class AbsoluteSectionManager {
 				if (!data.el.querySelector('.markdown-rendered') && !data.heightTrusted) {
 					const content = this.rawContent.get(path);
 					if (content) {
-						data.height = estimateHeight(content);
+						// Match the real render (frontmatter stripped) so the
+						// re-derived estimate doesn't overshoot and cause a
+						// tall-to-short height correction after a width reset.
+						data.height = estimateHeight(stripYamlFrontmatter(content));
 					}
 					this.heightCache.delete(path);
 					data.heightTrusted = false;

@@ -1,7 +1,7 @@
 import { App, Component, MarkdownRenderer, TFile } from 'obsidian';
 import { ManifestLink } from './ManifestParser';
 import type { FoldMode } from '../utils/fold';
-import { estimateHeight, startsWithHeading, endsWithHeading, guessFirstType, guessLastType } from '../utils/content';
+import { estimateHeight, startsWithHeading, endsWithHeading, guessFirstType, guessLastType, stripYamlFrontmatter } from '../utils/content';
 import { getFirstContentElement, getLastContentElement, getHeaderLevel } from '../utils/dom';
 import { DebugLog } from '../utils/debug';
 
@@ -652,7 +652,11 @@ export class SectionPool {
 
 			const p = this.host.app.vault.cachedRead(file).then((content) => {
 				this.host.rawContent.set(path, content);
-				const est = cached ?? estimateHeight(content);
+				// Height is estimated on the frontmatter-stripped source so the
+				// placeholder estimate matches the actual (stripped) render and
+				// the ResizeObserver has no tall-to-short correction that would
+				// shift offsets mid-scroll (ToC oscillation).
+				const est = cached ?? estimateHeight(stripYamlFrontmatter(content));
 				data.height = est;
 				if (!cached) {
 					this.host.heightCache.set(path, est);
@@ -1000,6 +1004,12 @@ export class SectionPool {
 		data.endsWithHeading = endsWithHeading(content);
 		data.heavy = isHeavyContent(content);
 
+		// YAML frontmatter is book metadata, not readable content — strip it so
+		// a note with frontmatter renders like a plain one (no stray <pre>, no
+		// extra top space). Kept out of rawContent: the raw text stays for the
+		// link/rename logic and is only stripped for the visible render.
+		const renderContent = stripYamlFrontmatter(content);
+
 		// Render into a detached container: partial output is never visible
 		// and unloadSection cannot cache half-rendered DOM mid-flight.
 		const renderContainer = createDiv({
@@ -1019,7 +1029,7 @@ export class SectionPool {
 		const t0 = performance.now();
 		let renderError: unknown = null;
 		try {
-			await MarkdownRenderer.render(this.host.app, content, renderContainer, path, component);
+			await MarkdownRenderer.render(this.host.app, renderContent, renderContainer, path, component);
 		} catch (err) {
 			renderError = err;
 		}
@@ -1164,7 +1174,7 @@ export class SectionPool {
 		const t0 = performance.now();
 		let renderError: unknown = null;
 		try {
-			await MarkdownRenderer.render(this.host.app, buildPlaceholderContent(content), renderContainer, path, component);
+			await MarkdownRenderer.render(this.host.app, buildPlaceholderContent(stripYamlFrontmatter(content)), renderContainer, path, component);
 		} catch (err) {
 			renderError = err;
 		}

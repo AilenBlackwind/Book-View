@@ -22,8 +22,26 @@ export function estimateHeight(text: string): number {
 	const lines = text.split('\n');
 	let inCode = false;
 
-	for (const line of lines) {
-		const trimmed = line.trim();
+	// A box's bottom edge sits at its last line — blank lines after the last
+	// non-empty line render no margin (block bottom margins collapse past the
+	// final line box). When the note ends in a heading those trailing blanks
+	// are pure phantom height, over-inflating tiny sections so a lazy-loaded
+	// measurement shrinks them back later (seen as ToC highlight wobble).
+	// Skip charging them only for heading-ended notes; text/list-ended notes
+	// keep the charge so their (already conservative) body cost isn't cut.
+	let lastNonEmpty = -1;
+	let lastIsHeading = false;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (lines[i] && lines[i]!.trim().length > 0) {
+			lastNonEmpty = i;
+			lastIsHeading = /^#{1,6}\s/.test(lines[i]!.trim());
+			break;
+		}
+	}
+
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i]?.trim() ?? '';
+		if (lastIsHeading && i > lastNonEmpty) continue; // phantom trailing blanks
 		if (/^```/.test(trimmed)) {
 			inCode = !inCode;
 			estimated += 22;
@@ -98,7 +116,7 @@ export function estimateHeight(text: string): number {
 
 /** True when the first non-empty line of the text is a markdown heading. */
 export function startsWithHeading(text: string): boolean {
-	for (const line of text.split('\n')) {
+	for (const line of contentLinesAfterFrontmatter(text)) {
 		const trimmed = line.trim();
 		if (trimmed.length === 0) continue;
 		return /^#{1,6}\s/.test(trimmed);
@@ -117,9 +135,41 @@ export function endsWithHeading(text: string): boolean {
 	return false;
 }
 
+/** Lines of `text` with any leading YAML frontmatter (first `---` fence)
+ *  removed, so content-type guessing ignores metadata properties. */
+function contentLinesAfterFrontmatter(text: string): string[] {
+	const lines = text.split('\n');
+	const first = lines[0]?.trim() ?? '';
+	if (first !== '---' && first !== '...') return lines;
+	for (let i = 1; i < lines.length; i++) {
+		const trimmed = lines[i]?.trim() ?? '';
+		if (trimmed === '---' || trimmed === '...') {
+			return lines.slice(i + 1);
+		}
+	}
+	return lines;
+}
+
+/** `text` without any leading YAML frontmatter block. Returns the text
+ *  unchanged when it does not start with a `---`/`...` fence. Used to keep
+ *  the book's metadata out of the rendered note (it is plugin data, not
+ *  readable content) so a note with frontmatter renders like a plain one. */
+export function stripYamlFrontmatter(text: string): string {
+	const lines = text.split('\n');
+	const first = lines[0]?.trim() ?? '';
+	if (first !== '---' && first !== '...') return text;
+	for (let i = 1; i < lines.length; i++) {
+		const trimmed = lines[i]?.trim() ?? '';
+		if (trimmed === '---' || trimmed === '...') {
+			return lines.slice(i + 1).join('\n');
+		}
+	}
+	return text;
+}
+
 /** First non-empty line's type: 'h1'..'h6' or 'text'. */
 export function guessFirstType(text: string): string {
-	for (const line of text.split('\n')) {
+	for (const line of contentLinesAfterFrontmatter(text)) {
 		const trimmed = line.trim();
 		if (trimmed.length === 0) continue;
 		const match = /^(#{1,6})\s/.exec(trimmed);
