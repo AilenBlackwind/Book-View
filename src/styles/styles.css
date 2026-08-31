@@ -618,6 +618,59 @@
 	font-weight: 600;
 }
 
+/* Body-level stand-in for the native markdown-embed-link control. Fixed to
+   the viewport and positioned from the modal rect, so it cannot move with any
+   editor scroll container. Lives above the modal layer (--layer-modal), or it
+   would render behind the modal overlay. */
+.book-popover-open-tab {
+	position: fixed;
+	left: var(--book-popover-left);
+	top: var(--book-popover-top);
+	z-index: calc(var(--layer-modal) + 1);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	cursor: pointer;
+	color: var(--text-faint);
+	background: transparent;
+	border-radius: var(--radius-s);
+	opacity: 0.8;
+}
+.book-popover-open-tab:hover {
+	color: var(--text-muted);
+	background: var(--background-modifier-hover);
+	opacity: 1;
+}
+.book-popover-open-tab svg {
+	width: 18px;
+	height: 18px;
+}
+/* A definite height is required so the modal-content height:100% chain
+   resolves; otherwise the CodeMirror scroller grows to full content height
+   and the clipped modal cannot scroll at all. */
+.book-edit-modal {
+	height: 80vh;
+	max-height: 80vh;
+}
+/* Only the editor body can scroll; modal ancestors remain a fixed surface. */
+.book-edit-modal,
+.book-edit-modal .modal-content,
+.book-edit-modal .book-native-leaf-editor,
+.book-edit-modal .workspace-leaf,
+.book-edit-modal .workspace-leaf-content,
+.book-edit-modal .view-content,
+.book-edit-modal .markdown-source-view,
+.book-edit-modal .markdown-source-view.mod-cm6 {
+	min-height: 0;
+	overflow: hidden !important;
+}
+.book-edit-modal .markdown-source-view.mod-cm6 .cm-scroller {
+	overflow: auto !important;
+}
+
 .book-edit-modal-editor {
 	flex: 1;
 	border: 1px solid var(--background-modifier-border);
@@ -676,23 +729,17 @@
 	display: none !important;
 }
 
-/* Remove the closing "x" and the "box-in-a-box" frame created by the modal
-   wrapping the embedded detached leaf (both carry their own border/edge). */
+/* Remove Obsidian's standard modal close button. The current Obsidian
+   implementation uses div.modal-header-button. */
+.modal-container:has(.book-edit-modal) .modal-close-button,
+.modal-container:has(.book-edit-modal) .modal-header-button,
+.modal-container:has(.book-edit-modal) .bv-close-hidden,
 .book-edit-modal .modal-close-button,
-.book-edit-modal > .modal-close-button,
+.book-edit-modal .modal-header-button,
 .book-edit-modal .bv-close-hidden {
 	display: none !important;
 }
-.book-edit-modal .workspace-leaf,
-.book-edit-modal .workspace-leaf-content,
-.book-edit-modal .view-content,
-.book-edit-modal .markdown-source-view,
-.book-edit-modal .markdown-source-view.mod-cm6 {
-	border: none !important;
-	outline: none !important;
-	box-shadow: none !important;
-	background: transparent !important;
-}
+
 .book-edit-modal .modal-content {
 	padding: 0 !important;
 	margin: 0 !important;

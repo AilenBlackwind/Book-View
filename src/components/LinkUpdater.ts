@@ -1,4 +1,4 @@
-import { App, TFile } from 'obsidian';
+import { App } from 'obsidian';
 import { isBookManifest } from './ManifestParser';
 
 function normalizeForCompare(path: string): string {
@@ -28,7 +28,7 @@ function relativeFromManifest(target: string, manifestPath: string, toPath: stri
 	let i = 0;
 	while (i < from.length && i < to.length && from[i] === to[i]) i++;
 	const ups = from.length - i;
-	const rel = [...new Array(ups).fill('..'), ...to.slice(i)].join('/');
+	const rel = [...Array.from({ length: ups }, () => '..'), ...to.slice(i)].join('/');
 	const relWasRelative = /^(\.\.?\/)/.test(target);
 	return (relWasRelative ? './' : '') + rel;
 }

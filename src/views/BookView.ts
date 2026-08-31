@@ -364,6 +364,18 @@ export class BookView extends FileView {
 	 *  scrolls to the section's offset, then corrects against the mounted
 	 *  section's real position once its content lands, and flashes the note's
 	 *  first heading. */
+	/** Open a note in Obsidian's native editor in a separate popout window
+	 *  (public API). Used as the 'native' editor mode and as the fallback
+	 *  when the detached-leaf popup fails. */
+	private openNativePopout(targetFile: TFile, targetLine: number): void {
+		const leaf = this.app.workspace.openPopoutLeaf();
+		this.popoutLeaf = leaf;
+		void leaf.openFile(targetFile, {
+			state: { mode: 'source' },
+			eState: { line: targetLine, ch: 0 },
+		});
+	}
+
 	private async jumpToSectionStart(filePath: string): Promise<void> {
 		const manager = this.absoluteManager;
 		const container = this.contentContainer;
@@ -770,22 +782,26 @@ export class BookView extends FileView {
 			// is temporarily disabled in favour of the detached leaf; see the
 			// note at the top of that file to restore it.
 			if (this.plugin?.settings.editorMode === 'popup') {
-				new NativeLeafPopover(
-					this.app,
-					targetFile,
-					targetLine,
-					this.plugin?.settings.popupHideFrontmatter ?? false,
-					() => {
-						this.absoluteManager?.markDirty(targetFile.path);
-					},
-				).open();
+				// The popup relies on a private WorkspaceLeaf constructor; if a
+				// future Obsidian version removes/breaks it, open the native
+				// popout window instead so the click always yields an editor.
+				try {
+					new NativeLeafPopover(
+						this.app,
+						targetFile,
+						targetLine,
+						this.plugin?.settings.popupHideFrontmatter ?? false,
+						() => {
+							this.absoluteManager?.markDirty(targetFile.path);
+						},
+						() => this.openNativePopout(targetFile, targetLine),
+					).open();
+				} catch (err) {
+					DebugLog.log('EDIT', 'popover failed, opening popout window:', String(err instanceof Error ? err.message : err));
+					this.openNativePopout(targetFile, targetLine);
+				}
 			} else {
-				const leaf = this.app.workspace.openPopoutLeaf();
-				this.popoutLeaf = leaf;
-				void leaf.openFile(targetFile, {
-					state: { mode: 'source' },
-					eState: { line: targetLine, ch: 0 },
-				});
+				this.openNativePopout(targetFile, targetLine);
 			}
 		});
 
