@@ -320,6 +320,17 @@ export default class BookViewPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'toggle-editor-mode',
+			name: 'Toggle editor mode (popup / native)',
+			callback: () => {
+				this.settings.editorMode = this.settings.editorMode === 'popup' ? 'native' : 'popup';
+				void this.saveSettings().then(() => {
+					new Notice(`Book View: double-click opens the ${this.settings.editorMode} editor`);
+				});
+			},
+		});
+
+		this.addCommand({
 			id: 'copy-debug-log',
 			name: 'Copy debug log to clipboard',
 			callback: async () => {

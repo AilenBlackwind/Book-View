@@ -19,6 +19,11 @@ export interface MenuProfile {
 	scripts: ScriptEntry[];
 }
 
+/** Which editor double-click opens a note in: the fast in-window popup (own
+ *  CodeMirror, no third-party editor scripts) or the native editor in a
+ *  separate popout window (full Obsidian Editor API, so editor scripts run). */
+export type EditorMode = 'popup' | 'native';
+
 import type { AutoExpandMode } from './toc/types';
 
 export type { AutoExpandMode } from './toc/types';
@@ -40,6 +45,8 @@ export interface BookViewSettings {
 	wheelShieldEnabled: boolean;
 	menuProfiles: MenuProfile[];
 	editorModifiers: ModifierConfig;
+	editorMode: EditorMode;
+	popupHideFrontmatter: boolean;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -61,4 +68,6 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 		{ name: 'Main', modifiers: { alt: false, ctrl: false, shift: false, meta: false }, scripts: [] },
 	],
 	editorModifiers: { alt: false, ctrl: true, shift: false, meta: false },
+	editorMode: 'native',
+	popupHideFrontmatter: false,
 };

@@ -1,6 +1,6 @@
 import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import type BookViewPlugin from '../main';
-import type { ModifierConfig, MenuProfile } from '../settings';
+import type { ModifierConfig, MenuProfile, EditorMode } from '../settings';
 import { CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
 
 type SettingsSection = 'toc' | 'menus' | 'general';
@@ -278,6 +278,32 @@ export class BookViewSettingTab extends PluginSettingTab {
 					.setDynamicTooltip()
 					.onChange(async (value: number) => {
 						this.plugin.settings.wheelFlickFriction = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
+			.setName('Editor used on double-click')
+			.setDesc('Open a section note in the fast in-window popup editor, or in the native editor in a separate popout window. The popup is instant but runs only in its own editor — third-party editor scripts (quick add, custom js) need the native editor.')
+			.addDropdown((dd) =>
+				dd
+					.addOption('native', 'Native editor (popout)')
+					.addOption('popup', 'Popup editor (in-window)')
+					.setValue(this.plugin.settings.editorMode)
+					.onChange(async (value: string) => {
+						this.plugin.settings.editorMode = value as EditorMode;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
+			.setName('Hide frontmatter in popup editor')
+			.setDesc('Hide the YAML frontmatter block while editing in the popup editor, so notes start from the first heading.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.popupHideFrontmatter)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.popupHideFrontmatter = value;
 						await this.plugin.saveSettings();
 					}),
 			);

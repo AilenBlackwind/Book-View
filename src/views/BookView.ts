@@ -5,6 +5,7 @@ import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
 import { HEIGHT_PER_LINE } from '../toc/types';
 import { WheelAccelerator } from '../components/WheelAccelerator';
 import { showScriptMenu } from '../ui/ContextMenu';
+import { NativeLeafPopover } from '../editor/NativeLeafPopover';
 import { DebugLog } from '../utils/debug';
 import { BookSearcher } from '../search/BookSearcher';
 import { FindBar } from '../search/FindBar';
@@ -758,12 +759,34 @@ export class BookView extends FileView {
 				Math.round(ratio * totalLines),
 			);
 
-			const leaf = this.app.workspace.openPopoutLeaf();
-			this.popoutLeaf = leaf;
-			void leaf.openFile(targetFile, {
-				state: { mode: 'source' },
-				eState: { line: targetLine, ch: 0 },
-			});
+			// Two editor modes (toggle via settings/command):
+			//  - 'popup': a Modal embedding a detached native WorkspaceLeaf
+			//    (real Obsidian editor, so Quick Add / custom JS scripts and
+			//    full Live Preview run) directly in the book UI — no separate
+			//    popout window. The book re-renders this section automatically
+			//    via vault.on('modify'); NativeLeafPopover also re-renders on close.
+			//  - 'native': the native editor in a separate popout window.
+			// Note: the hand-rolled CodeMirror popup (src/editor/LiveEditModal.ts)
+			// is temporarily disabled in favour of the detached leaf; see the
+			// note at the top of that file to restore it.
+			if (this.plugin?.settings.editorMode === 'popup') {
+				new NativeLeafPopover(
+					this.app,
+					targetFile,
+					targetLine,
+					this.plugin?.settings.popupHideFrontmatter ?? false,
+					() => {
+						this.absoluteManager?.markDirty(targetFile.path);
+					},
+				).open();
+			} else {
+				const leaf = this.app.workspace.openPopoutLeaf();
+				this.popoutLeaf = leaf;
+				void leaf.openFile(targetFile, {
+					state: { mode: 'source' },
+					eState: { line: targetLine, ch: 0 },
+				});
+			}
 		});
 
 		// Internal links inside the book: links to other book notes jump to the

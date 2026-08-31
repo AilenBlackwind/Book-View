@@ -626,6 +626,108 @@
 	min-height: 0;
 }
 
+/* Detached native leaf editor (NativeLeafPopover) fills the modal body. No
+   border/radius here: the leaf carries its own chrome, and a frame on this
+   container was the extra "box-in-a-box" border around the editor. */
+.book-native-leaf-editor {
+	flex: 1;
+	min-height: 0;
+	overflow: hidden;
+	border: none !important;
+	border-radius: 0 !important;
+	background: transparent !important;
+}
+.book-native-leaf-editor .workspace-leaf-content,
+.book-native-leaf-editor .view-content,
+.book-native-leaf-editor .markdown-source-view {
+	height: 100%;
+}
+
+/* Remove Obsidian's "scroll past end" bottom padding inside the compact
+   popover, so the tiny editor doesn't gain a huge empty tail / scrollbar. */
+.book-native-leaf-editor .cm-content {
+	padding-bottom: 24px !important;
+}
+.book-native-leaf-editor .cm-sizer {
+	min-height: auto;
+	padding-bottom: 0;
+}
+.book-native-leaf-editor .markdown-source-view.mod-cm6 .cm-scroller {
+	padding-bottom: 0;
+}
+
+/* Hide the native YAML frontmatter block (+ its spacer) in the popup editor
+   when "Hide frontmatter in popup editor" is enabled. */
+.book-edit-modal.hide-frontmatter .metadata-container,
+.book-edit-modal.hide-frontmatter .cm-content .metadata-container {
+	display: none !important;
+}
+
+/* Remove duplicate/vestigial chrome inside the embedded native editor:
+   the big grey inline title, the navigation view-header bar, and the modal's
+   own title bar are redundant in a compact popover. */
+.book-edit-modal .inline-title {
+	display: none !important;
+}
+.book-edit-modal .view-header {
+	display: none !important;
+}
+.book-edit-modal .book-edit-modal-header {
+	display: none !important;
+}
+
+/* Remove the closing "x" and the "box-in-a-box" frame created by the modal
+   wrapping the embedded detached leaf (both carry their own border/edge). */
+.book-edit-modal .modal-close-button,
+.book-edit-modal > .modal-close-button,
+.book-edit-modal .bv-close-hidden {
+	display: none !important;
+}
+.book-edit-modal .workspace-leaf,
+.book-edit-modal .workspace-leaf-content,
+.book-edit-modal .view-content,
+.book-edit-modal .markdown-source-view,
+.book-edit-modal .markdown-source-view.mod-cm6 {
+	border: none !important;
+	outline: none !important;
+	box-shadow: none !important;
+	background: transparent !important;
+}
+.book-edit-modal .modal-content {
+	padding: 0 !important;
+	margin: 0 !important;
+	border: none !important;
+}
+
+/* Trim the empty gap left above the first line (remnant of the hidden
+   title bar / view-header). */
+.book-edit-modal .cm-content {
+	padding-top: 0 !important;
+}
+.book-edit-modal .cm-line:first-child {
+	padding-top: 0 !important;
+}
+
+/* CodeMirror must fill its container edge-to-edge inside the modal. */
+.book-edit-modal-editor .cm-editor,
+.book-edit-modal-editor .cm-scroller,
+.book-edit-modal-editor .cm-content {
+	height: 100%;
+}
+.book-edit-modal-editor .cm-editor {
+	font-size: var(--font-ui-small);
+}
+.book-edit-modal-editor .cm-scroller {
+	overflow: auto;
+	font-family: var(--font-monospace);
+}
+.book-edit-modal-editor .cm-content .cm-tag {
+	color: var(--tag-color, var(--text-accent));
+	background-color: var(--tag-background, transparent);
+	border-radius: var(--radius-s, 4px);
+	padding: 0 3px;
+}
+
 /* Script context menu */
 .bv-menu {
 	position: fixed;
@@ -1108,4 +1210,9 @@ mark.book-search-all {
 	font-style: italic;
 }
 
+
+
+.book-edit-modal-editor .cm-content .bv-cm-hidden {
+	display: none;
+}
 
