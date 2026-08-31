@@ -23,7 +23,9 @@ export class TocWindow {
 	 *  window even when the visible [start, end) range did not move. */
 	private renderedItems: VirtualItem[] | null = null;
 	private scrollHandler: (() => void) | null = null;
+	private clickHandler: ((evt: MouseEvent) => void) | null = null;
 	private renderScheduled = false;
+
 	/** Called after a row-window rebuild (used to re-host the highlight pill
 	 *  into the active row, which may have been re-created). */
 	onRowsRendered: (() => void) | null = null;
@@ -109,23 +111,86 @@ export class TocWindow {
 		this.endIndex = end;
 		this.renderedItems = items;
 
-		listEl.empty();
 		listEl.style.top = `${offsets[start] ?? 0}px`;
 		s.rowByEntry.clear();
 		s.rowAnchorByEntry.clear();
+
+		// Recycle page rows: keep and patch existing heading/file rows in place
+		// (matched by data-index) instead of tearing down the whole list, so a
+		// visibility/path change mutates the same DOM nodes. The desired DOM
+		// order is then reconciled with minimal, in-place moves (no re-append
+		// that would scramble an already-correct order).
+		const present = new Set<HTMLElement>(Array.from(listEl.children) as HTMLElement[]);
+		const consumed = new Set<HTMLElement>();
+		const out: HTMLElement[] = [];
 
 		for (let i = start; i < end; i++) {
 			const item = items[i];
 			if (!item) continue;
 			if (item.type === 'file') {
 				const file = s.files[item.index];
-				if (file) this.builder.createFileRow(listEl, file);
+				if (!file) continue;
+				let reused: HTMLElement | null = null;
+				for (const child of present) {
+					if (
+						!consumed.has(child) &&
+						child.classList.contains('book-toc-file') &&
+						child.dataset.index === String(item.index)
+					) {
+						reused = child;
+						break;
+					}
+				}
+				if (reused) {
+					consumed.add(reused);
+					this.builder.updateFileRow(reused, item.index, file);
+					out.push(reused);
+				} else {
+					out.push(this.builder.createFileRow(listEl, item.index, file));
+				}
 			} else {
 				const entry = s.entries[item.index];
 				if (!entry) continue;
-				const row = this.builder.createHeadingRow(listEl, item.index, entry);
-				s.rowByEntry.set(item.index, row.li);
-				s.rowAnchorByEntry.set(item.index, row.a);
+				let reused: HTMLElement | null = null;
+				for (const child of present) {
+					if (
+						!consumed.has(child) &&
+						child.classList.contains('book-toc-heading') &&
+						child.dataset.index === String(item.index)
+					) {
+						reused = child;
+						break;
+					}
+				}
+				if (reused) {
+					consumed.add(reused);
+					const a = this.builder.updateHeadingRow(reused, item.index, entry);
+					s.rowByEntry.set(item.index, reused);
+					s.rowAnchorByEntry.set(item.index, a);
+					out.push(reused);
+				} else {
+					const row = this.builder.createHeadingRow(listEl, item.index, entry);
+					s.rowByEntry.set(item.index, row.li);
+					s.rowAnchorByEntry.set(item.index, row.a);
+					out.push(row.li);
+				}
+			}
+		}
+
+		// Reconcile: place each desired row at its absolute index, moving only
+		// those that are out of place; already-correct rows are untouched.
+		for (let k = 0; k < out.length; k++) {
+			const desired = out[k]!;
+			const current = listEl.children[k];
+			if (current !== desired) {
+				listEl.insertBefore(desired, current ?? null);
+			}
+		}
+
+		// Remove old rows that were not reused.
+		for (const child of present) {
+			if (!consumed.has(child)) {
+				child.remove();
 			}
 		}
 
@@ -145,12 +210,24 @@ export class TocWindow {
 			});
 		};
 		s.containerEl.addEventListener('scroll', this.scrollHandler, { passive: true });
+
+		// Single delegated click handler for all rows (chevron toggle +
+		// heading navigation). Rows carry no per-element listeners, so
+		// re-creating/recycling <li>s never leaks or double-binds handlers.
+		this.clickHandler = (evt: MouseEvent) => {
+			this.builder.handleRowClick(evt);
+		};
+		this.listEl?.addEventListener('click', this.clickHandler, { passive: false });
 	}
 
 	destroy(): void {
 		if (this.scrollHandler) {
 			this.state.containerEl.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;
+		}
+		if (this.clickHandler) {
+			this.listEl?.removeEventListener('click', this.clickHandler);
+			this.clickHandler = null;
 		}
 		this.renderScheduled = false;
 		this.startIndex = 0;
