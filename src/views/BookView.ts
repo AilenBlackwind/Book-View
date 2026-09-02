@@ -27,6 +27,12 @@ export class BookView extends FileView {
 	private contentContainer: HTMLElement | null = null;
 	/** Manifest `cssclasses` currently applied to contentEl (see loadBook). */
 	private bookCssClasses: string[] = [];
+
+	/** Book scope classes for sibling views (the ToC panel) that render
+	 *  outside this view but should still resolve book-scoped CSS variables. */
+	getScopeClasses(): string[] {
+		return this.bookCssClasses;
+	}
 	/** Owns the book container's scroll accessors: foreign scrollTop/scrollTo
 	 *  writes (third-party smooth-scroll plugins) are dropped, internal ones
 	 *  go through guardedScrollWrite. */

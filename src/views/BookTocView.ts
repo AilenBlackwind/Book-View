@@ -14,6 +14,8 @@ export const VIEW_TYPE_BOOK_TOC = 'book-toc-view';
 export class BookTocView extends ItemView {
 	private tocController: TocController | null = null;
 	private boundBook: BookView | null = null;
+	/** Book scope classes currently applied to contentEl (see bind). */
+	private scopeClasses: string[] = [];
 	// Debug: cumulative bind counter.
 	private dbgBinds = 0;
 
@@ -80,6 +82,13 @@ export class BookTocView extends ItemView {
 		this.contentEl.addClass('book-toc-view-root');
 		this.contentEl.addClass('book-toc-relative');
 
+		// Mirror the book's manifest `cssclasses` onto the panel root so
+		// book-scoped CSS variables (e.g. heading colors from a snippet) also
+		// resolve inside the ToC. Rebinds drop the previous book's classes.
+		for (const cls of this.scopeClasses) this.contentEl.removeClass(cls);
+		this.scopeClasses = book.getScopeClasses();
+		for (const cls of this.scopeClasses) this.contentEl.addClass(cls);
+
 		this.tocController = new TocController(
 			this.contentEl,
 			files,
@@ -113,5 +122,7 @@ export class BookTocView extends ItemView {
 		this.boundBook = null;
 		this.contentEl.empty();
 		this.contentEl.addClass('book-toc-view-root');
+		for (const cls of this.scopeClasses) this.contentEl.removeClass(cls);
+		this.scopeClasses = [];
 	}
 }

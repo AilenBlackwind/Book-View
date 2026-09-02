@@ -75,7 +75,7 @@ cssclasses: my-book
 
 3. Enable the snippet and (re)open the Book.
 
-All classes from the manifest's `cssclasses` are applied to the book's root element, so every note in the book is styled, while notes outside the book are unaffected. The same classes are also applied to the popover editor (**Ctrl/Cmd + Double-click**), so scoped rules that match its DOM apply there too.
+All classes from the manifest's `cssclasses` are applied to the book's root element, so every note in the book is styled, while notes outside the book are unaffected. The same classes are also applied to the popover editor (**Ctrl/Cmd + Double-click**), so scoped rules that match its DOM apply there too. Any class names work — `my-book` in the examples is just an example.
 
 > [!note] Scoping
 > CSS snippets are loaded globally by Obsidian — only the selector keeps them book-local. Make sure every rule in a book-styling snippet starts with your scope class (e.g. `.my-book ...`); any rule without it will apply to the entire vault.
