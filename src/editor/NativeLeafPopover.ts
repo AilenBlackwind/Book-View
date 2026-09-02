@@ -117,6 +117,9 @@ export class NativeLeafPopover extends Modal {
 	private file: TFile;
 	private line: number;
 	private hideFrontmatter: boolean;
+	/** Book scope classes (manifest `cssclasses`) mirrored onto the modal so
+	 *  book-scoped CSS snippets can also reach the popup editor. */
+	private cssClasses: string[];
 	private onSaveCallback: () => void;
 	/** Called instead of silently closing when the detached-leaf hack fails
 	 *  (private constructor gone, view not mounting). The caller opens the
@@ -134,11 +137,20 @@ export class NativeLeafPopover extends Modal {
 		this.updateEditorScrollMode();
 	};
 
-	constructor(app: App, file: TFile, line: number, hideFrontmatter: boolean, onSaveCallback: () => void, onFallback?: () => void) {
+	constructor(
+		app: App,
+		file: TFile,
+		line: number,
+		hideFrontmatter: boolean,
+		cssClasses: string[],
+		onSaveCallback: () => void,
+		onFallback?: () => void,
+	) {
 		super(app);
 		this.file = file;
 		this.line = line;
 		this.hideFrontmatter = hideFrontmatter;
+		this.cssClasses = cssClasses;
 		this.onSaveCallback = onSaveCallback;
 		this.onFallback = onFallback ?? null;
 	}
@@ -413,6 +425,7 @@ export class NativeLeafPopover extends Modal {
 		if (this.hideFrontmatter) {
 			modalEl.addClass('hide-frontmatter');
 		}
+		for (const cls of this.cssClasses) modalEl.addClass(cls);
 
 		// The close action is part of the modal header. Remove only the known
 		// native controls from this modal; never touch sibling modal instances.

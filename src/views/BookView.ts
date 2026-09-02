@@ -1,5 +1,5 @@
 import { Component, FileView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
-import { getManifestLinks } from '../components/ManifestParser';
+import { cssClassesFromFrontmatter, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
 import { HEIGHT_PER_LINE } from '../toc/types';
@@ -25,6 +25,8 @@ export class BookView extends FileView {
 	readonly instanceId = ++BookView.nextInstanceId;
 	absoluteManager: AbsoluteSectionManager | null = null;
 	private contentContainer: HTMLElement | null = null;
+	/** Manifest `cssclasses` currently applied to contentEl (see loadBook). */
+	private bookCssClasses: string[] = [];
 	/** Owns the book container's scroll accessors: foreign scrollTop/scrollTo
 	 *  writes (third-party smooth-scroll plugins) are dropped, internal ones
 	 *  go through guardedScrollWrite. */
@@ -656,6 +658,17 @@ export class BookView extends FileView {
 
 		this.contentEl.empty();
 		this.contentEl.addClass('book-view-root');
+		// Scope the manifest's own CSS snippet classes onto the book root so
+		// user snippets like `.my-book .markdown-rendered ...` apply inside
+		// this book render only. Re-read after the cold-start cache wait —
+		// `manifestCache` above may still have been null at that point.
+		// Classes from a previous render are dropped first: empty() clears
+		// children, not the root's own class list.
+		for (const cls of this.bookCssClasses) this.contentEl.removeClass(cls);
+		this.bookCssClasses = cssClassesFromFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+		for (const cls of this.bookCssClasses) {
+			this.contentEl.addClass(cls);
+		}
 
 		this.findBar?.destroy();
 		this.findBar = null;
@@ -791,6 +804,7 @@ export class BookView extends FileView {
 						targetFile,
 						targetLine,
 						this.plugin?.settings.popupHideFrontmatter ?? false,
+						this.bookCssClasses,
 						() => {
 							this.absoluteManager?.markDirty(targetFile.path);
 						},

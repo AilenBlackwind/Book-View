@@ -16,6 +16,26 @@ export function isBookManifest(app: App, file: TFile): boolean {
 	return value === true || value === 'true';
 }
 
+/** CSS classes declared on a note's frontmatter via `cssclasses` (or the
+ *  legacy `cssclass` key). Obsidian accepts a YAML list or a comma-separated
+ *  string; both are normalized into a clean, deduplicated array. Used to
+ *  scope book-specific CSS snippets to a single book render. */
+export function cssClassesFromFrontmatter(
+	fm: Record<string, unknown> | null | undefined,
+): string[] {
+	if (!fm) return [];
+	const read = (key: string): string[] => {
+		const value = fm[key];
+		if (typeof value === 'string') return value.split(',').map((s) => s.trim());
+		if (Array.isArray(value)) {
+			return value.map((s) => (typeof s === 'string' ? s.trim() : String(s ?? '').trim()));
+		}
+		return [];
+	};
+	const out = [...read('cssclasses'), ...read('cssclass')];
+	return [...new Set(out.filter((s) => s.length > 0))];
+}
+
 /**
  * The character offset where a note's YAML frontmatter block ends (i.e. where
  * the body begins), or 0 when the note has no frontmatter.  Used to exclude
