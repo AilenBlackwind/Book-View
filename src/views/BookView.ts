@@ -1,4 +1,4 @@
-import { Component, FileView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
+import { Component, FileView, HoverPopover, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { cssClassesFromFrontmatter, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
@@ -27,6 +27,11 @@ export class BookView extends FileView {
 	private contentContainer: HTMLElement | null = null;
 	/** Manifest `cssclasses` currently applied to contentEl (see loadBook). */
 	private bookCssClasses: string[] = [];
+
+	/** Current native hover popover anchored to this view. Page Preview reads
+	 *  and writes this slot via the HoverParent contract (hover-link's
+	 *  `parent` field); without it the core plugin crashes and shows nothing. */
+	hoverPopover: HoverPopover | null = null;
 
 	/** Book scope classes for sibling views (the ToC panel) that render
 	 *  outside this view but should still resolve book-scoped CSS variables. */
@@ -855,6 +860,72 @@ export class BookView extends FileView {
 				} else {
 					void this.app.workspace.openLinkText(href, sourcePath, 'tab');
 				}
+			},
+			{ capture: true },
+		);
+
+		// Native Page Preview (Ctrl/Cmd + hover) for internal links. The core
+		// plugin only renders note content when the 'hover-link' context
+		// carries the section note's path and a valid hoverParent; without it
+		// only the path tooltip appears. A mouseover handler resolves the
+		// link against the section note, and a keydown handler covers the
+		// "hover first, press the modifier later" case, where no new
+		// mouseover event fires. The source is registered in main.ts.
+		let hoveredLink: { href: string; sourcePath: string; el: HTMLElement } | null = null;
+		const triggerHover = (evt: MouseEvent | KeyboardEvent): void => {
+			if (!hoveredLink) return;
+			this.app.workspace.trigger('hover-link', {
+				event: evt,
+				source: 'book-view',
+				sourcePath: hoveredLink.sourcePath,
+				linktext: hoveredLink.href,
+				targetEl: hoveredLink.el,
+				hoverParent: this,
+			});
+		};
+		comp.registerDomEvent(
+			window,
+			'keydown',
+			(evt: KeyboardEvent) => {
+				if (!evt.ctrlKey && !evt.metaKey) return;
+				if (hoveredLink && !hoveredLink.el.isConnected) {
+					hoveredLink = null;
+					return;
+				}
+				if (hoveredLink) triggerHover(evt);
+			},
+			{ capture: true },
+		);
+		comp.registerDomEvent(
+			window,
+			'mouseover',
+			(evt: MouseEvent) => {
+				const target = evt.target as HTMLElement;
+				const container = this.contentContainer;
+				if (!container || !container.contains(target)) {
+					hoveredLink = null;
+					return;
+				}
+				const link = target.closest<HTMLElement>('a.internal-link');
+				if (!link || !container.contains(link)) {
+					hoveredLink = null;
+					return;
+				}
+				const href = link.getAttribute('data-href') ?? link.getAttribute('href');
+				if (!href) {
+					hoveredLink = null;
+					return;
+				}
+				const placeholder = target.closest<HTMLElement>('.book-section-placeholder');
+				const sourcePath = placeholder?.dataset.path ?? this.filePath;
+				if (!this.app.metadataCache.getFirstLinkpathDest(href, sourcePath)) {
+					hoveredLink = null;
+					return;
+				}
+				hoveredLink = { href, sourcePath, el: link };
+				if (!evt.ctrlKey && !evt.metaKey) return;
+				evt.stopPropagation();
+				triggerHover(evt);
 			},
 			{ capture: true },
 		);

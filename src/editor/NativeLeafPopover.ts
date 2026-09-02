@@ -217,6 +217,28 @@ export class NativeLeafPopover extends Modal {
 	 *  by forwardHotkeyCommand. Empty until onOpen's async build completes. */
 	private commandHotkeys: HotkeyCommand[] = [];
 
+	/** Watches for hover popovers appearing while this modal is open (see
+	 *  installPopoverLayerFix). Null when the fix is not installed. */
+	private popoverLayerObserver: MutationObserver | null = null;
+
+	/** Native hover popovers (.popover: page preview, hover editors) live on
+	 *  a layer below modals, so opening one from a link inside this popover
+	 *  renders it underneath. While this popover is open, raise every newly
+	 *  appearing popover above the modal layer; observers detach on close so
+	 *  vault-wide stacking is untouched. */
+	private installPopoverLayerFix(): void {
+		if (this.popoverLayerObserver) return;
+		const raise = (node: Node): void => {
+			if (node.instanceOf(HTMLElement) && node.classList.contains('popover')) {
+				node.addClass('bv-popover-above-modal');
+			}
+		};
+		this.popoverLayerObserver = new MutationObserver((mutations) => {
+			for (const m of mutations) m.addedNodes.forEach(raise);
+		});
+		this.popoverLayerObserver.observe(document.body, { childList: true });
+	}
+
 	/** Capture-phase palette-hotkey interception on the modal (see onOpen).
 	 *  Non-palette keys fall through to forwardHotkeyCommand. */
 	private onModalKeydown = (evt: KeyboardEvent): void => {
@@ -460,6 +482,7 @@ export class NativeLeafPopover extends Modal {
 			this.paletteHotkeys = hks;
 		});
 		void this.refreshCommandHotkeys();
+		this.installPopoverLayerFix();
 		modalEl.addEventListener('keydown', this.onModalKeydown, { capture: true });
 
 		const editorContainer = contentEl.createDiv({ cls: 'book-native-leaf-editor' });
@@ -537,6 +560,8 @@ export class NativeLeafPopover extends Modal {
 		this.modalEl.removeEventListener('keydown', this.onModalKeydown, { capture: true });
 		window.removeEventListener('resize', this.onWindowResize);
 		this.openTabPositionObserver?.disconnect();
+		this.popoverLayerObserver?.disconnect();
+		this.popoverLayerObserver = null;
 		this.openTabPositionObserver = null;
 		this.openTabButton?.remove();
 		this.openTabButton = null;

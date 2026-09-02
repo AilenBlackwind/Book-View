@@ -684,6 +684,15 @@
 	min-height: 0;
 }
 
+/* Hover popovers (page preview, hover editors) opened while a Book View
+   popover editor is on screen: the stock .popover layer sits below the modal
+   layer, so such a popover would render underneath the editor. The class is
+   added by NativeLeafPopover while its modal is open; higher specificity
+   beats the stock .popover z-index without !important. */
+.popover.bv-popover-above-modal {
+	z-index: calc(var(--layer-modal) + 1);
+}
+
 /* Detached native leaf editor (NativeLeafPopover) fills the modal body. No
    border/radius here: the leaf carries its own chrome, and a frame on this
    container was the extra "box-in-a-box" border around the editor. */
