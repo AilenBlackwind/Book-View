@@ -1,4 +1,6 @@
 import { App, Hotkey, MarkdownView, Modal, Platform, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
+import { EditorView } from '@codemirror/view';
+import { EditorState, StateEffect } from '@codemirror/state';
 import { CommandSuggestModal } from '../ui/CommandSuggestModal';
 import { DebugLog } from '../utils/debug';
 
@@ -32,6 +34,46 @@ interface CommandLike {
 	editorCallback?: unknown;
 	editorCheckCallback?: unknown;
 }
+
+/**
+ * Cursor-centering extensions for the popover editor. `cursorCenterer` is
+ * appended to the native editor's CM6 config at open time. The extender adds
+ * an explicit "center" scroll effect to selection-only transactions (arrows,
+ * Home/End, PageUp/Down, click); the update listener then acts as the
+ * authoritative corrector — Obsidian applies its own post-transaction
+ * scrollIntoView() (which pins the cursor to the top edge), so we re-center
+ * after it on the following frames. Typing keeps CM's native minimal scroll.
+ */
+function centerCursorNow(view: EditorView): void {
+	const scroller = view.scrollDOM;
+	if (scroller.clientHeight <= 0) return;
+	const coords = view.coordsAtPos(view.state.selection.main.head);
+	if (!coords) return;
+	const rect = scroller.getBoundingClientRect();
+	const cursorMid = coords.top - rect.top + (coords.bottom - coords.top) / 2;
+	const offset = cursorMid - scroller.clientHeight / 2;
+	if (Math.abs(offset) < 1) return;
+	const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+	scroller.scrollTop = Math.max(0, Math.min(scroller.scrollTop + offset, maxScrollTop));
+}
+
+const cursorCenterer = [
+	EditorState.transactionExtender.of((tr) => {
+		if (!tr.selection || tr.docChanged) return null;
+		return { effects: EditorView.scrollIntoView(tr.selection.main, { y: 'center' }) };
+	}),
+	// Authoritative correction: Obsidian applies its own post-transaction
+	// scrollIntoView() after CM's update pass (this is what pins the cursor
+	// to the top edge). A double-rAF runs after all of those writers, then
+	// re-centers — the last write wins, and it is ours.
+	EditorView.updateListener.of((u) => {
+		if (!u.selectionSet || u.docChanged) return;
+		const view = u.view;
+		window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+			if (view.dom.isConnected) centerCursorNow(view);
+		}));
+	}),
+];
 
 /**
  * Popover editor that reuses Obsidian's real editor by embedding a fully
@@ -74,7 +116,10 @@ export class NativeLeafPopover extends Modal {
 	private prevActiveEditor: unknown = null;
 	private openTabButton: HTMLElement | null = null;
 	private openTabPositionObserver: ResizeObserver | null = null;
-	private onWindowResize = (): void => this.positionOpenTabButton();
+	private onWindowResize = (): void => {
+		this.positionOpenTabButton();
+		this.updateEditorScrollMode();
+	};
 
 	constructor(app: App, file: TFile, line: number, hideFrontmatter: boolean, onSaveCallback: () => void, onFallback?: () => void) {
 		super(app);
@@ -220,6 +265,40 @@ export class NativeLeafPopover extends Modal {
 		this.openTabButton.style.setProperty('--book-popover-top', `${Math.round(rect.top + 6)}px`);
 	}
 
+	/** A content-sized modal has no definite editor height until its content
+	 * exceeds the viewport cap. Once capped, hand the fixed height to the
+	 * native editor so CodeMirror can provide wheel scrolling and a scrollbar. */
+	private updateEditorScrollMode(): void {
+		const modalRect = this.modalEl.getBoundingClientRect();
+		const editor = this.modalEl.querySelector('.book-native-leaf-editor');
+		if (!editor) return;
+		const isCapped = modalRect.height >= Math.round(window.innerHeight * 0.8) - 2;
+		this.modalEl.toggleClass('book-edit-modal-scrolling', isCapped);
+	}
+
+	/** One-time DOM correction after the first layout frame: the CM6
+	 * "center" effect dispatched at open time can run before the detached
+	 * leaf has its final viewport size, so refine the scroll position once
+	 * the real geometry is known. Later scrolling is handled entirely by the
+	 * `cursorCenterer` CM6 extension, so this never competes with CM. */
+	private centerInitialCursor(viewEl: HTMLElement): void {
+		const scroller = viewEl.querySelector<HTMLElement>('.cm-scroller');
+		const cursor = scroller?.querySelector<HTMLElement>('.cm-cursor');
+		if (!scroller || !cursor || scroller.clientHeight <= 0) return;
+		const scrollerRect = scroller.getBoundingClientRect();
+		const cursorRect = cursor.getBoundingClientRect();
+		const cursorOffset = cursorRect.top - scrollerRect.top + scroller.scrollTop;
+		const targetTop = cursorOffset - (scroller.clientHeight - cursorRect.height) / 2;
+		const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+		scroller.scrollTop = Math.max(0, Math.min(targetTop, maxScrollTop));
+	}
+
+	/** Access the underlying CodeMirror view of the native markdown editor. */
+	private get cmView(): EditorView | null {
+		const view = this.leaf?.view instanceof MarkdownView ? this.leaf.view : null;
+		return (view?.editor as unknown as { cm?: EditorView } | undefined)?.cm ?? null;
+	}
+
 	private createOpenTabButton(): void {
 		// Own class only: Obsidian's stock `.markdown-embed-link { display: none }`
 		// (show-on-embed-hover) would hide a body-level element carrying it.
@@ -235,6 +314,12 @@ export class NativeLeafPopover extends Modal {
 			void leaf.openFile(this.file, { eState: { line: Math.max(0, this.line), ch: 0 } });
 		});
 		this.positionOpenTabButton();
+		this.openTabPositionObserver = new ResizeObserver(() => {
+			this.positionOpenTabButton();
+			this.updateEditorScrollMode();
+		});
+		this.openTabPositionObserver.observe(this.modalEl);
+		this.updateEditorScrollMode();
 		window.addEventListener('resize', this.onWindowResize);
 	}
 
@@ -332,14 +417,26 @@ export class NativeLeafPopover extends Modal {
 		// and plugins resolve it (see claimWorkspaceActive).
 		this.claimWorkspaceActive();
 
-		// Focus the native editor once laid out, and scroll to the line.
+		// Focus the native editor once laid out, install the cursor-centering
+		// extension, and scroll the target line into the middle of the popup.
 		window.requestAnimationFrame(() => {
 			const view = leaf.view instanceof MarkdownView ? leaf.view : (leaf.view as MarkdownView | undefined);
 			const editor = view?.editor;
 			if (editor) {
 				editor.setCursor({ line: Math.max(0, this.line), ch: 0 });
-				editor.scrollIntoView({ from: editor.getCursor(), to: editor.getCursor() }, true);
 				editor.focus();
+				const cmView = this.cmView;
+				if (cmView) {
+					cmView.dispatch({ effects: StateEffect.appendConfig.of(cursorCenterer) });
+					cmView.dispatch({ effects: EditorView.scrollIntoView(cmView.state.selection.main, { y: 'center' }) });
+				} else {
+					// CM internals unavailable — fall back to the public API.
+					editor.scrollIntoView({ from: editor.getCursor(), to: editor.getCursor() }, true);
+				}
+				window.requestAnimationFrame(() => {
+					this.updateEditorScrollMode();
+					window.requestAnimationFrame(() => this.centerInitialCursor(viewEl));
+				});
 			}
 		});
 	}
