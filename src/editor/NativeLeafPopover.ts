@@ -1,39 +1,9 @@
-import { App, Hotkey, MarkdownView, Modal, Platform, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
+import { App, Editor, Hotkey, MarkdownView, Modal, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import { EditorState, StateEffect } from '@codemirror/state';
 import { CommandSuggestModal } from '../ui/CommandSuggestModal';
 import { DebugLog } from '../utils/debug';
-
-/** Match a KeyboardEvent against an Obsidian hotkey ({modifiers, key}).
- *  Modifier semantics follow Obsidian: 'Mod' is Cmd on macOS, Ctrl elsewhere.
- *  Key matching tries `event.key` first (digits, symbols, arrows, F-keys),
- *  then falls back to `event.code` for letter keys, which stays correct on
- *  non-Latin layouts where `event.key` is localized. */
-function matchesHotkey(evt: KeyboardEvent, hk: Hotkey): boolean {
-	const want = hk.modifiers ?? [];
-	const wantMod = want.includes('Mod');
-	const wantCtrl = want.includes('Ctrl');
-	const wantMeta = want.includes('Meta');
-	if (evt.shiftKey !== want.includes('Shift')) return false;
-	if (evt.altKey !== want.includes('Alt')) return false;
-	const isMac = Platform.isMacOS;
-	if (wantMod ? (isMac ? !evt.metaKey : !evt.ctrlKey) : ((evt.ctrlKey && !wantCtrl) || (evt.metaKey && !wantMeta))) return false;
-	if (wantCtrl && !evt.ctrlKey) return false;
-	if (wantMeta && !evt.metaKey) return false;
-	const key = hk.key.toLowerCase();
-	if (evt.key.toLowerCase() === key) return true;
-	return evt.code === 'Key' + key.toUpperCase();
-}
-
-/** Shape of a command entry used by resolvePaletteHotkeys; the `commands`
- *  registry is omitted from the `App` typings. */
-interface CommandLike {
-	hotkeys?: Hotkey[];
-	callback?: unknown;
-	checkCallback?: unknown;
-	editorCallback?: unknown;
-	editorCheckCallback?: unknown;
-}
+import { collectCommandHotkeys, matchesHotkey, type CommandLike, type HotkeyCommand } from '../utils/hotkeys';
 
 /**
  * Cursor-centering extensions for the popover editor. `cursorCenterer` is
@@ -188,7 +158,12 @@ export class NativeLeafPopover extends Modal {
 	 *  asynchronously in onOpen; starts as the stock Mod+P binding. */
 	private paletteHotkeys: Hotkey[] = NativeLeafPopover.FALLBACK_HOTKEYS;
 
-	/** Capture-phase palette-hotkey interception on the modal (see onOpen). */
+	/** Hotkey → command bindings built by refreshCommandHotkeys and consumed
+	 *  by forwardHotkeyCommand. Empty until onOpen's async build completes. */
+	private commandHotkeys: HotkeyCommand[] = [];
+
+	/** Capture-phase palette-hotkey interception on the modal (see onOpen).
+	 *  Non-palette keys fall through to forwardHotkeyCommand. */
 	private onModalKeydown = (evt: KeyboardEvent): void => {
 		for (const hk of this.paletteHotkeys) {
 			if (!matchesHotkey(evt, hk)) continue;
@@ -197,6 +172,7 @@ export class NativeLeafPopover extends Modal {
 			this.openCommandPicker();
 			return;
 		}
+		this.forwardHotkeyCommand(evt);
 	};
 
 	/** Resolve the user's actual command-palette hotkeys. Obsidian exposes no
@@ -254,10 +230,63 @@ export class NativeLeafPopover extends Modal {
 		return NativeLeafPopover.FALLBACK_HOTKEYS;
 	}
 
-	/** Command picker that works while this modal is open: Obsidian's own
-	 *  command palette never opens on top of a modal, but a stacked
-	 *  FuzzySuggestModal does. Executed commands resolve their editor through
-	 *  the claimed active-leaf pointers, so editor commands hit this note. */
+	/** Build the hotkey → command map used by forwardHotkeyCommand. Reads
+	 *  user overrides from `<configDir>/hotkeys.json` (same source as
+	 *  resolvePaletteHotkeys); when the file is absent, the commands'
+	 *  declared default hotkeys are used as-is. Runs async in onOpen —
+	 *  until it completes the map is simply empty and every key flows to
+	 *  the editor unchanged. */
+	private async refreshCommandHotkeys(): Promise<void> {
+		let overrides: Record<string, Hotkey[]> | null = null;
+		try {
+			const raw = await this.app.vault.adapter.read(`${this.app.vault.configDir}/hotkeys.json`);
+			const map = JSON.parse(raw) as Record<string, Hotkey[]>;
+			if (map && typeof map === 'object') overrides = map;
+		} catch {
+			// No overrides file (or unreadable) — declared defaults only.
+		}
+		try {
+			const commands = (this.app as unknown as { commands?: { commands?: Record<string, CommandLike> } }).commands?.commands;
+			if (commands) this.commandHotkeys = collectCommandHotkeys(commands, overrides);
+		} catch (err) {
+			DebugLog.log('POPOVER', 'hotkey map build failed:', String(err instanceof Error ? err.message : err));
+		}
+	}
+
+	/** Modal scopes swallow every unregistered hotkey, so commands bound to
+	 *  e.g. Mod+B never fire while the popover is open — this is the same
+	 *  gap that forced the bespoke palette interception above. This handler
+	 *  re-implements the missing dispatch: match the event against the map
+	 *  from refreshCommandHotkeys, pre-check the command exactly like
+	 *  Obsidian's keymap would (a failing check must not eat the key), then
+	 *  execute it against the claimed active editor. */
+	private forwardHotkeyCommand(evt: KeyboardEvent): boolean {
+		if (evt.defaultPrevented || !this.commandHotkeys.length) return false;
+		const registry = (this.app as unknown as { commands?: { commands?: Record<string, CommandLike> } }).commands?.commands;
+		for (const entry of this.commandHotkeys) {
+			if (!matchesHotkey(evt, entry.hotkey)) continue;
+			const cmd = registry?.[entry.commandId];
+			if (!cmd) return false;
+			const view = this.leaf?.view instanceof MarkdownView ? this.leaf.view : null;
+			const editor = view?.editor ?? null;
+			try {
+				const check = cmd.checkCallback as ((checking: boolean) => boolean) | undefined;
+				if (check && !check(true)) return false;
+				const editorCheck = cmd.editorCheckCallback as
+					| ((checking: boolean, editor: Editor, view: MarkdownView) => boolean)
+					| undefined;
+				if (editorCheck && (!editor || !view || !editorCheck(true, editor, view))) return false;
+			} catch {
+				return false;
+			}
+			evt.preventDefault();
+			evt.stopImmediatePropagation();
+			(this.app as unknown as { commands: { executeCommandById: (id: string) => void } }).commands.executeCommandById(entry.commandId);
+			return true;
+		}
+		return false;
+	}
+
 	private positionOpenTabButton(): void {
 		if (!this.openTabButton) return;
 		const rect = this.modalEl.getBoundingClientRect();
@@ -323,6 +352,10 @@ export class NativeLeafPopover extends Modal {
 		window.addEventListener('resize', this.onWindowResize);
 	}
 
+	/** Command picker that works while this modal is open: Obsidian's own
+	 *  command palette never opens on top of a modal, but a stacked
+	 *  FuzzySuggestModal does. Executed commands resolve their editor through
+	 *  the claimed active-leaf pointers, so editor commands hit this note. */
 	private openCommandPicker(): void {
 		new CommandSuggestModal(this.app, (command) => {
 			// `App` typings omit `commands`; same cast as CommandSuggestModal.
@@ -370,6 +403,7 @@ export class NativeLeafPopover extends Modal {
 		void this.resolvePaletteHotkeys().then((hks) => {
 			this.paletteHotkeys = hks;
 		});
+		void this.refreshCommandHotkeys();
 		modalEl.addEventListener('keydown', this.onModalKeydown, { capture: true });
 
 		const editorContainer = contentEl.createDiv({ cls: 'book-native-leaf-editor' });

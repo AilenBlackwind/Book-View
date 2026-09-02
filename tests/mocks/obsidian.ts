@@ -5,3 +5,5 @@ export class App {}
 export class Component {}
 export class MarkdownRenderer {}
 export class TFile {}
+
+export const Platform = { isMacOS: false };
