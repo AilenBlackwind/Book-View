@@ -8,11 +8,13 @@ import { collectCommandHotkeys, matchesHotkey, type CommandLike, type HotkeyComm
 /**
  * Cursor-centering extensions for the popover editor. `cursorCenterer` is
  * appended to the native editor's CM6 config at open time. The extender adds
- * an explicit "center" scroll effect to selection-only transactions (arrows,
- * Home/End, PageUp/Down, click); the update listener then acts as the
- * authoritative corrector — Obsidian applies its own post-transaction
+ * an explicit "center" scroll effect to keyboard-driven selection-only
+ * transactions (arrows, Home/End, PageUp/Down); the update listener then acts
+ * as the authoritative corrector — Obsidian applies its own post-transaction
  * scrollIntoView() (which pins the cursor to the top edge), so we re-center
- * after it on the following frames. Typing keeps CM's native minimal scroll.
+ * after it on the following frames. Pointer selections (click, drag) are
+ * exempt — the viewport must not jump when the user just points somewhere.
+ * Typing keeps CM's native minimal scroll.
  */
 function centerCursorNow(view: EditorView): void {
 	const scroller = view.scrollDOM;
@@ -27,21 +29,62 @@ function centerCursorNow(view: EditorView): void {
 	scroller.scrollTop = Math.max(0, Math.min(scroller.scrollTop + offset, maxScrollTop));
 }
 
+// Timestamp until which pointer-driven selection updates are exempt from
+// centering. The exemption is keyed to actual pointer activity
+// (mousedown/mouseup), not to CM userEvent annotations, which Obsidian's
+// dispatch paths do not preserve reliably.
+let pointerSelectionGuardUntil = 0;
+
+function suppressCursorCentering(ms: number): void {
+	pointerSelectionGuardUntil = Math.max(pointerSelectionGuardUntil, Date.now() + ms);
+}
+
+function cursorCenteringSuppressed(): boolean {
+	return Date.now() < pointerSelectionGuardUntil;
+}
+
+/** Keep re-centering for a few frames. A single post-update correction can
+ *  be overwritten by Obsidian's own (sometimes deferred) scroll writes after
+ *  programmatic edits; correcting on successive frames makes our write the
+ *  last one. centerCursorNow only writes when the cursor actually deviates,
+ *  so an already-centered view costs nothing. */
+function startCursorCenterLoop(view: EditorView, frames = 10): void {
+	let done = 0;
+	const step = (): void => {
+		if (!view.dom.isConnected || cursorCenteringSuppressed()) return;
+		centerCursorNow(view);
+		if (++done < frames) window.requestAnimationFrame(step);
+	};
+	window.requestAnimationFrame(step);
+}
+
 const cursorCenterer = [
+	// Pointer guard: any mousedown/mouseup on the editor opens a short
+	// exemption window so a plain click or drag never yanks the viewport.
+	EditorView.domEventHandlers({
+		mousedown: () => {
+			suppressCursorCentering(600);
+			return false;
+		},
+		mouseup: () => {
+			suppressCursorCentering(300);
+			return false;
+		},
+	}),
 	EditorState.transactionExtender.of((tr) => {
-		if (!tr.selection || tr.docChanged) return null;
+		if (!tr.selection) return null;
+		if (tr.isUserEvent('select.pointer') || cursorCenteringSuppressed()) return null;
 		return { effects: EditorView.scrollIntoView(tr.selection.main, { y: 'center' }) };
 	}),
 	// Authoritative correction: Obsidian applies its own post-transaction
 	// scrollIntoView() after CM's update pass (this is what pins the cursor
-	// to the top edge). A double-rAF runs after all of those writers, then
-	// re-centers — the last write wins, and it is ours.
+	// to the top edge). The correction loop runs after those writers and
+	// keeps re-applying the center position. Pointer selections are exempt
+	// via the suppression window above.
 	EditorView.updateListener.of((u) => {
-		if (!u.selectionSet || u.docChanged) return;
-		const view = u.view;
-		window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-			if (view.dom.isConnected) centerCursorNow(view);
-		}));
+		if (!u.selectionSet && !u.docChanged) return;
+		if (u.transactions.some((tr) => tr.isUserEvent('select.pointer')) || cursorCenteringSuppressed()) return;
+		startCursorCenterLoop(u.view);
 	}),
 ];
 
