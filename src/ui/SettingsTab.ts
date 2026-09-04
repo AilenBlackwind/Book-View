@@ -25,7 +25,7 @@ function getDefaultColor(): string {
 
 export class BookViewSettingTab extends PluginSettingTab {
 	plugin: BookViewPlugin;
-	private activeSection: SettingsSection = 'toc';
+	private activeSection: SettingsSection = 'general';
 
 	constructor(app: App, plugin: BookViewPlugin) {
 		super(app, plugin);
@@ -281,12 +281,16 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(el)
+			.setName('Editor')
+			.setHeading();
+
+		new Setting(el)
 			.setName('Editor used on double-click')
-			.setDesc('Open a section note in the fast in-window popup editor, or in the native editor in a separate popout window. The popup is instant but runs only in its own editor — third-party editor scripts (quick add, custom js) need the native editor.')
+			.setDesc('Open a section note in the in-window popup editor, or in the native editor in a separate popout window. The native editor in a popout window is available in case of unexpected issues.')
 			.addDropdown((dd) =>
 				dd
-					.addOption('native', 'Native editor (popout)')
 					.addOption('popup', 'Popup editor (in-window)')
+					.addOption('native', 'Native editor (popout)')
 					.setValue(this.plugin.settings.editorMode)
 					.onChange(async (value: string) => {
 						this.plugin.settings.editorMode = value as EditorMode;
@@ -306,7 +310,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		this.renderSingleModifier(el, 'Popout editor shortcut', 'Modifier keys required to open the native editor in a popout window on double-click.', 'editorModifiers');
+		this.renderSingleModifier(el, 'Popout editor shortcut', 'Modifier keys required to open the editor on double-click.', 'editorModifiers');
 	}
 
 	private renderMenuSettings(el: HTMLElement): void {

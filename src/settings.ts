@@ -68,6 +68,6 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 		{ name: 'Main', modifiers: { alt: false, ctrl: false, shift: false, meta: false }, scripts: [] },
 	],
 	editorModifiers: { alt: false, ctrl: true, shift: false, meta: false },
-	editorMode: 'native',
+	editorMode: 'popup',
 	popupHideFrontmatter: false,
 };
