@@ -18,6 +18,7 @@ export interface TocSettings {
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
 	tocCollapsedLevel: number;
+	tocCollapseRestLevel: number;
 	autoExpandMode: AutoExpandMode;
 }
 

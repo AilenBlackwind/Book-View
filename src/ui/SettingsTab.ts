@@ -158,6 +158,25 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(el)
+			.setName('Collapse rest to level')
+			.setDesc('The level the rest of the ToC collapses to while reading, when using "Expand and collapse rest to setting level". Headings at this level and deeper are collapsed.')
+			.addDropdown((dd) =>
+				dd
+					.addOption('0', 'Off')
+					.addOption('1', 'H1')
+					.addOption('2', 'H2')
+					.addOption('3', 'H3')
+					.addOption('4', 'H4')
+					.addOption('5', 'H5')
+					.addOption('6', 'H6')
+					.setValue(String(this.plugin.settings.tocCollapseRestLevel))
+					.onChange(async (value: string) => {
+						this.plugin.settings.tocCollapseRestLevel = parseInt(value, 10);
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
 			.setName('Auto expand')
 			.setDesc('Auto expand and collapse headings when scrolling and cursor position change.')
 			.addDropdown((dropdown) =>

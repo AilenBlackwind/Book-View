@@ -208,9 +208,18 @@ export class TocSpy {
 		// shifts by one frame to avoid compounding with markdown renders.
 		if (bestIndex !== s.pendingPathIndex) {
 			s.pendingPathIndex = bestIndex;
-			const newPath = mode !== 'disabled'
-				? s.computeActivePath(s.activeEntryIndex)
-				: new Set<number>();
+			let newPath: Set<number>;
+			if (mode !== 'disabled') {
+				newPath = s.computeActivePath(s.activeEntryIndex);
+				if (mode === 'only-expand' || mode === 'expand-collapse-level') {
+					// Remember every section ever on the active path: 'only-
+					// expand' keeps them expanded, 'expand-collapse-level'
+					// collapses them to the rest level once left.
+					for (const idx of newPath) s.visitedSet.add(idx);
+				}
+			} else {
+				newPath = new Set<number>();
+			}
 
 			if (!s.setsEqual(s.activePathSet, newPath)) {
 				s.activePathSet = newPath;

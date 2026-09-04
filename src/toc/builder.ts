@@ -34,6 +34,8 @@ export class TocBuilder {
 		s.entries = buildTocEntries(s.app, s.files);
 		s.entryByPathLine = buildEntryByPathLine(s.entries);
 		s.defaultLevel = s.settings?.tocCollapsedLevel ?? 0;
+		s.autoCollapseRestLevel = s.settings?.tocCollapseRestLevel ?? 0;
+		s.visitedSet.clear();
 
 		s.containerEl.addClass('book-toc-relative');
 		s.tocPaddingTop = parseFloat(getComputedStyle(s.containerEl).paddingTop) || 0;

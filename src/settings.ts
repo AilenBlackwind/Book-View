@@ -34,6 +34,7 @@ export interface BookViewSettings {
 	tocRenderMarkdown: boolean;
 	tocCollapsedLevel: number;
 	autoExpandMode: AutoExpandMode;
+	tocCollapseRestLevel: number;
 	tocAutoOpen: boolean;
 	tocFocusOnBook: boolean;
 	loadMargin: number;
@@ -54,6 +55,7 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	tocRenderMarkdown: true,
 	tocCollapsedLevel: 0,
 	autoExpandMode: 'disabled',
+	tocCollapseRestLevel: 0,
 	tocAutoOpen: true,
 	tocFocusOnBook: true,
 	loadMargin: 800,
