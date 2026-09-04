@@ -1,5 +1,6 @@
-import { App, MarkdownPostProcessorContext, MarkdownView } from 'obsidian';
+import { App, Editor, MarkdownPostProcessorContext, MarkdownView } from 'obsidian';
 import { parseCodeBlockLinks } from './CodeBlockParser';
+import { CodeBlockLinkSuggest } from './CodeBlockLinkSuggest';
 
 /**
  * Register a ```book-view code block processor that replaces the raw fenced
@@ -14,8 +15,94 @@ import { parseCodeBlockLinks } from './CodeBlockParser';
  * In Live Preview the block is not directly editable (the processor owns the
  * rendered DOM, so Obsidian can't route a click to the underlying source
  * line).  To keep it editable we intercept plain clicks on a rendered row and
- * place the editor cursor on the matching source line.
+ * open a small inline editor for that row's source line.  The whole block is
+ * never opened, avoiding Obsidian's behavior of swapping the rendered list
+ * back to the raw fenced block and parking the scroller at its bottom.  In
+ * source/raw mode the processor does not run, so the block renders as an
+ * ordinary code block and behaves as usual.
  */
+
+/** The single active inline row-editor, if any. Only one row of any rendered
+ *  block is edited at a time; opening another closes the previous one. */
+let activeInlineEditor: {
+	item: HTMLElement;
+	input: HTMLInputElement;
+	editor: Editor;
+	line: number;
+	original: string;
+	suggest: CodeBlockLinkSuggest;
+} | null = null;
+
+/** Remove the inline editor from its row, restoring the original rendered
+ *  content (the hidden link element). If `save` is set, write the input's
+ *  text back to the source line being edited via `editor.replaceRange`, so
+ *  Live Preview re-renders the block in place — the cursor never enters the
+ *  block, so Obsidian's "swap to the whole code block for editing + scroll
+ *  to its bottom" never triggers. */
+function closeInlineEditor(save: boolean): void {
+	const active = activeInlineEditor;
+	if (!active) return;
+	activeInlineEditor = null;
+	const value = active.input.value;
+	active.input.remove();
+	active.suggest.close();
+	active.item.removeClass('book-view-codeblock-editing');
+	if (save && value !== active.original) {
+		active.editor.replaceRange(
+			value,
+			{ line: active.line, ch: 0 },
+			{ line: active.line, ch: active.original.length },
+		);
+	}
+}
+
+/** Open an inline editor for the source line behind `item`: hide the rendered
+ *  link, show a note-picker input pre-filled with the raw source line, and
+ *  connect Enter (save) / Esc (cancel) / blur (cancel). While the user types,
+ *  an `AbstractInputSuggest` popover lists vault notes ranked by the same
+ *  fuzzy search as the native `[[` autocomplete; picking one rewrites the
+ *  link and closes the editor, so no link has to be typed by hand. */
+function openInlineEditor(app: App, item: HTMLElement, editor: Editor, line: number): void {
+	closeInlineEditor(false);
+	const original = editor.getLine(line);
+	const input = item.createEl('input', {
+		cls: 'book-view-codeblock-edit',
+		type: 'text',
+		value: original,
+	});
+	input.spellcheck = false;
+	item.addClass('book-view-codeblock-editing');
+	const suggest = new CodeBlockLinkSuggest(app, input, () => closeInlineEditor(true));
+	activeInlineEditor = { item, input, editor, line, original, suggest };
+	input.addEventListener('click', (evt) => evt.stopPropagation());
+	input.addEventListener('keydown', (evt: KeyboardEvent) => {
+		if (evt.key === 'Enter') {
+			evt.preventDefault();
+			evt.stopPropagation();
+			// The suggest popover handles Enter itself to pick a suggestion;
+			// only commit when no suggestion is shown.
+			if (!suggest.isOpen()) closeInlineEditor(true);
+		} else if (evt.key === 'Escape') {
+			evt.preventDefault();
+			evt.stopPropagation();
+			if (suggest.isOpen()) {
+				suggest.close();
+			} else {
+				closeInlineEditor(false);
+			}
+		}
+	});
+	// Blur fires when the user picks a suggestion from the popover as well as
+	// when they click away; defer so the suggest's selectSuggestion (which
+	// commits) wins over the cancel-on-blur path.
+	input.addEventListener('blur', () => {
+		window.setTimeout(() => {
+			if (activeInlineEditor?.input === input) closeInlineEditor(false);
+		}, 0);
+	});
+	input.focus();
+	input.select();
+}
 export function registerBookViewCodeBlock(
 	app: App,
 	register: (
@@ -64,7 +151,7 @@ export function registerBookViewCodeBlock(
 }
 
 /**
- * Place the editor cursor on the source line behind a clicked rendered row.
+ * Open the inline editor for the source line behind a clicked rendered row.
  *
  * Only a plain left-click lands (a modifier click or a click in Reading view
  * — where no editor is available — falls through to Obsidian's default
@@ -88,7 +175,7 @@ function handleCodeBlockClick(
 	if (!Number.isFinite(offset)) return;
 
 	// The whole row is the edit affordance; only intercept where there is an
-	// editor to move (Live Preview). Reading view has none → fall through.
+	// editor to write to (Live Preview). Reading view has none → fall through.
 	const editor = findEditorFor(app, item);
 	if (!editor) return;
 
@@ -103,21 +190,14 @@ function handleCodeBlockClick(
 	// line of the offset within the block content.
 	const blockLine = source.slice(0, offset).split('\n').length - 1;
 	const line = info.lineStart + 1 + blockLine;
-	// Place the cursor at the end of the source line (natural spot for
-	// editing the entry). Note: landing the cursor inside a fenced block makes
-	// Obsidian swap the rendered list back to the editable text block; the
-	// scroller may park at the block's bottom, in which case a manual arrow
-	// key pulls the view back — Obsidian's own scroll-to-cursor then applies.
-	const endPos = editor.offsetToPos(
-		editor.posToOffset({ line, ch: 0 }) + editor.getLine(line).length,
-	);
-	editor.setCursor(endPos);
-	editor.focus();
+	if (line < 0 || line >= editor.lineCount()) return;
+
+	openInlineEditor(app, item, editor, line);
 }
 
 /** The MarkdownView editor owning `item` (its leaf's container contains it),
  *  or null when none (reading view, no editable container). */
-function findEditorFor(app: App, item: HTMLElement): (typeof MarkdownView.prototype.editor) | null {
+function findEditorFor(app: App, item: HTMLElement): Editor | null {
 	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
 		const view = leaf.view;
 		if (!(view instanceof MarkdownView)) continue;

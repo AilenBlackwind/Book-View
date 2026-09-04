@@ -1335,7 +1335,7 @@ mark.book-search-all {
 	align-items: center;
 	padding: 2px 0;
 	/* The row is a click-to-edit affordance in Live Preview: clicking it
-	   moves the editor cursor to the matching source line. */
+	   opens an inline editor for that row's source line. */
 	cursor: pointer;
 }
 
@@ -1360,6 +1360,37 @@ mark.book-search-all {
 .book-view-codeblock-broken {
 	color: var(--text-error);
 	font-style: italic;
+}
+
+/* Inline editor shown in place of a row's link when editing it in Live
+   Preview. Replaces the rendered link text with a raw source-line input;
+   Enter commits (rewrites just that source line), Esc cancels. */
+.book-view-codeblock-item.book-view-codeblock-editing > :not(.book-view-codeblock-edit) {
+	display: none;
+}
+
+.book-view-codeblock-edit {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	padding: 1px 4px;
+	font-family: var(--font-monospace);
+	font-size: 0.95em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+}
+.book-view-codeblock-edit:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+/* Folder path shown next to the note title inside the link-picker popover. */
+.book-view-codeblock-suggest-path {
+	margin-left: 8px;
+	font-size: 0.85em;
+	color: var(--text-muted);
 }
 
 
