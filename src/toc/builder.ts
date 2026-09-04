@@ -36,9 +36,6 @@ export class TocBuilder {
 		s.defaultLevel = s.settings?.tocCollapsedLevel ?? 0;
 
 		s.containerEl.addClass('book-toc-relative');
-		if (s.settings?.tocActiveColor) {
-			s.containerEl.style.setProperty('--bv-toc-active-color', s.settings.tocActiveColor);
-		}
 		s.tocPaddingTop = parseFloat(getComputedStyle(s.containerEl).paddingTop) || 0;
 
 		this.measureRowHeights();

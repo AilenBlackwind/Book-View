@@ -80,5 +80,37 @@ All classes from the manifest's `cssclasses` are applied to the book's root elem
 > [!note] Scoping
 > CSS snippets are loaded globally by Obsidian — only the selector keeps them book-local. Make sure every rule in a book-styling snippet starts with your scope class (e.g. `.my-book ...`); any rule without it will apply to the entire vault.
 
+### Customizing the ToC Highlight Colors
+
+The table of contents marks the active heading with a colored pill (background highlight) and accent-colored text. By default these follow Obsidian's accent color and switch automatically between dark and light themes. You can override them with a CSS snippet:
+
+| Selector | What it controls |
+|---|---|
+| `.book-toc-highlight` | The pill (background rectangle behind the active heading) |
+| `.book-toc-item.is-active` | The active heading's text color |
+| `--bv-toc-highlight-color` | Custom property on `.book-toc-highlight` to override the pill color (falls back to `--interactive-accent`) |
+
+Example — blue pill in light theme, purple in dark:
+
+```css
+body.theme-light .book-toc-highlight {
+	--bv-toc-highlight-color: #3b82f6;
+}
+
+body.theme-light .book-toc-item.is-active {
+	color: #2563eb;
+}
+
+body.theme-dark .book-toc-highlight {
+	--bv-toc-highlight-color: #a78bfa;
+}
+
+body.theme-dark .book-toc-item.is-active {
+	color: #c4b5fd;
+}
+```
+
+Enable the snippet in **Settings → Appearance → CSS snippets**. To style only a specific book, scope the selectors under its `cssclasses` wrapper (see [Book-Specific CSS Snippets](#book-specific-css-snippets) above).
+
 ## Script API
 [Script API](SCRIPT_API.md)

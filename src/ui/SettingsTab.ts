@@ -139,27 +139,6 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(el)
-			.setName('Active heading color')
-			.setDesc('Color of the highlight behind the active heading. Leave empty for the default accent color.')
-			.addColorPicker((picker) =>
-				picker
-					.setValue(this.plugin.settings.tocActiveColor || '#000000')
-					.onChange(async (value: string) => {
-						this.plugin.settings.tocActiveColor = value;
-						await this.plugin.saveSettings();
-						this.applyTocActiveColor(value);
-					}),
-			)
-			.addButton((btn) => {
-				btn.setIcon('x').setTooltip('Reset to default').onClick(async () => {
-					this.plugin.settings.tocActiveColor = '';
-					await this.plugin.saveSettings();
-					this.applyTocActiveColor('');
-					this.display();
-				});
-			});
-
-		new Setting(el)
 			.setName('Default collapsed level')
 			.setDesc('Headings at this level and deeper are collapsed when opening a book. Set to off to disable.')
 			.addDropdown((dd) =>
@@ -313,19 +292,6 @@ export class BookViewSettingTab extends PluginSettingTab {
 
 	private renderMenuSettings(el: HTMLElement): void {
 		this.renderMenuProfiles(el);
-	}
-
-	private applyTocActiveColor(color: string): void {
-		const els = document.querySelectorAll('.book-view-container');
-		els.forEach((el) => {
-			if (el instanceof HTMLElement) {
-				if (color) {
-					el.style.setProperty('--bv-toc-active-color', color);
-				} else {
-					el.style.removeProperty('--bv-toc-active-color');
-				}
-			}
-		});
 	}
 
 	private renderSingleModifier(containerEl: HTMLElement, heading: string, description: string, key: 'editorModifiers'): void {

@@ -32,7 +32,6 @@ export interface BookViewSettings {
 	tocShowFileNames: boolean;
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
-	tocActiveColor: string;
 	tocCollapsedLevel: number;
 	autoExpandMode: AutoExpandMode;
 	tocAutoOpen: boolean;
@@ -53,7 +52,6 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	tocShowFileNames: true,
 	tocGuides: true,
 	tocRenderMarkdown: true,
-	tocActiveColor: '',
 	tocCollapsedLevel: 0,
 	autoExpandMode: 'disabled',
 	tocAutoOpen: true,
