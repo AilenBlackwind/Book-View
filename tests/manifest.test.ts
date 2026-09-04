@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { frontmatterEndOffset } from '../src/components/ManifestParser';
+import { cssClassesFromFrontmatter, frontmatterEndOffset } from '../src/components/ManifestParser';
 import { updateLinksInContent } from '../src/components/LinkUpdater';
 import { parseCodeBlockLinks } from '../src/components/CodeBlockParser';
 
@@ -107,5 +107,31 @@ describe('updateLinksInContent', () => {
 		const content = '```book-view\n[[A/Note]]\n[[A/Note|X]]\n[A/Note](/A/Note.md)\n```\n';
 		const updated = updateLinksInContent(content, 'A/Note', 'A/Renamed', manifest);
 		expect(updated).toBe('```book-view\n[[A/Renamed]]\n[[A/Renamed|X]]\n[A/Note](/A/Renamed.md)\n```\n');
+	});
+});
+
+describe('cssClassesFromFrontmatter', () => {
+	it('returns [] for missing or empty frontmatter', () => {
+		expect(cssClassesFromFrontmatter(null)).toEqual([]);
+		expect(cssClassesFromFrontmatter(undefined)).toEqual([]);
+		expect(cssClassesFromFrontmatter({})).toEqual([]);
+	});
+
+	it('reads a YAML list from `cssclasses`', () => {
+		expect(cssClassesFromFrontmatter({ cssclasses: ['my-book', 'dark-book'] })).toEqual(['my-book', 'dark-book']);
+	});
+
+	it('splits a comma-separated string value', () => {
+		expect(cssClassesFromFrontmatter({ cssclasses: 'my-book, dark-book' })).toEqual(['my-book', 'dark-book']);
+	});
+
+	it('reads the legacy `cssclass` key and merges it with the modern one', () => {
+		const fm = { cssclasses: 'a', cssclass: ['b', 'c'] };
+		expect(cssClassesFromFrontmatter(fm)).toEqual(['a', 'b', 'c']);
+	});
+
+	it('trims entries, drops empties and deduplicates', () => {
+		const fm = { cssclasses: '  a ,  , b', cssclass: ['a', 'b '] };
+		expect(cssClassesFromFrontmatter(fm)).toEqual(['a', 'b']);
 	});
 });

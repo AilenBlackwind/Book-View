@@ -91,10 +91,14 @@ export class TocNavigator {
 			s.activeEntryIndex = entryIndex;
 			this.spy.updateHighlight(entryIndex);
 
-			// Apply auto-expand for the clicked heading
+			// Apply auto-expand for the clicked heading (a ToC click counts as
+			// visiting that section).
 			const mode = s.settings?.autoExpandMode ?? 'disabled';
 			if (mode !== 'disabled') {
 				s.activePathSet = s.computeActivePath(entryIndex);
+				if (mode === 'only-expand' || mode === 'expand-collapse-level') {
+					for (const idx of s.activePathSet) s.visitedSet.add(idx);
+				}
 				s.applyVisibility();
 			}
 		} finally {

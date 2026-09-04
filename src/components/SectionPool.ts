@@ -1,4 +1,4 @@
-import { App, Component, MarkdownRenderer, TFile } from 'obsidian';
+import { App, Component, MarkdownRenderer, setIcon, TFile } from 'obsidian';
 import { ManifestLink } from './ManifestParser';
 import type { FoldMode } from '../utils/fold';
 import { estimateHeight, startsWithHeading, endsWithHeading, guessFirstType, guessLastType, stripYamlFrontmatter } from '../utils/content';
@@ -86,6 +86,28 @@ function formatRenderError(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	if (typeof err === 'string') return err;
 	return JSON.stringify(err);
+}
+
+/** Native callout icons: Obsidian's callout post-processor resolves the icon
+ *  name from the computed `--callout-icon` CSS variable, which does not
+ *  resolve on the detached container we render into — native callouts end up
+ *  with an empty icon svg (colors still work because they are consumed by CSS
+ *  at paint time, after the section is attached). Once the section is in the
+ *  document, re-run the same injection the core does: skip icons that already
+ *  have content (custom-snippet callouts and patched callouts), otherwise
+ *  resolve the name via the core's order (data-callout-icon attr, then the
+ *  computed variable) and inject it with setIcon. */
+function patchCalloutIcons(root: HTMLElement): void {
+	for (const callout of Array.from(root.querySelectorAll<HTMLElement>('.callout'))) {
+		const iconEl = callout.querySelector<HTMLElement>('.callout-icon');
+		if (!iconEl) continue;
+		const svg = iconEl.querySelector('svg');
+		if (svg && svg.childElementCount > 0) continue;
+		let name = callout.getAttribute('data-callout-icon');
+		if (!name) name = getComputedStyle(callout).getPropertyValue('--callout-icon').trim();
+		if (!name) continue;
+		setIcon(iconEl, name);
+	}
 }
 
 // Cold starts produce floods of drop-stale-render lines: while heights are
@@ -954,6 +976,24 @@ export class SectionPool {
 		}
 	}
 
+	/** Run patchCalloutIcons once the container is actually in the document —
+	 *  computed CSS variables only resolve for attached elements. Sections can
+	 *  mount a beat after the render finishes (virtualized list), so retry for
+	 *  a bounded number of frames until the attach happens. */
+	private patchIconsWhenAttached(container: HTMLElement): void {
+		let frames = 0;
+		const tick = (): void => {
+			if (this.host.isDestroyed() || frames >= 120) return;
+			frames++;
+			if (!container.isConnected) {
+				window.requestAnimationFrame(tick);
+				return;
+			}
+			patchCalloutIcons(container);
+		};
+		window.requestAnimationFrame(tick);
+	}
+
 	private async loadSection(path: string): Promise<void> {
 		this.dbgLoads++;
 		const data = this.host.sections.get(path);
@@ -1071,6 +1111,7 @@ export class SectionPool {
 
 		data.el.empty();
 		data.el.appendChild(renderContainer);
+		this.patchIconsWhenAttached(renderContainer);
 		this.applyTransform(path);
 		this.host.foldTagSection(path, data.el);
 		const firstType = this.getFirstType(data.el);
@@ -1228,6 +1269,7 @@ export class SectionPool {
 			data.el.empty();
 			data.el.appendChild(renderContainer);
 		}
+		this.patchIconsWhenAttached(renderContainer);
 		this.applyTransform(path);
 		this.host.foldTagSection(path, data.el);
 		// No onSectionRendered (ToC tagging) and no fold-stub measurement here:

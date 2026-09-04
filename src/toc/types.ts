@@ -17,8 +17,8 @@ export interface TocSettings {
 	tocShowFileNames: boolean;
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
-	tocActiveColor: string;
 	tocCollapsedLevel: number;
+	tocCollapseRestLevel: number;
 	autoExpandMode: AutoExpandMode;
 }
 

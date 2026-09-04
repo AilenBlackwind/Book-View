@@ -494,7 +494,7 @@
 
 .book-toc-item.is-active {
 	font-weight: 600;
-	color: var(--bv-toc-active-color, var(--text-accent));
+	color: var(--text-accent);
 }
 
 .book-toc-highlight {
@@ -507,7 +507,7 @@
 	bottom: 2px;
 	left: 4px;
 	right: 4px;
-	background: var(--bv-toc-active-color, var(--interactive-accent));
+	background: var(--bv-toc-highlight-color, var(--interactive-accent));
 	opacity: 0.15;
 	border-radius: 4px;
 	pointer-events: none;
@@ -610,12 +610,70 @@
 .book-edit-modal .modal-content {
 	display: flex;
 	flex-direction: column;
-	height: 100%;
+	flex: 0 1 auto;
+	min-height: 0;
+	max-height: 80vh;
+	overflow: hidden;
 }
 
 .book-edit-modal-header {
 	margin: 0 0 12px 0;
 	font-weight: 600;
+}
+
+/* Body-level stand-in for the native markdown-embed-link control. Fixed to
+   the viewport and positioned from the modal rect, so it cannot move with any
+   editor scroll container. Lives above the modal layer (--layer-modal), or it
+   would render behind the modal overlay. */
+.book-popover-open-tab {
+	position: fixed;
+	left: var(--book-popover-left);
+	top: var(--book-popover-top);
+	z-index: calc(var(--layer-modal) + 1);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	cursor: pointer;
+	color: var(--text-faint);
+	background: transparent;
+	border-radius: var(--radius-s);
+	opacity: 0.8;
+}
+.book-popover-open-tab:hover {
+	color: var(--text-muted);
+	background: var(--background-modifier-hover);
+	opacity: 1;
+}
+.book-popover-open-tab svg {
+	width: 18px;
+	height: 18px;
+}
+/* Fit the modal to the note: content-sized when the note is small (editor
+   sits visually near the screen centre), capped at 80vh when it is large.
+   Flex — not a height:100% chain — keeps the heights resolvable in the capped
+   case, so the CodeMirror scroller stays the scroll container. */
+.book-edit-modal {
+	display: flex;
+	flex-direction: column;
+	max-height: 80vh;
+}
+/* Only the editor body can scroll; modal ancestors remain a fixed surface. */
+.book-edit-modal,
+.book-edit-modal .modal-content,
+.book-edit-modal .book-native-leaf-editor,
+.book-edit-modal .workspace-leaf,
+.book-edit-modal .workspace-leaf-content,
+.book-edit-modal .view-content,
+.book-edit-modal .markdown-source-view,
+.book-edit-modal .markdown-source-view.mod-cm6 {
+	min-height: 0;
+	overflow: hidden !important;
+}
+.book-edit-modal .markdown-source-view.mod-cm6 .cm-scroller {
+	overflow: auto !important;
 }
 
 .book-edit-modal-editor {
@@ -624,6 +682,202 @@
 	border-radius: var(--radius-m);
 	overflow: hidden;
 	min-height: 0;
+}
+
+/* Hover popovers (page preview, hover editors) opened while a Book View
+   popover editor is on screen: the stock .popover layer sits below the modal
+   layer, so such a popover would render underneath the editor. The class is
+   added by NativeLeafPopover while its modal is open; higher specificity
+   beats the stock .popover z-index without !important. */
+.popover.bv-popover-above-modal {
+	z-index: calc(var(--layer-modal) + 1);
+}
+
+/* Detached native leaf editor (NativeLeafPopover) fills the modal body. No
+   border/radius here: the leaf carries its own chrome, and a frame on this
+   container was the extra "box-in-a-box" border around the editor. */
+.book-native-leaf-editor {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	height: 100%;
+	overflow: hidden;
+	border: none !important;
+	border-radius: 0 !important;
+	background: transparent !important;
+}
+.book-native-leaf-editor > .workspace-leaf,
+.book-native-leaf-editor > .workspace-leaf-content {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	height: 100%;
+	overflow: hidden;
+}
+.book-native-leaf-editor .view-content,
+.book-native-leaf-editor .markdown-source-view,
+.book-native-leaf-editor .cm-editor {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	height: 100%;
+}
+.book-native-leaf-editor .view-content,
+.book-native-leaf-editor .markdown-source-view {
+	overflow: hidden;
+}
+.book-native-leaf-editor .cm-editor {
+	overflow: hidden;
+}
+.book-native-leaf-editor .markdown-source-view.mod-cm6 .cm-scroller {
+	flex: 1 1 0;
+	min-height: 0;
+	min-width: 0;
+	height: 100%;
+	max-height: 100%;
+	overflow-x: auto !important;
+	overflow-y: auto !important;
+}
+
+/* Remove Obsidian's "scroll past end" bottom padding inside the compact
+   popover, so the tiny editor doesn't gain a huge empty tail / scrollbar. */
+.book-native-leaf-editor .cm-content {
+	padding-bottom: 24px !important;
+}
+.book-native-leaf-editor .cm-sizer {
+	min-height: auto;
+	padding-bottom: 0;
+}
+.book-native-leaf-editor .markdown-source-view.mod-cm6 .cm-scroller {
+	flex: 1 1 auto;
+	min-height: 0;
+	max-height: 100%;
+	overflow: auto !important;
+	padding-bottom: 0;
+}
+
+/* Hide the native YAML frontmatter block (+ its spacer) in the popup editor
+   when "Hide frontmatter in popup editor" is enabled. */
+.book-edit-modal.hide-frontmatter .metadata-container,
+.book-edit-modal.hide-frontmatter .cm-content .metadata-container {
+	display: none !important;
+}
+
+/* Remove duplicate/vestigial chrome inside the embedded native editor:
+   the big grey inline title, the navigation view-header bar, and the modal's
+   own title bar are redundant in a compact popover. */
+.book-edit-modal .inline-title {
+	display: none !important;
+}
+.book-native-leaf-editor .view-header,
+.book-native-leaf-editor .view-header-title-container,
+.book-native-leaf-editor .view-actions {
+	display: none !important;
+}
+.book-edit-modal .book-edit-modal-header {
+	display: none !important;
+}
+
+/* Remove Obsidian's standard modal close button. The current Obsidian
+   implementation uses div.modal-header-button. */
+.modal-container:has(.book-edit-modal) .modal-close-button,
+.modal-container:has(.book-edit-modal) .modal-header-button,
+.modal-container:has(.book-edit-modal) .bv-close-hidden,
+.book-edit-modal .modal-close-button,
+.book-edit-modal .modal-header-button,
+.book-edit-modal .bv-close-hidden {
+	display: none !important;
+}
+
+.book-edit-modal .modal-content {
+	padding: 0 !important;
+	margin: 0 !important;
+	border: none !important;
+}
+
+/* Trim the empty gap left above the first line (remnant of the hidden
+   title bar / view-header). */
+.book-edit-modal .cm-content {
+	padding-top: 0 !important;
+}
+.book-edit-modal .cm-line:first-child {
+	padding-top: 0 !important;
+}
+
+/* Once the modal reaches its viewport cap, restore a definite height through
+   the native leaf chain so its CM6 scroller owns wheel input and scrollbar. */
+.book-edit-modal-scrolling {
+	height: 80vh !important;
+	max-height: 80vh !important;
+}
+.book-edit-modal-scrolling .modal-content,
+.book-edit-modal-scrolling .book-native-leaf-editor,
+.book-edit-modal-scrolling .workspace-leaf,
+.book-edit-modal-scrolling .workspace-leaf-content,
+.book-edit-modal-scrolling .view-content,
+.book-edit-modal-scrolling .markdown-source-view,
+.book-edit-modal-scrolling .markdown-source-view.mod-cm6,
+.book-edit-modal-scrolling .cm-editor {
+	display: flex;
+	flex: 1 1 0 !important;
+	flex-direction: column;
+	height: 100% !important;
+	min-height: 0 !important;
+	max-height: 100% !important;
+	overflow: hidden !important;
+}
+.book-edit-modal-scrolling .markdown-source-view.mod-cm6 .cm-scroller {
+	flex: 1 1 0 !important;
+	height: 100% !important;
+	min-height: 0 !important;
+	max-height: 100% !important;
+	overflow-x: auto !important;
+	overflow-y: scroll !important;
+}
+
+/* Content-sized popup scrolling. These rules intentionally come after the
+   native-leaf sizing rules above: the detached leaf has no workspace host with
+   a definite height, so clipping it prevents both wheel scrolling and a
+   scrollbar. The modal content is the scroll owner for long notes. */
+.book-edit-modal .modal-content {
+	display: block !important;
+	flex: none !important;
+	height: auto !important;
+	max-height: 80vh !important;
+	min-height: 0 !important;
+	overflow-x: hidden !important;
+	overflow-y: auto !important;
+}
+.book-edit-modal .book-native-leaf-editor,
+.book-edit-modal .book-native-leaf-editor > .workspace-leaf,
+.book-edit-modal .book-native-leaf-editor > .workspace-leaf-content,
+.book-edit-modal .book-native-leaf-editor .workspace-leaf-content,
+.book-edit-modal .book-native-leaf-editor .view-content,
+.book-edit-modal .book-native-leaf-editor .markdown-source-view,
+.book-edit-modal .book-native-leaf-editor .cm-editor {
+	flex: none !important;
+	height: auto !important;
+	max-height: none !important;
+	min-height: 0 !important;
+	overflow: visible !important;
+}
+.book-edit-modal .book-native-leaf-editor .cm-scroller {
+	flex: none !important;
+	height: auto !important;
+	max-height: none !important;
+	overflow: visible !important;
+}
+.book-edit-modal-editor .cm-content .cm-tag {
+	color: var(--tag-color, var(--text-accent));
+	background-color: var(--tag-background, transparent);
+	border-radius: var(--radius-s, 4px);
+	padding: 0 3px;
 }
 
 /* Script context menu */
@@ -1108,4 +1362,45 @@ mark.book-search-all {
 	font-style: italic;
 }
 
+
+
+.book-edit-modal-editor .cm-content .bv-cm-hidden {
+	display: none;
+}
+
+/* Final overrides for a capped native popup. Keep these after all generic
+   editor rules: the large-note mode needs a definite flex height, otherwise
+   the detached editor collapses to its intrinsic content height. */
+.book-edit-modal-scrolling {
+	height: 80vh !important;
+	max-height: 80vh !important;
+}
+.book-edit-modal-scrolling .modal-content,
+.book-edit-modal-scrolling .book-native-leaf-editor,
+.book-edit-modal-scrolling .book-native-leaf-editor > .workspace-leaf,
+.book-edit-modal-scrolling .book-native-leaf-editor > .workspace-leaf-content,
+.book-edit-modal-scrolling .book-native-leaf-editor .workspace-leaf-content,
+.book-edit-modal-scrolling .book-native-leaf-editor .view-content,
+.book-edit-modal-scrolling .book-native-leaf-editor .markdown-source-view,
+.book-edit-modal-scrolling .book-native-leaf-editor .cm-editor {
+	display: flex !important;
+	flex: 1 1 0 !important;
+	flex-direction: column !important;
+	height: 100% !important;
+	min-height: 0 !important;
+	max-height: 100% !important;
+	overflow: hidden !important;
+}
+.book-edit-modal-scrolling .modal-content {
+	min-width: 0 !important;
+}
+.book-edit-modal-scrolling .book-native-leaf-editor .cm-scroller {
+	flex: 1 1 0 !important;
+	height: auto !important;
+	min-height: 0 !important;
+	max-height: none !important;
+	overflow-x: auto !important;
+	overflow-y: auto !important;
+	scroll-padding-block: 35% !important;
+}
 

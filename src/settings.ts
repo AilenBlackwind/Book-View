@@ -19,6 +19,11 @@ export interface MenuProfile {
 	scripts: ScriptEntry[];
 }
 
+/** Which editor double-click opens a note in: the fast in-window popup (own
+ *  CodeMirror, no third-party editor scripts) or the native editor in a
+ *  separate popout window (full Obsidian Editor API, so editor scripts run). */
+export type EditorMode = 'popup' | 'native';
+
 import type { AutoExpandMode } from './toc/types';
 
 export type { AutoExpandMode } from './toc/types';
@@ -27,9 +32,9 @@ export interface BookViewSettings {
 	tocShowFileNames: boolean;
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
-	tocActiveColor: string;
 	tocCollapsedLevel: number;
 	autoExpandMode: AutoExpandMode;
+	tocCollapseRestLevel: number;
 	tocAutoOpen: boolean;
 	tocFocusOnBook: boolean;
 	loadMargin: number;
@@ -40,15 +45,17 @@ export interface BookViewSettings {
 	wheelShieldEnabled: boolean;
 	menuProfiles: MenuProfile[];
 	editorModifiers: ModifierConfig;
+	editorMode: EditorMode;
+	popupHideFrontmatter: boolean;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
 	tocShowFileNames: true,
 	tocGuides: true,
 	tocRenderMarkdown: true,
-	tocActiveColor: '',
 	tocCollapsedLevel: 0,
 	autoExpandMode: 'disabled',
+	tocCollapseRestLevel: 0,
 	tocAutoOpen: true,
 	tocFocusOnBook: true,
 	loadMargin: 800,
@@ -61,4 +68,6 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 		{ name: 'Main', modifiers: { alt: false, ctrl: false, shift: false, meta: false }, scripts: [] },
 	],
 	editorModifiers: { alt: false, ctrl: true, shift: false, meta: false },
+	editorMode: 'popup',
+	popupHideFrontmatter: false,
 };

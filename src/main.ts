@@ -187,6 +187,16 @@ export default class BookViewPlugin extends Plugin {
 			return new BookTocView(leaf);
 		});
 
+		// Let the core 'Page preview' plugin accept hover-link events emitted
+		// by BookView (Ctrl/Cmd + hover over internal links inside a book).
+		// Available since app 1.1.0 but missing from the bundled typings.
+		(this.app.workspace as unknown as {
+			registerHoverLinkSource: (id: string, info: { display: string; defaultMod: boolean }) => void;
+		}).registerHoverLinkSource(VIEW_TYPE_BOOK_VIEW, {
+			display: 'Book View',
+			defaultMod: true,
+		});
+
 		this.addCommand({
 			id: 'toggle-sidebar-toc',
 			name: 'Toggle book toc in right sidebar',
@@ -320,6 +330,17 @@ export default class BookViewPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'toggle-editor-mode',
+			name: 'Toggle editor mode (popup / native)',
+			callback: () => {
+				this.settings.editorMode = this.settings.editorMode === 'popup' ? 'native' : 'popup';
+				void this.saveSettings().then(() => {
+					new Notice(`Book View: double-click opens the ${this.settings.editorMode} editor`);
+				});
+			},
+		});
+
+		this.addCommand({
 			id: 'copy-debug-log',
 			name: 'Copy debug log to clipboard',
 			callback: async () => {
@@ -389,6 +410,9 @@ export default class BookViewPlugin extends Plugin {
 	}
 
 	onunload() {
+		(this.app.workspace as unknown as { unregisterHoverLinkSource: (id: string) => void }).unregisterHoverLinkSource(
+			VIEW_TYPE_BOOK_VIEW,
+		);
 		delete window.BookView;
 		this.api = null;
 		void this.flushHeights();

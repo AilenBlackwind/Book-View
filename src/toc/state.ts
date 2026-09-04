@@ -85,10 +85,20 @@ export class TocState {
 	userExpandedSet: Set<number> = new Set();
 	/** Force-expanded by scroll tracking (recomputed every tick) */
 	activePathSet: Set<number> = new Set();
+	/** Sections that were ever on the active path (i.e. the user scrolled to /
+	 *  navigated into them). Grows monotonically across the session. Drives the
+	 *  mode differences: 'only-expand' keeps these expanded forever; 
+	 *  'expand-collapse-level' collapses the *visited* sections to the extra
+	 *  "collapse rest to level" setting while leaving not-yet-visited sections
+	 *  at the default level. */
+	visitedSet: Set<number> = new Set();
 	activeEntryIndex = -1;
 	pendingPathIndex = -1;
 	activePathTimer = 0;
 	defaultLevel = 0;
+	/** Rest-collapse level for 'expand-collapse-level' mode, copied from
+	 *  settings at build time (separate from the initial-collapse defaultLevel). */
+	autoCollapseRestLevel = 0;
 
 	// --- Scroll ---
 	headingPositions: number[] = [];
@@ -199,8 +209,31 @@ export class TocState {
 		if (this.activePathSet.has(i)) return true;
 		if (this.userExpandedSet.has(i)) return true;
 		if (this.userCollapsedSet.has(i)) return false;
-		if (this.defaultLevel === 0) return true;
-		return (this.entries[i]?.level ?? 0) < this.defaultLevel;
+
+		const mode = this.settings?.autoExpandMode ?? 'disabled';
+		const level = this.entries[i]?.level ?? 0;
+		const initialLevel = this.defaultLevel;
+
+		switch (mode) {
+			case 'only-expand':
+				// Sections visited (ever on the active path) stay expanded; the
+				// rest follow the initial/default level.
+				if (this.visitedSet.has(i)) return true;
+				return initialLevel === 0 || level < initialLevel;
+			case 'expand-collapse-level':
+				// Visited sections (other than the active path) collapse to the
+				// extra "collapse rest to level"; not-yet-visited sections keep
+				// the default level. So collapsing creeps along with the scroll
+				// instead of reflowing the whole book at once.
+				if (this.visitedSet.has(i)) {
+					return this.autoCollapseRestLevel === 0 || level < this.autoCollapseRestLevel;
+				}
+				return initialLevel === 0 || level < initialLevel;
+			case 'expand-collapse-default':
+			case 'disabled':
+			default:
+				return initialLevel === 0 || level < initialLevel;
+		}
 	}
 
 	/** Compute the active path: entry `index` (if it has children) + all

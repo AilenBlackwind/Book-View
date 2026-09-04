@@ -1,6 +1,6 @@
 import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import type BookViewPlugin from '../main';
-import type { ModifierConfig, MenuProfile } from '../settings';
+import type { ModifierConfig, MenuProfile, EditorMode } from '../settings';
 import { CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
 
 type SettingsSection = 'toc' | 'menus' | 'general';
@@ -25,7 +25,7 @@ function getDefaultColor(): string {
 
 export class BookViewSettingTab extends PluginSettingTab {
 	plugin: BookViewPlugin;
-	private activeSection: SettingsSection = 'toc';
+	private activeSection: SettingsSection = 'general';
 
 	constructor(app: App, plugin: BookViewPlugin) {
 		super(app, plugin);
@@ -139,27 +139,6 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(el)
-			.setName('Active heading color')
-			.setDesc('Color of the highlight behind the active heading. Leave empty for the default accent color.')
-			.addColorPicker((picker) =>
-				picker
-					.setValue(this.plugin.settings.tocActiveColor || '#000000')
-					.onChange(async (value: string) => {
-						this.plugin.settings.tocActiveColor = value;
-						await this.plugin.saveSettings();
-						this.applyTocActiveColor(value);
-					}),
-			)
-			.addButton((btn) => {
-				btn.setIcon('x').setTooltip('Reset to default').onClick(async () => {
-					this.plugin.settings.tocActiveColor = '';
-					await this.plugin.saveSettings();
-					this.applyTocActiveColor('');
-					this.display();
-				});
-			});
-
-		new Setting(el)
 			.setName('Default collapsed level')
 			.setDesc('Headings at this level and deeper are collapsed when opening a book. Set to off to disable.')
 			.addDropdown((dd) =>
@@ -174,6 +153,25 @@ export class BookViewSettingTab extends PluginSettingTab {
 					.setValue(String(this.plugin.settings.tocCollapsedLevel))
 					.onChange(async (value: string) => {
 						this.plugin.settings.tocCollapsedLevel = parseInt(value, 10);
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
+			.setName('Collapse rest to level')
+			.setDesc('The level the rest of the ToC collapses to while reading, when using "Expand and collapse rest to setting level". Headings at this level and deeper are collapsed.')
+			.addDropdown((dd) =>
+				dd
+					.addOption('0', 'Off')
+					.addOption('1', 'H1')
+					.addOption('2', 'H2')
+					.addOption('3', 'H3')
+					.addOption('4', 'H4')
+					.addOption('5', 'H5')
+					.addOption('6', 'H6')
+					.setValue(String(this.plugin.settings.tocCollapseRestLevel))
+					.onChange(async (value: string) => {
+						this.plugin.settings.tocCollapseRestLevel = parseInt(value, 10);
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -282,24 +280,41 @@ export class BookViewSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		this.renderSingleModifier(el, 'Popout editor shortcut', 'Modifier keys required to open the native editor in a popout window on double-click.', 'editorModifiers');
+		new Setting(el)
+			.setName('Editor')
+			.setHeading();
+
+		new Setting(el)
+			.setName('Editor used on double-click')
+			.setDesc('Open a section note in the in-window popup editor, or in the native editor in a separate popout window. The native editor in a popout window is available in case of unexpected issues.')
+			.addDropdown((dd) =>
+				dd
+					.addOption('popup', 'Popup editor (in-window)')
+					.addOption('native', 'Native editor (popout)')
+					.setValue(this.plugin.settings.editorMode)
+					.onChange(async (value: string) => {
+						this.plugin.settings.editorMode = value as EditorMode;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
+			.setName('Hide frontmatter in popup editor')
+			.setDesc('Hide the YAML frontmatter block while editing in the popup editor, so notes start from the first heading.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.popupHideFrontmatter)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.popupHideFrontmatter = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		this.renderSingleModifier(el, 'Popout editor shortcut', 'Modifier keys required to open the editor on double-click.', 'editorModifiers');
 	}
 
 	private renderMenuSettings(el: HTMLElement): void {
 		this.renderMenuProfiles(el);
-	}
-
-	private applyTocActiveColor(color: string): void {
-		const els = document.querySelectorAll('.book-view-container');
-		els.forEach((el) => {
-			if (el instanceof HTMLElement) {
-				if (color) {
-					el.style.setProperty('--bv-toc-active-color', color);
-				} else {
-					el.style.removeProperty('--bv-toc-active-color');
-				}
-			}
-		});
 	}
 
 	private renderSingleModifier(containerEl: HTMLElement, heading: string, description: string, key: 'editorModifiers'): void {

@@ -34,11 +34,10 @@ export class TocBuilder {
 		s.entries = buildTocEntries(s.app, s.files);
 		s.entryByPathLine = buildEntryByPathLine(s.entries);
 		s.defaultLevel = s.settings?.tocCollapsedLevel ?? 0;
+		s.autoCollapseRestLevel = s.settings?.tocCollapseRestLevel ?? 0;
+		s.visitedSet.clear();
 
 		s.containerEl.addClass('book-toc-relative');
-		if (s.settings?.tocActiveColor) {
-			s.containerEl.style.setProperty('--bv-toc-active-color', s.settings.tocActiveColor);
-		}
 		s.tocPaddingTop = parseFloat(getComputedStyle(s.containerEl).paddingTop) || 0;
 
 		this.measureRowHeights();
@@ -49,8 +48,9 @@ export class TocBuilder {
 
 	/** Create a file-title row. The row height is fixed (see CSS), so the
 	 *  virtual offsets computed at build time stay exact. */
-	createFileRow(listEl: HTMLElement, file: TFile): HTMLElement {
+	createFileRow(listEl: HTMLElement, index: number, file: TFile): HTMLElement {
 		const li = listEl.createEl('li', { cls: 'book-toc-file' });
+		li.dataset.index = String(index);
 		li.createDiv({ cls: 'book-toc-file-title', text: file.basename });
 		return li;
 	}
@@ -62,6 +62,7 @@ export class TocBuilder {
 		const li = listEl.createEl('li', { cls: 'book-toc-heading' });
 		li.style.paddingLeft = `${(entry.level - 1) * 12}px`;
 		li.dataset.level = String(entry.level);
+		li.dataset.index = String(entryIndex);
 
 		const inner = li.createDiv({ cls: 'book-toc-heading-inner' });
 
@@ -82,11 +83,6 @@ export class TocBuilder {
 				'stroke-linecap': 'round',
 				'stroke-linejoin': 'round',
 			},
-		});
-		chevron.addEventListener('click', (evt) => {
-			evt.preventDefault();
-			evt.stopPropagation();
-			s.toggleCollapse(entryIndex);
 		});
 
 		const a = inner.createEl('a', {
@@ -109,10 +105,6 @@ export class TocBuilder {
 			label = renderHeadingLabel(a, entry.text, renderMarkdown);
 			this.labelCache.set(entryIndex, label);
 		}
-		a.addEventListener('click', (evt) => {
-			evt.preventDefault();
-			void this.navigator.scrollToHeading(entryIndex);
-		});
 
 		if (s.isLeaf[entryIndex]) {
 			li.addClass('book-toc-leaf');
@@ -130,6 +122,130 @@ export class TocBuilder {
 		return { li, a };
 	}
 
+	/** Update an existing heading <li> in place instead of re-creating it.
+	 *  Reuses the inner wrapper + chevron + anchor and only patches what
+	 *  changes (data, padding, classes, guide background, label), so a
+	 *  path/visibility change touches the same DOM nodes instead of tearing
+	 *  them down — far fewer elements invalidated during forced reflow. */
+	updateHeadingRow(li: HTMLElement, entryIndex: number, entry: TocEntry): HTMLElement {
+		const s = this.state;
+
+		// Dirty-check: when the row already shows this exact entry in this
+		// exact state, nothing changed (label is keyed by entryIndex and the
+		// guide is immutable per entry). Touching the DOM here is what forced
+		// a style recalculation on every wheel tick, so skip all mutations.
+		const leafNow = !!s.isLeaf[entryIndex];
+		const collNow = !leafNow && !s.isEntryExpanded(entryIndex);
+		const hasLeaf = li.classList.contains('book-toc-leaf');
+		const hasColl = li.classList.contains('book-toc-collapsed');
+		if (li.dataset.index === String(entryIndex) && li.dataset.level === String(entry.level) && hasLeaf === leafNow && hasColl === collNow) {
+			return li.querySelector<HTMLElement>('a.book-toc-item')!;
+		}
+
+		li.style.paddingLeft = `${(entry.level - 1) * 12}px`;
+		li.dataset.level = String(entry.level);
+		li.dataset.index = String(entryIndex);
+		li.addClass('book-toc-heading');
+
+		let inner = li.querySelector<HTMLElement>('.book-toc-heading-inner');
+		if (!inner) {
+			inner = li.createDiv({ cls: 'book-toc-heading-inner' });
+			const chevron = inner.createSpan({ cls: 'book-toc-chevron' });
+			const chevronSvg = chevron.createSvg('svg', { attr: { viewBox: '0 0 16 16' } });
+			chevronSvg.createSvg('path', {
+				attr: {
+					d: 'M5 4l4 4-4 4',
+					fill: 'none',
+					stroke: 'currentColor',
+					'stroke-width': '2',
+					'stroke-linecap': 'round',
+					'stroke-linejoin': 'round',
+				},
+			});
+		}
+
+		let a = inner.querySelector<HTMLElement>('a.book-toc-item');
+		if (!a) {
+			a = inner.createEl('a', { cls: 'book-toc-item' });
+		}
+		a.setAttribute('data-path', entry.file.path);
+		a.setAttribute('data-line', String(entry.line));
+		a.setAttribute('data-level', String(entry.level));
+
+		const renderMarkdown = s.settings?.tocRenderMarkdown ?? false;
+		if (this.cachedMarkdownMode !== renderMarkdown) {
+			this.labelCache.clear();
+			this.cachedMarkdownMode = renderMarkdown;
+		}
+		let label = this.labelCache.get(entryIndex);
+		if (label) {
+			a.empty();
+			a.appendChild(label.cloneNode(true));
+		} else {
+			a.empty();
+			label = renderHeadingLabel(a, entry.text, renderMarkdown);
+			this.labelCache.set(entryIndex, label);
+		}
+
+		// Reset then re-apply per-entry state classes.
+		li.removeClass('book-toc-leaf');
+		li.removeClass('book-toc-collapsed');
+		if (s.isLeaf[entryIndex]) {
+			li.addClass('book-toc-leaf');
+		} else if (!s.isEntryExpanded(entryIndex)) {
+			li.addClass('book-toc-collapsed');
+		}
+
+		// Reset then re-apply the nesting-guide background.
+		const guide = s.guideStyles[entryIndex];
+		li.style.backgroundImage = guide ? guide.image : '';
+		li.style.backgroundPosition = guide ? guide.position : '';
+		li.style.backgroundSize = guide ? guide.size : '';
+
+		return a;
+	}
+
+	/** Update an existing file-title <li> in place (see updateHeadingRow). */
+	updateFileRow(li: HTMLElement, index: number, file: TFile): void {
+		li.addClass('book-toc-file');
+		li.dataset.index = String(index);
+		let title = li.querySelector<HTMLElement>('.book-toc-file-title');
+		if (!title) {
+			title = li.createDiv({ cls: 'book-toc-file-title' });
+		}
+		title.setText(file.basename);
+	}
+
+	/** Delegated click handler installed once on the listEl (see TocWindow).
+	 *  Rows themselves carry no listeners, so recycling / re-creating <li>s
+	 *  can never leak or double-bind handlers. */
+	handleRowClick(evt: MouseEvent): void {
+		const s = this.state;
+		const target = evt.target as HTMLElement;
+
+		// Chevron toggles collapse/expand without navigating.
+		const chevron = target.closest<HTMLElement>('.book-toc-chevron');
+		if (chevron) {
+			evt.preventDefault();
+			evt.stopPropagation();
+			const li = chevron.closest<HTMLElement>('li[data-index]');
+			if (li) {
+				s.toggleCollapse(Number(li.dataset.index));
+			}
+			return;
+		}
+
+		// Anchor navigates to the heading.
+		const a = target.closest<HTMLElement>('a.book-toc-item');
+		if (a) {
+			evt.preventDefault();
+			const li = a.closest<HTMLElement>('li[data-index]');
+			if (li) {
+				void this.navigator.scrollToHeading(Number(li.dataset.index));
+			}
+		}
+	}
+
 	/** Measure the fixed row heights (heading row + file row) from a probe
 	 *  appended to the connected panel, so the virtual offsets match the real
 	 *  rendered rows. The probe can measure nothing (0) while the panel has no
@@ -137,7 +253,7 @@ export class TocBuilder {
 	private measureRowHeights(): void {
 		const s = this.state;
 		const probe = s.containerEl.createDiv({ cls: 'book-toc-list' });
-
+	
 		const li = probe.createEl('li', { cls: 'book-toc-heading' });
 		const inner = li.createDiv({ cls: 'book-toc-heading-inner' });
 		inner.createSpan({ cls: 'book-toc-chevron' });

@@ -1,10 +1,11 @@
-import { Component, FileView, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
-import { getManifestLinks } from '../components/ManifestParser';
+import { Component, FileView, HoverPopover, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
+import { cssClassesFromFrontmatter, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
 import { HEIGHT_PER_LINE } from '../toc/types';
 import { WheelAccelerator } from '../components/WheelAccelerator';
 import { showScriptMenu } from '../ui/ContextMenu';
+import { NativeLeafPopover } from '../editor/NativeLeafPopover';
 import { DebugLog } from '../utils/debug';
 import { BookSearcher } from '../search/BookSearcher';
 import { FindBar } from '../search/FindBar';
@@ -24,6 +25,19 @@ export class BookView extends FileView {
 	readonly instanceId = ++BookView.nextInstanceId;
 	absoluteManager: AbsoluteSectionManager | null = null;
 	private contentContainer: HTMLElement | null = null;
+	/** Manifest `cssclasses` currently applied to contentEl (see loadBook). */
+	private bookCssClasses: string[] = [];
+
+	/** Current native hover popover anchored to this view. Page Preview reads
+	 *  and writes this slot via the HoverParent contract (hover-link's
+	 *  `parent` field); without it the core plugin crashes and shows nothing. */
+	hoverPopover: HoverPopover | null = null;
+
+	/** Book scope classes for sibling views (the ToC panel) that render
+	 *  outside this view but should still resolve book-scoped CSS variables. */
+	getScopeClasses(): string[] {
+		return this.bookCssClasses;
+	}
 	/** Owns the book container's scroll accessors: foreign scrollTop/scrollTo
 	 *  writes (third-party smooth-scroll plugins) are dropped, internal ones
 	 *  go through guardedScrollWrite. */
@@ -363,6 +377,25 @@ export class BookView extends FileView {
 	 *  scrolls to the section's offset, then corrects against the mounted
 	 *  section's real position once its content lands, and flashes the note's
 	 *  first heading. */
+	/** Open a note in Obsidian's native editor in a separate popout window
+	 *  (public API). Used as the 'native' editor mode and as the fallback
+	 *  when the detached-leaf popup fails. */
+	private openNativePopout(targetFile: TFile, targetLine: number): void {
+		const leaf = this.app.workspace.openPopoutLeaf();
+		this.popoutLeaf = leaf;
+		void leaf.openFile(targetFile, {
+			state: { mode: 'source' },
+			eState: { line: targetLine, ch: 0 },
+		});
+	}
+
+	/** Scroll positions the user scrolled away from when following internal
+	 *  links (one push per link click, capped). goBackToLastLink pops the
+	 *  top, so repeated invocations walk back through the click history.
+	 *  Absolute scrollTop is exact here: offsets in the virtualized layout
+	 *  do not depend on what is currently mounted. */
+	private linkBackStack: number[] = [];
+
 	private async jumpToSectionStart(filePath: string): Promise<void> {
 		const manager = this.absoluteManager;
 		const container = this.contentContainer;
@@ -643,6 +676,17 @@ export class BookView extends FileView {
 
 		this.contentEl.empty();
 		this.contentEl.addClass('book-view-root');
+		// Scope the manifest's own CSS snippet classes onto the book root so
+		// user snippets like `.my-book .markdown-rendered ...` apply inside
+		// this book render only. Re-read after the cold-start cache wait —
+		// `manifestCache` above may still have been null at that point.
+		// Classes from a previous render are dropped first: empty() clears
+		// children, not the root's own class list.
+		for (const cls of this.bookCssClasses) this.contentEl.removeClass(cls);
+		this.bookCssClasses = cssClassesFromFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+		for (const cls of this.bookCssClasses) {
+			this.contentEl.addClass(cls);
+		}
 
 		this.findBar?.destroy();
 		this.findBar = null;
@@ -758,12 +802,39 @@ export class BookView extends FileView {
 				Math.round(ratio * totalLines),
 			);
 
-			const leaf = this.app.workspace.openPopoutLeaf();
-			this.popoutLeaf = leaf;
-			void leaf.openFile(targetFile, {
-				state: { mode: 'source' },
-				eState: { line: targetLine, ch: 0 },
-			});
+			// Two editor modes (toggle via settings/command):
+			//  - 'popup': a Modal embedding a detached native WorkspaceLeaf
+			//    (real Obsidian editor, so Quick Add / custom JS scripts and
+			//    full Live Preview run) directly in the book UI — no separate
+			//    popout window. The book re-renders this section automatically
+			//    via vault.on('modify'); NativeLeafPopover also re-renders on close.
+			//  - 'native': the native editor in a separate popout window.
+			// Note: the hand-rolled CodeMirror popup (src/editor/LiveEditModal.ts)
+			// is temporarily disabled in favour of the detached leaf; see the
+			// note at the top of that file to restore it.
+			if (this.plugin?.settings.editorMode === 'popup') {
+				// The popup relies on a private WorkspaceLeaf constructor; if a
+				// future Obsidian version removes/breaks it, open the native
+				// popout window instead so the click always yields an editor.
+				try {
+					new NativeLeafPopover(
+						this.app,
+						targetFile,
+						targetLine,
+						this.plugin?.settings.popupHideFrontmatter ?? false,
+						this.bookCssClasses,
+						() => {
+							this.absoluteManager?.markDirty(targetFile.path);
+						},
+						() => this.openNativePopout(targetFile, targetLine),
+					).open();
+				} catch (err) {
+					DebugLog.log('EDIT', 'popover failed, opening popout window:', String(err instanceof Error ? err.message : err));
+					this.openNativePopout(targetFile, targetLine);
+				}
+			} else {
+				this.openNativePopout(targetFile, targetLine);
+			}
 		});
 
 		// Internal links inside the book: links to other book notes jump to the
@@ -796,6 +867,134 @@ export class BookView extends FileView {
 				} else {
 					void this.app.workspace.openLinkText(href, sourcePath, 'tab');
 				}
+			},
+			{ capture: true },
+		);
+
+		// Toggle task-list checkboxes directly in reading view. Clicking a
+		// checkbox flips the `- [ ]` / `- [x]` marker in the source file and
+		// updates the DOM immediately; the vault 'modify' listener then
+		// re-renders the section with the canonical state.
+		comp.registerDomEvent(
+			window,
+			'click',
+			(evt: MouseEvent) => {
+				if (evt.button !== 0) return;
+				const target = evt.target as HTMLElement;
+				const checkbox = target.closest<HTMLInputElement>('input.task-list-item-checkbox');
+				if (!checkbox) return;
+				const container = this.contentContainer;
+				if (!container || !container.contains(target)) return;
+				evt.preventDefault();
+				evt.stopPropagation();
+
+				const placeholder = target.closest<HTMLElement>('.book-section-placeholder');
+				const path = placeholder?.dataset.path;
+				if (!path) return;
+				const file = this.app.vault.getFileByPath(path);
+				if (!(file instanceof TFile)) return;
+
+				// Count this checkbox's position among all task checkboxes in
+				// the section (document order) so we can map it to the source
+				// line via the metadata cache.
+				const sectionEl = placeholder.querySelector<HTMLElement>('.markdown-rendered');
+				if (!sectionEl) return;
+				const allCheckboxes = Array.from(sectionEl.querySelectorAll('input.task-list-item-checkbox'));
+				const idx = allCheckboxes.indexOf(checkbox);
+				if (idx < 0) return;
+
+				const cache = this.app.metadataCache.getFileCache(file);
+				const tasks = cache?.listItems?.filter((li) => li.task !== undefined);
+				if (!tasks || idx >= tasks.length) return;
+				const task = tasks[idx];
+				if (!task) return;
+				const line = task.position.start.line;
+
+				// Read, toggle, write.
+				void file.vault.cachedRead(file).then((raw) => {
+					const lines = raw.split('\n');
+					const src = lines[line];
+					if (src === undefined) return;
+					const replaced = src.replace(
+						/^(\s*[-*+]\s+)\[([ xX])\]/,
+						(_, prefix: string, mark: string) =>
+							`${prefix}[${mark === ' ' ? 'x' : ' '}]`,
+					);
+					if (replaced === src) return;
+					lines[line] = replaced;
+					return file.vault.modify(file, lines.join('\n'));
+				});
+
+				// Optimistic DOM toggle so the UI feels instant.
+				const wasUnchecked = checkbox.getAttribute('data-task') === ' ';
+				checkbox.checked = wasUnchecked;
+				checkbox.setAttribute('data-task', wasUnchecked ? 'x' : ' ');
+			},
+			{ capture: true },
+		);
+
+		// Native Page Preview (Ctrl/Cmd + hover) for internal links. The core
+		// plugin only renders note content when the 'hover-link' context
+		// carries the section note's path and a valid hoverParent; without it
+		// only the path tooltip appears. A mouseover handler resolves the
+		// link against the section note, and a keydown handler covers the
+		// "hover first, press the modifier later" case, where no new
+		// mouseover event fires. The source is registered in main.ts.
+		let hoveredLink: { href: string; sourcePath: string; el: HTMLElement } | null = null;
+		const triggerHover = (evt: MouseEvent | KeyboardEvent): void => {
+			if (!hoveredLink) return;
+			this.app.workspace.trigger('hover-link', {
+				event: evt,
+				source: 'book-view',
+				sourcePath: hoveredLink.sourcePath,
+				linktext: hoveredLink.href,
+				targetEl: hoveredLink.el,
+				hoverParent: this,
+			});
+		};
+		comp.registerDomEvent(
+			window,
+			'keydown',
+			(evt: KeyboardEvent) => {
+				if (!evt.ctrlKey && !evt.metaKey) return;
+				if (hoveredLink && !hoveredLink.el.isConnected) {
+					hoveredLink = null;
+					return;
+				}
+				if (hoveredLink) triggerHover(evt);
+			},
+			{ capture: true },
+		);
+		comp.registerDomEvent(
+			window,
+			'mouseover',
+			(evt: MouseEvent) => {
+				const target = evt.target as HTMLElement;
+				const container = this.contentContainer;
+				if (!container || !container.contains(target)) {
+					hoveredLink = null;
+					return;
+				}
+				const link = target.closest<HTMLElement>('a.internal-link');
+				if (!link || !container.contains(link)) {
+					hoveredLink = null;
+					return;
+				}
+				const href = link.getAttribute('data-href') ?? link.getAttribute('href');
+				if (!href) {
+					hoveredLink = null;
+					return;
+				}
+				const placeholder = target.closest<HTMLElement>('.book-section-placeholder');
+				const sourcePath = placeholder?.dataset.path ?? this.filePath;
+				if (!this.app.metadataCache.getFirstLinkpathDest(href, sourcePath)) {
+					hoveredLink = null;
+					return;
+				}
+				hoveredLink = { href, sourcePath, el: link };
+				if (!evt.ctrlKey && !evt.metaKey) return;
+				evt.stopPropagation();
+				triggerHover(evt);
 			},
 			{ capture: true },
 		);
