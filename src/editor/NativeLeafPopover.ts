@@ -1,92 +1,8 @@
 import { App, Editor, Hotkey, MarkdownView, Modal, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
 import { EditorView } from '@codemirror/view';
-import { EditorState, StateEffect } from '@codemirror/state';
 import { CommandSuggestModal } from '../ui/CommandSuggestModal';
 import { DebugLog } from '../utils/debug';
 import { collectCommandHotkeys, matchesHotkey, type CommandLike, type HotkeyCommand } from '../utils/hotkeys';
-
-/**
- * Cursor-centering extensions for the popover editor. `cursorCenterer` is
- * appended to the native editor's CM6 config at open time. The extender adds
- * an explicit "center" scroll effect to keyboard-driven selection-only
- * transactions (arrows, Home/End, PageUp/Down); the update listener then acts
- * as the authoritative corrector — Obsidian applies its own post-transaction
- * scrollIntoView() (which pins the cursor to the top edge), so we re-center
- * after it on the following frames. Pointer selections (click, drag) are
- * exempt — the viewport must not jump when the user just points somewhere.
- * Typing keeps CM's native minimal scroll.
- */
-function centerCursorNow(view: EditorView): void {
-	const scroller = view.scrollDOM;
-	if (scroller.clientHeight <= 0) return;
-	const coords = view.coordsAtPos(view.state.selection.main.head);
-	if (!coords) return;
-	const rect = scroller.getBoundingClientRect();
-	const cursorMid = coords.top - rect.top + (coords.bottom - coords.top) / 2;
-	const offset = cursorMid - scroller.clientHeight / 2;
-	if (Math.abs(offset) < 1) return;
-	const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-	scroller.scrollTop = Math.max(0, Math.min(scroller.scrollTop + offset, maxScrollTop));
-}
-
-// Timestamp until which pointer-driven selection updates are exempt from
-// centering. The exemption is keyed to actual pointer activity
-// (mousedown/mouseup), not to CM userEvent annotations, which Obsidian's
-// dispatch paths do not preserve reliably.
-let pointerSelectionGuardUntil = 0;
-
-function suppressCursorCentering(ms: number): void {
-	pointerSelectionGuardUntil = Math.max(pointerSelectionGuardUntil, Date.now() + ms);
-}
-
-function cursorCenteringSuppressed(): boolean {
-	return Date.now() < pointerSelectionGuardUntil;
-}
-
-/** Keep re-centering for a few frames. A single post-update correction can
- *  be overwritten by Obsidian's own (sometimes deferred) scroll writes after
- *  programmatic edits; correcting on successive frames makes our write the
- *  last one. centerCursorNow only writes when the cursor actually deviates,
- *  so an already-centered view costs nothing. */
-function startCursorCenterLoop(view: EditorView, frames = 10): void {
-	let done = 0;
-	const step = (): void => {
-		if (!view.dom.isConnected || cursorCenteringSuppressed()) return;
-		centerCursorNow(view);
-		if (++done < frames) window.requestAnimationFrame(step);
-	};
-	window.requestAnimationFrame(step);
-}
-
-const cursorCenterer = [
-	// Pointer guard: any mousedown/mouseup on the editor opens a short
-	// exemption window so a plain click or drag never yanks the viewport.
-	EditorView.domEventHandlers({
-		mousedown: () => {
-			suppressCursorCentering(600);
-			return false;
-		},
-		mouseup: () => {
-			suppressCursorCentering(300);
-			return false;
-		},
-	}),
-	EditorState.transactionExtender.of((tr) => {
-		if (!tr.selection) return null;
-		if (tr.isUserEvent('select.pointer') || cursorCenteringSuppressed()) return null;
-		return { effects: EditorView.scrollIntoView(tr.selection.main, { y: 'center' }) };
-	}),
-	// Authoritative correction: Obsidian applies its own post-transaction
-	// scrollIntoView() after CM's update pass (this is what pins the cursor
-	// to the top edge). The correction loop runs after those writers and
-	// keeps re-applying the center position. Pointer selections are exempt
-	// via the suppression window above.
-	EditorView.updateListener.of((u) => {
-		if (!u.selectionSet && !u.docChanged) return;
-		if (u.transactions.some((tr) => tr.isUserEvent('select.pointer')) || cursorCenteringSuppressed()) return;
-		startCursorCenterLoop(u.view);
-	}),
-];
 
 /**
  * Popover editor that reuses Obsidian's real editor by embedding a fully
@@ -382,29 +298,6 @@ export class NativeLeafPopover extends Modal {
 		this.modalEl.toggleClass('book-edit-modal-scrolling', isCapped);
 	}
 
-	/** One-time DOM correction after the first layout frame: the CM6
-	 * "center" effect dispatched at open time can run before the detached
-	 * leaf has its final viewport size, so refine the scroll position once
-	 * the real geometry is known. Later scrolling is handled entirely by the
-	 * `cursorCenterer` CM6 extension, so this never competes with CM. */
-	private centerInitialCursor(viewEl: HTMLElement): void {
-		const scroller = viewEl.querySelector<HTMLElement>('.cm-scroller');
-		const cursor = scroller?.querySelector<HTMLElement>('.cm-cursor');
-		if (!scroller || !cursor || scroller.clientHeight <= 0) return;
-		const scrollerRect = scroller.getBoundingClientRect();
-		const cursorRect = cursor.getBoundingClientRect();
-		const cursorOffset = cursorRect.top - scrollerRect.top + scroller.scrollTop;
-		const targetTop = cursorOffset - (scroller.clientHeight - cursorRect.height) / 2;
-		const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-		scroller.scrollTop = Math.max(0, Math.min(targetTop, maxScrollTop));
-	}
-
-	/** Access the underlying CodeMirror view of the native markdown editor. */
-	private get cmView(): EditorView | null {
-		const view = this.leaf?.view instanceof MarkdownView ? this.leaf.view : null;
-		return (view?.editor as unknown as { cm?: EditorView } | undefined)?.cm ?? null;
-	}
-
 	private createOpenTabButton(): void {
 		// Own class only: Obsidian's stock `.markdown-embed-link { display: none }`
 		// (show-on-embed-hover) would hide a body-level element carrying it.
@@ -530,32 +423,27 @@ export class NativeLeafPopover extends Modal {
 		// and plugins resolve it (see claimWorkspaceActive).
 		this.claimWorkspaceActive();
 
-		// Focus the native editor once laid out, install the cursor-centering
-		// extension, and scroll the target line into the middle of the popup.
+		// Focus the native editor once laid out and make the target line
+		// visible. Scrolling inside the popup is left entirely to Obsidian,
+		// giving the same cursor behavior as a normal editor tab.
 		window.requestAnimationFrame(() => {
 			const view = leaf.view instanceof MarkdownView ? leaf.view : (leaf.view as MarkdownView | undefined);
 			const editor = view?.editor;
 			if (editor) {
 				editor.setCursor({ line: Math.max(0, this.line), ch: 0 });
 				editor.focus();
-				const cmView = this.cmView;
-				if (cmView) {
-					cmView.dispatch({ effects: StateEffect.appendConfig.of(cursorCenterer) });
-					cmView.dispatch({ effects: EditorView.scrollIntoView(cmView.state.selection.main, { y: 'center' }) });
-				} else {
-					// CM internals unavailable — fall back to the public API.
-					editor.scrollIntoView({ from: editor.getCursor(), to: editor.getCursor() }, true);
-				}
-				window.requestAnimationFrame(() => {
-					this.updateEditorScrollMode();
-					window.requestAnimationFrame(() => this.centerInitialCursor(viewEl));
-				});
+				// Force a CodeMirror measure pass. The leaf is mounted while
+				// detached (zero size), so without an explicit remeasure the
+				// viewport can stay empty and the popup window appears blank.
+				const cmView = (editor as unknown as { cm?: EditorView }).cm;
+				cmView?.requestMeasure();
+				window.requestAnimationFrame(() => this.updateEditorScrollMode());
 			}
 		});
 	}
 
 	onClose(): void {
-		// Give the active-leaf pointers back before the editor DOM goes away.
+		// Give the workspace pointers back before the editor DOM goes away.
 		this.restoreWorkspaceActive();
 		this.modalEl.removeEventListener('keydown', this.onModalKeydown, { capture: true });
 		window.removeEventListener('resize', this.onWindowResize);
