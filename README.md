@@ -40,7 +40,7 @@ Book View renders a sequence of linked notes as a single, continuous long-form d
 
 A Book can carry its own CSS styling, separate from the rest of the vault:
 
-1. Add `cssclasses` to the frontmatter of the Book's manifest note:
+1. Add `cssclasses` to the frontmatter of the Book's manifest note, for example:
 
 ```yaml
 ---
@@ -77,17 +77,17 @@ cssclasses: my-book
 
 All classes from the manifest's `cssclasses` are applied to the book's root element, so every note in the book is styled, while notes outside the book are unaffected. The same classes are also applied to the popover editor (**Ctrl/Cmd + Double-click**), so scoped rules that match its DOM apply there too. Any class names work — `my-book` in the examples is just an example.
 
-> [!note] Scoping
+> [!NOTE]
 > CSS snippets are loaded globally by Obsidian — only the selector keeps them book-local. Make sure every rule in a book-styling snippet starts with your scope class (e.g. `.my-book ...`); any rule without it will apply to the entire vault.
 
 ### Customizing the ToC Highlight Colors
 
 The table of contents marks the active heading with a colored pill (background highlight) and accent-colored text. By default these follow Obsidian's accent color and switch automatically between dark and light themes. You can override them with a CSS snippet:
 
-| Selector | What it controls |
-|---|---|
-| `.book-toc-highlight` | The pill (background rectangle behind the active heading) |
-| `.book-toc-item.is-active` | The active heading's text color |
+| Selector                   | What it controls                                                                                           |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `.book-toc-highlight`      | The pill (background rectangle behind the active heading)                                                  |
+| `.book-toc-item.is-active` | The active heading's text color                                                                            |
 | `--bv-toc-highlight-color` | Custom property on `.book-toc-highlight` to override the pill color (falls back to `--interactive-accent`) |
 
 Example — blue pill in light theme, purple in dark:
