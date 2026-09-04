@@ -389,6 +389,13 @@ export class BookView extends FileView {
 		});
 	}
 
+	/** Scroll positions the user scrolled away from when following internal
+	 *  links (one push per link click, capped). goBackToLastLink pops the
+	 *  top, so repeated invocations walk back through the click history.
+	 *  Absolute scrollTop is exact here: offsets in the virtualized layout
+	 *  do not depend on what is currently mounted. */
+	private linkBackStack: number[] = [];
+
 	private async jumpToSectionStart(filePath: string): Promise<void> {
 		const manager = this.absoluteManager;
 		const container = this.contentContainer;
@@ -860,6 +867,68 @@ export class BookView extends FileView {
 				} else {
 					void this.app.workspace.openLinkText(href, sourcePath, 'tab');
 				}
+			},
+			{ capture: true },
+		);
+
+		// Toggle task-list checkboxes directly in reading view. Clicking a
+		// checkbox flips the `- [ ]` / `- [x]` marker in the source file and
+		// updates the DOM immediately; the vault 'modify' listener then
+		// re-renders the section with the canonical state.
+		comp.registerDomEvent(
+			window,
+			'click',
+			(evt: MouseEvent) => {
+				if (evt.button !== 0) return;
+				const target = evt.target as HTMLElement;
+				const checkbox = target.closest<HTMLInputElement>('input.task-list-item-checkbox');
+				if (!checkbox) return;
+				const container = this.contentContainer;
+				if (!container || !container.contains(target)) return;
+				evt.preventDefault();
+				evt.stopPropagation();
+
+				const placeholder = target.closest<HTMLElement>('.book-section-placeholder');
+				const path = placeholder?.dataset.path;
+				if (!path) return;
+				const file = this.app.vault.getFileByPath(path);
+				if (!(file instanceof TFile)) return;
+
+				// Count this checkbox's position among all task checkboxes in
+				// the section (document order) so we can map it to the source
+				// line via the metadata cache.
+				const sectionEl = placeholder.querySelector<HTMLElement>('.markdown-rendered');
+				if (!sectionEl) return;
+				const allCheckboxes = Array.from(sectionEl.querySelectorAll('input.task-list-item-checkbox'));
+				const idx = allCheckboxes.indexOf(checkbox);
+				if (idx < 0) return;
+
+				const cache = this.app.metadataCache.getFileCache(file);
+				const tasks = cache?.listItems?.filter((li) => li.task !== undefined);
+				if (!tasks || idx >= tasks.length) return;
+				const task = tasks[idx];
+				if (!task) return;
+				const line = task.position.start.line;
+
+				// Read, toggle, write.
+				void file.vault.cachedRead(file).then((raw) => {
+					const lines = raw.split('\n');
+					const src = lines[line];
+					if (src === undefined) return;
+					const replaced = src.replace(
+						/^(\s*[-*+]\s+)\[([ xX])\]/,
+						(_, prefix: string, mark: string) =>
+							`${prefix}[${mark === ' ' ? 'x' : ' '}]`,
+					);
+					if (replaced === src) return;
+					lines[line] = replaced;
+					return file.vault.modify(file, lines.join('\n'));
+				});
+
+				// Optimistic DOM toggle so the UI feels instant.
+				const wasUnchecked = checkbox.getAttribute('data-task') === ' ';
+				checkbox.checked = wasUnchecked;
+				checkbox.setAttribute('data-task', wasUnchecked ? 'x' : ' ');
 			},
 			{ capture: true },
 		);
