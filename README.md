@@ -8,7 +8,7 @@ Book View renders a sequence of linked notes as a single, continuous long-form d
 
 ===placeholder for a preview animation===
 
-> [!warning] Status
+> [!WARNING] Status
 > Book View is in active beta development. While safe for reading, please make sure you have backups (or File Recovery enabled) if you use experimental script-based batch editing features. Feel free to report any issues on GitHub!
 
 ---
