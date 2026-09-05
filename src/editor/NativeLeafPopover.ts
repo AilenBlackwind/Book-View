@@ -437,7 +437,16 @@ export class NativeLeafPopover extends Modal {
 				// viewport can stay empty and the popup window appears blank.
 				const cmView = (editor as unknown as { cm?: EditorView }).cm;
 				cmView?.requestMeasure();
-				window.requestAnimationFrame(() => this.updateEditorScrollMode());
+				window.requestAnimationFrame(() => {
+					// setCursor's own implicit scroll-into-view runs while the
+					// detached leaf still has zero size, so it does nothing.
+					// Scroll to the cursor explicitly now that the modal has
+					// real geometry (otherwise the popup opens at the top of
+					// the note with the caret somewhere down the page).
+					const pos = editor.getCursor();
+					editor.scrollIntoView({ from: pos, to: pos }, true);
+					this.updateEditorScrollMode();
+				});
 			}
 		});
 	}
