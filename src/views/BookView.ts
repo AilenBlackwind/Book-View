@@ -1,4 +1,4 @@
-import { Component, FileView, HoverPopover, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
+import { App, Component, FileView, HoverPopover, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { cssClassesFromFrontmatter, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
 import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
@@ -12,9 +12,114 @@ import { FindBar } from '../search/FindBar';
 import type { SearchHit } from '../search/matcher';
 import type BookViewPlugin from '../main';
 import type { ModifierConfig } from '../settings';
+import { domToSectionOffset, foldIdLine, lineAtFraction } from '../utils/clickToLine';
 
 function matchesModifiers(evt: MouseEvent, mod: ModifierConfig): boolean {
 	return evt.altKey === mod.alt && evt.ctrlKey === mod.ctrl && evt.shiftKey === mod.shift && evt.metaKey === mod.meta;
+}
+
+/** Fallback: whole-section proportional line estimate. Used when the rendered
+ *  content is not a live full render (placeholder excerpts, warning sections,
+ *  alignment failures) — for normal notes block-level lookup always precedes
+ *  this. It returns the same result as the old click handler. */
+function estimateLineByRatio(
+	app: App,
+	placeholder: HTMLElement,
+	evt: MouseEvent,
+	targetFile: TFile,
+): number {
+	const rect = placeholder.getBoundingClientRect();
+	const ratio = Math.max(0, Math.min(1, (evt.clientY - rect.top) / rect.height));
+	const cache = app.metadataCache.getFileCache(targetFile);
+	let totalLines = 1;
+	const lastSection = cache?.sections?.[cache.sections.length - 1];
+	const lastHeading = cache?.headings?.[cache.headings.length - 1];
+	if (lastSection) {
+		totalLines = lastSection.position.end.line + 1;
+	} else if (lastHeading) {
+		totalLines = lastHeading.position.start.line + 50;
+	}
+	return Math.min(totalLines - 1, Math.round(ratio * totalLines));
+}
+
+/** Block-level click → source line. Returns null when the rendered content
+ *  cannot be aligned to cache.sections (no rendered container, a heading
+ *  anchor never matches a section, etc.) so the caller can fall back to the
+ *  proportional estimate. */
+function estimateLineFromSection(
+	app: App,
+	placeholder: HTMLElement,
+	evt: MouseEvent,
+	targetFile: TFile,
+): number | null {
+	const container = placeholder.querySelector<HTMLElement>(':scope > .markdown-rendered');
+	if (!container) return null;
+
+	const blocks = Array.from(container.children).filter(
+		(el): el is HTMLElement => el.instanceOf(HTMLElement),
+	);
+	if (blocks.length === 0) return null;
+
+	// The top-level rendered block under the cursor. A click outside any block
+	// (e.g. the strip between sections) lands on the placeholder itself and has
+	// no block to map. MarkdownRenderer output nests blocks directly inside the
+	// container, so climbing until the direct child is the enclosing block.
+	let block: HTMLElement | null = null;
+	let el: HTMLElement | null = evt.target instanceof HTMLElement ? evt.target : null;
+	while (el && el !== container) {
+		if (el.parentElement === container) {
+			block = el;
+			break;
+		}
+		el = el.parentElement;
+	}
+	if (!block) return null;
+
+	const blockIndex = blocks.indexOf(block);
+	if (blockIndex < 0) return null;
+
+	// data-fold-id carries the exact raw source line of each rendered heading;
+	// these are the DOM↔section alignment anchors.
+	const domHeadings: Array<{ blockIndex: number; line: number }> = [];
+	for (let i = 0; i < blocks.length; i++) {
+		const heading = blocks[i]?.matches('[data-fold-id]')
+			? blocks[i]
+			: blocks[i]?.querySelector<HTMLElement>('[data-fold-id]');
+		if (!(heading instanceof HTMLElement)) continue;
+		const line = foldIdLine(heading.dataset.foldId ?? '');
+		if (line !== null) domHeadings.push({ blockIndex: i, line });
+	}
+
+	const cache = app.metadataCache.getFileCache(targetFile);
+	const sections = cache?.sections ?? [];
+	const visibleSections = sections.filter((s) => s.type !== 'yaml' && !!s.position);
+	const lineSections: Array<{ startLine: number; endLine: number; type: string }> =
+		visibleSections.map((s) => ({
+			startLine: s.position.start.line,
+			endLine: s.position.end.line,
+			type: s.type,
+		}));
+
+	const offset = domToSectionOffset(domHeadings, lineSections);
+	if (offset === null) return null;
+
+	const sec = lineSections[blockIndex + offset];
+	if (!sec) return null;
+
+	// A heading block is exact: its own anchor line.
+	const direct = block.matches('[data-fold-id]')
+		? block
+		: block.querySelector<HTMLElement>('[data-fold-id]');
+	if (direct instanceof HTMLElement) {
+		const exact = foldIdLine(direct.dataset.foldId ?? '');
+		if (exact !== null) return exact;
+	}
+
+	const blockRect = block.getBoundingClientRect();
+	const fraction = blockRect.height > 0
+		? (evt.clientY - blockRect.top) / blockRect.height
+		: 0;
+	return lineAtFraction(sec, fraction);
 }
 
 export const VIEW_TYPE_BOOK_VIEW = 'book-view';
@@ -778,29 +883,17 @@ export class BookView extends FileView {
 			const targetFile = this.app.vault.getFileByPath(path);
 			if (!(targetFile instanceof TFile)) return;
 
-			// Estimate the cursor line from the click's relative position
-			// within the section.  The rendered view is not a linear map of
-			// source lines (images, embeds, code blocks all take variable
-			// height), so this is approximate — but for long notes with a
-			// single heading it lands much closer to the target than jumping
-			// to line 0.
-			const rect = placeholder.getBoundingClientRect();
-			const ratio = Math.max(0, Math.min(1, (evt.clientY - rect.top) / rect.height));
-
-			const cache = this.app.metadataCache.getFileCache(targetFile);
-			let totalLines = 1;
-			const lastSection = cache?.sections?.[cache.sections.length - 1];
-			const lastHeading = cache?.headings?.[cache.headings.length - 1];
-			if (lastSection) {
-				totalLines = lastSection.position.end.line + 1;
-			} else if (lastHeading) {
-				totalLines = lastHeading.position.start.line + 50;
-			}
-
-			const targetLine = Math.min(
-				totalLines - 1,
-				Math.round(ratio * totalLines),
-			);
+			// Map the click onto a specific rendered block (heading/paragraph/
+			// list item) and then onto that block's source-line range.  The old
+			// whole-section ratio assumed the rendered note is a linear map of
+			// source lines — images, embeds and code blocks all break it.  The
+			// rendered DOM blocks stay in source order, and rendered headings
+			// carry exact raw lines via data-fold-id, so aligning DOM order to
+			// cache.sections and interpolating inside the matched section lands
+			// within the clicked block instead of somewhere in the same note.
+			const targetLine =
+				estimateLineFromSection(this.app, placeholder, evt, targetFile) ??
+				estimateLineByRatio(this.app, placeholder, evt, targetFile);
 
 			// Two editor modes (toggle via settings/command):
 			//  - 'popup': a Modal embedding a detached native WorkspaceLeaf
