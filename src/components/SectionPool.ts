@@ -890,7 +890,8 @@ export class SectionPool {
 		// that freeze the gesture; the movement check also keeps the very
 		// first frames after open (restoring to a saved position) inside that
 		// window.
-		if (this.lastReconcileScrollTop !== null && Math.abs(scrollTop - this.lastReconcileScrollTop) >= 1) {
+		const moved = this.lastReconcileScrollTop !== null && Math.abs(scrollTop - this.lastReconcileScrollTop) >= 1;
+		if (moved) {
 			this.noteUserScroll();
 		}
 		this.lastReconcileScrollTop = scrollTop;
@@ -927,6 +928,27 @@ export class SectionPool {
 			if (this.renderQueueSet.has(path)) continue;
 			this.host.dbg('reconcile', path);
 			this.enqueueRender(path);
+		}
+		// Symmetric to the enqueue: reconcile is the only per-frame pass with
+		// fresh offsets, and unloads that live in IO exits (they coalesce late
+		// during fast glides) or on the idle-settle timer let the live DOM grow
+		// to span the whole scrubbed band — measured 65+ sections / 17K px,
+		// torn down in one late burst after the gesture. Prune mounted sections
+		// outside the same load window now, but only while the book actually
+		// moved, so idle cleanup stays with unloadFarSections and the prerender
+		// margin is untouched.
+		if (moved) {
+			this.pruneFarSections(scrollTop, clientHeight);
+		}
+	}
+
+	private pruneFarSections(scrollTop: number, clientHeight: number): void {
+		for (const [path, data] of this.host.sections) {
+			if (!data.component) continue;
+			if (isSectionInWindow(data.offset, data.height, scrollTop, clientHeight, OVERSCAN_TOP, this.host.loadMargin)) {
+				continue;
+			}
+			this.unloadSection(path);
 		}
 	}
 

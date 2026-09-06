@@ -414,8 +414,9 @@ export class AbsoluteSectionManager {
 			this.lastScrollWasAdjusting = this.layout.consumeAdjustingScroll();
 			if (!this.lastScrollWasAdjusting) {
 				this.pool.noteUserScroll();
-				// Unloads are deferred while scrolling (see processIoPending);
-				// reclaim far sections once the gesture settles.
+				// Far sections are pruned per frame while the book moves
+				// (reconcileVisibleSections); the idle unload below only catches
+				// the post-settle case.
 				this.pool.scheduleIdleUnload();
 				// Self-schedule the manager frame on book scrolls. The ToC spy
 				// is the normal frame driver, but it exists only while a ToC
