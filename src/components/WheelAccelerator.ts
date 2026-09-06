@@ -1,5 +1,5 @@
 import { DebugLog } from '../utils/debug';
-import { guardedScrollWrite } from './ScrollGuard';
+import { guardedLastWriteValue, guardedScrollWrite } from './ScrollGuard';
 
 export interface WheelFlickConfig {
 	enabled: boolean;
@@ -51,11 +51,16 @@ const GESTURE_REPORT_DELAY_MS = 300;
  *    merely avoids wasted work and prevents a foreign handler from
  *    cancelling the default action.
  *
- * 2. The animation loop never captures a baseline scrollTop. Every frame it
- *    reads the CURRENT scrollTop and adds velocity, so an external write
- *    (scroll anchoring compensation, TOC jump) is absorbed into the motion
- *    instead of being overwritten — the two writers compose additively. Its
- *    own write goes through guardedScrollWrite so the guard lets it pass.
+ * 2. The animation loop never reads the container's scrollTop mid-glide. A
+ *    live read would force a synchronous style recalc of whatever is dirty in
+ *    that frame (a section mount, a ToC mutation, or a third-party tick like
+ *    obsidian-git's periodic rel-time refresh), turning occasional dirt into
+ *    a full reflow on every colliding frame. The glide position is instead a
+ *    local `pos`, re-seeded from the DOM once per wheel notch, that absorbs
+ *    external writes (anchor compensation, TOC jump) via the ScrollGuard's
+ *    recorded write value — the two writers compose additively without any
+ *    DOM read. Its own write goes through guardedScrollWrite so the guard
+ *    lets it pass.
  */
 export class WheelAccelerator {
 	private static instances = new Map<HTMLElement, WheelAccelerator>();
@@ -75,6 +80,14 @@ export class WheelAccelerator {
 	private rafId = 0;
 	private destroyed = false;
 	private cachedMaxScroll = 0;
+
+	// Readless glide position: the local authoritative scrollTop during a
+	// flick, seeded from the DOM once per notch in handleWheel and advanced by
+	// velocity in step. External writes land in pos via the guard's recorded
+	// value, so step never reads the DOM (a read would force a style recalc of
+	// whatever is dirty in that frame).
+	private pos = 0;
+	private lastSeenWrite = 0;
 
 	// Temporary gesture-accuracy probe (DebugLog-gated): accumulates the
 	// intended travel of one wheel gesture (Σ deltaY × strength × combo) and,
@@ -144,10 +157,17 @@ export class WheelAccelerator {
 
 		// Edge chaining: at the boundary in the flick direction, let the event
 		// propagate natively so parent scrollers can take over.
-		const maxScroll = this.container.scrollHeight - this.container.clientHeight;
+		const c = this.container;
+		const maxScroll = c.scrollHeight - c.clientHeight;
 		this.cachedMaxScroll = maxScroll;
-		const atTop = this.container.scrollTop <= 0;
-		const atBottom = this.container.scrollTop >= maxScroll - 1;
+		// One live read per wheel notch (event frequency, not frame frequency)
+		// re-syncs the readless glide position with whatever state the DOM or a
+		// foreign writer left since the last notch.
+		const liveTop = c.scrollTop;
+		this.pos = liveTop;
+		this.lastSeenWrite = guardedLastWriteValue(c) ?? liveTop;
+		const atTop = liveTop <= 0;
+		const atBottom = liveTop >= maxScroll - 1;
 		if ((dy < 0 && atTop && this.velocity <= 0) || (dy > 0 && atBottom && this.velocity >= 0)) return;
 
 		evt.preventDefault();
@@ -180,7 +200,7 @@ export class WheelAccelerator {
 
 		if (!this.gestTracking) {
 			this.gestTracking = true;
-			this.gestStartTop = this.container.scrollTop;
+			this.gestStartTop = this.pos;
 			this.gestIntended = 0;
 		}
 		this.gestIntended += px * cfg.strength * this.combo;
@@ -226,19 +246,29 @@ export class WheelAccelerator {
 		this.rafId = 0;
 		if (this.destroyed) return;
 		const c = this.container;
+		// Absorb any programmatic scroll write made since the last step (anchor
+		// compensation, TOC jump) from the guard's record — in memory, never a
+		// DOM read, which would force a style recalc of whatever is dirty.
+		const ext = guardedLastWriteValue(c);
+		if (ext !== null && ext !== this.lastSeenWrite) {
+			this.pos = ext;
+			this.lastSeenWrite = ext;
+		}
 		// Cache maxScroll across frames: reading scrollHeight flushes a dirty
 		// layout, and a long flick would otherwise pay that forced recalc on
 		// every frame. Refresh only when approaching the cached bottom bound or
 		// when the cache is empty (content heights can change mid-glide).
 		let maxScroll = this.cachedMaxScroll;
-		if (maxScroll <= 0 || c.scrollTop >= maxScroll - LINE_HEIGHT_PX) {
+		if (maxScroll <= 0 || this.pos >= maxScroll - LINE_HEIGHT_PX) {
 			maxScroll = Math.max(0, c.scrollHeight - c.clientHeight);
 			this.cachedMaxScroll = maxScroll;
 		}
-		const next = Math.min(Math.max(c.scrollTop + this.velocity, 0), maxScroll);
+		const next = Math.min(Math.max(this.pos + this.velocity, 0), maxScroll);
 		guardedScrollWrite(c, () => {
 			c.scrollTop = next;
 		});
+		this.pos = next;
+		this.lastSeenWrite = next;
 		const friction = this.getConfig().friction;
 		this.velocity *= friction;
 		const atEdge = (next <= 0 && this.velocity < 0) || (next >= maxScroll && this.velocity > 0);

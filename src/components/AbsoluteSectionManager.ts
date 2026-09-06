@@ -4,7 +4,7 @@ import type { FoldMode, HeadingNode } from '../utils/fold';
 import { FoldController } from './FoldController';
 import { SectionPool, isWarningPath } from './SectionPool';
 import type { SectionData, HeightPersistence } from './SectionPool';
-import { ScrollGuard, type ScrollGuardEvent } from './ScrollGuard';
+import { ScrollGuard, guardedLastWriteValue, type ScrollGuardEvent } from './ScrollGuard';
 import { SectionLayout } from './SectionLayout';
 import { estimateHeight, stripYamlFrontmatter } from '../utils/content';
 import type { ThemeSpacings } from '../utils/theme';
@@ -133,15 +133,23 @@ export class AbsoluteSectionManager {
 	private heightCache: Map<string, number> = new Map();
 	private renderedDomCache: Map<string, HTMLElement> = new Map();
 	private containerWidthObserver: ResizeObserver;
-	// Viewport snapshot from the last frame. Read once per frame in runFrame
-	// (next to the scrollTop read, so it shares the same layout flush) and
-	// handed to the pool: reading scrollTop/clientHeight inside the IO
-	// macrotask would force a reflow of the DOM the section loads just mounted.
+	// Viewport snapshot from the last frame. Maintained by boundScrollHandler
+	// (readless during programmatic glides via the guard's recorded write, one
+	// DOM read per event for native scroll) and handed to the pool: reading
+	// scrollTop/clientHeight inside the IO macrotask would force a reflow of
+	// the DOM the section loads just mounted.
 	private lastScrollTop = 0;
 	private lastClientHeight = 0;
+	/** Guard-recorded write value as of the last scroll event. While the value
+	 *  changes between events (a wheel glide writes scrollTop every frame), the
+	 *  event consumed the record and skipped the DOM read; a native scroll that
+	 *  leaves the record unchanged falls back to one live read. */
+	private lastSeenProgAtEvent = 0;
+	/** The frame's own last observed scrollTop, kept separate from the
+	 *  event-time cache so runFrame can still measure frame-to-frame movement
+	 *  for jump detection. */
+	private lastFrameScrollTop = 0;
 	private boundScrollHandler: ((evt: Event) => void) | null = null;
-	/** Timer that removes the is-scrolling class after scrolling settles. */
-	private scrollIdleTimer = 0;
 	private boundClickHandler: ((evt: MouseEvent) => void) | null = null;
 	/** Set per scroll event by boundScrollHandler (which runs before the spy's
 	 *  scroll listener): true when the event came from a compensation write.
@@ -244,6 +252,11 @@ export class AbsoluteSectionManager {
 		// very first render looked heights up with width 0, missing every
 		// stored record and re-measuring the whole book on each cold start.
 		this.lastContainerWidth = scrollContainer.clientWidth;
+		// Seed the viewport height the same way: the RO baseline below delivers
+		// contentRect.height without a layout read, and live reads only happen
+		// on native scroll events, so pre-scroll cold start needs this one-time
+		// snapshot here (alongside the width seed, sharing the same flush).
+		this.lastClientHeight = scrollContainer.clientHeight;
 		this.links = links;
 		this.app = app;
 		this.masterFile = masterFile;
@@ -325,6 +338,12 @@ export class AbsoluteSectionManager {
 		this.containerWidthObserver = new ResizeObserver((entries) => {
 			for (const entry of entries) {
 				const newWidth = entry.contentRect.width;
+				// Viewport height from the observer's contentRect: exact enough
+				// for the load window (the overscan margins absorb the padding
+				// box difference) and readless — a container resize can land
+				// while the layout is dirty, and a live clientHeight read there
+				// would force a reflow. Any scroll event re-anchors it exactly.
+				this.lastClientHeight = Math.round(entry.contentRect.height);
 				this.dbg('width-resize', '', Math.round(newWidth), Math.round(this.lastContainerWidth));
 				if (newWidth === 0) continue;
 				if (!this.widthObserverPrimed) {
@@ -372,10 +391,22 @@ export class AbsoluteSectionManager {
 				return;
 			}
 			this.dbgSev++;
-			// No scrollTop read here: a scroll event can be dispatched while
-			// the book layout is still dirty (async height measurements), and
-			// reading it would force a full style recalc. The scroll position
-			// is read once per frame in processUpdates, before its own writes.
+			// Scroll position for the frame, without per-frame DOM reads. The
+			// guard records every programmatic scrollTop write (wheel glide,
+			// compensation, navigation): when that record changed since the
+			// last event, THIS event carries that write's position — reading
+			// the DOM here would force a synchronous style recalc of whatever
+			// is dirty in the frame. Native scroll (no guard write since the
+			// last event) needs exactly one live read; reading both scrollTop
+			// and clientHeight in the same branch shares one layout flush.
+			const prog = guardedLastWriteValue(this.scrollContainer);
+			if (prog !== null && prog !== this.lastSeenProgAtEvent) {
+				this.lastScrollTop = prog;
+				this.lastSeenProgAtEvent = prog;
+			} else {
+				this.lastScrollTop = this.scrollContainer.scrollTop;
+				this.lastClientHeight = this.scrollContainer.clientHeight;
+			}
 			// The one-shot flag is consumed here — boundScrollHandler is
 			// registered before the spy's scroll listener, so this event is
 			// marked before the spy runs and it skips scheduling a frame for a
@@ -386,15 +417,17 @@ export class AbsoluteSectionManager {
 				// Unloads are deferred while scrolling (see processIoPending);
 				// reclaim far sections once the gesture settles.
 				this.pool.scheduleIdleUnload();
+				// Self-schedule the manager frame on book scrolls. The ToC spy
+				// is the normal frame driver, but it exists only while a ToC
+				// with headings is attached; without it nothing wakes runFrame
+				// on a plain scroll, so reconcileVisibleSections never
+				// re-enqueues visible-unmounted sections (drainQueue consumed
+				// and deferred them when their content had not landed) and they
+				// stay blank during fast scrolls until some unrelated event runs
+				// a frame. Deduped by rafId, so alongside the spy this is still
+				// one frame per event.
+				this.scheduleFrame();
 			}
-			// Pause CSS animations while scrolling to reduce compositing work.
-			// The is-scrolling class is removed 200ms after the last scroll
-			// event so animations resume once the gesture settles.
-			this.scrollContainer.classList.add('is-scrolling');
-			window.clearTimeout(this.scrollIdleTimer);
-			this.scrollIdleTimer = window.setTimeout(() => {
-				this.scrollContainer.classList.remove('is-scrolling');
-			}, 200);
 		};
 		this.scrollContainer.addEventListener('scroll', this.boundScrollHandler, { passive: true });
 
@@ -589,12 +622,21 @@ export class AbsoluteSectionManager {
 		const t0 = performance.now();
 		// Jump detection runs on every frame, not only update frames: a large
 		// scroll delta must prune stale render-queue entries even when the
-		// frame's only job is the scroll spy. One scrollTop read plus a compare
-		// is cheap; the expensive prune only runs on >2000px jumps.
-		const scrollTop = this.scrollContainer.scrollTop;
-		const delta = Math.abs(scrollTop - this.lastScrollTop);
-		this.lastScrollTop = scrollTop;
-		this.lastClientHeight = this.scrollContainer.clientHeight;
+		// frame's only job is the scroll spy. The position is the event-time
+		// cache (the guard record during programmatic glides, one live read per
+		// native scroll event) — no per-frame scrollTop read, which would force
+		// a style recalc of whatever is dirty that frame. The delta compares
+		// against this frame's last observed value; the expensive prune only
+		// runs on >2000px jumps.
+		const scrollTop = this.lastScrollTop;
+		const delta = Math.abs(scrollTop - this.lastFrameScrollTop);
+		this.lastFrameScrollTop = scrollTop;
+		// The viewport height is maintained readlessly (attach seed, RO content
+		// rect, native scroll events). The one live read left covers a cold
+		// start where the RO baseline has not landed yet.
+		if (this.lastClientHeight <= 0) {
+			this.lastClientHeight = this.scrollContainer.clientHeight;
+		}
 		if (delta > 2000) {
 			this.pool.pruneRenderQueue((p) => {
 				const d = this.sections.get(p);
@@ -667,14 +709,14 @@ export class AbsoluteSectionManager {
 				`top=${Math.round(scrollTop)}`,
 			);
 		}
-		this.dbgTick();
+		this.dbgTick(scrollTop);
 	}
 
 	// Debug: prints a per-second summary of what keeps the frame loop alive.
 	// `sev` = scroll events whose target is the book container itself, `sevB` =
 	// bubbled scroll events from nested scrollables inside sections. The whole
 	// summary (including counter resets) is skipped while DebugLog is disabled.
-	private dbgTick(): void {
+	private dbgTick(scrollTop: number): void {
 		if (!DebugLog.enabled) return;
 		const now = performance.now();
 		if (!this.dbgT0) this.dbgT0 = now;
@@ -699,7 +741,7 @@ export class AbsoluteSectionManager {
 			'DBG', '',
 			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} blk=${this.dbgBlk} w=${this.dbgWheel}`,
 			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} rm=${Math.round(renderMs)}ms ab=${aborts} ph=${placeholders} up=${upgrades} mounts=${mounts} mh=${Math.round(mountH)}`,
-			`top=${Math.round(this.scrollContainer.scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
+			`top=${Math.round(scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
 			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${this.dbgTagMs.toFixed(1)}ms rects=${this.dbgTagRects} fps=${this.dbgFps} dc=${this.dbgDeferComp} ac=${this.dbgAnchorDuringGesture}`,
 		);
 		this.dbgT0 = now;

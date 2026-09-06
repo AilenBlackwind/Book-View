@@ -46,6 +46,14 @@ export class ScrollGuard {
 	/** Debug counter/event sink; assigned by the section manager. */
 	onEvent: ((e: ScrollGuardEvent) => void) | null = null;
 
+	/** Value of the last programmatic scrollTop write that passed the guard,
+	 *  or null when none passed yet or the position is unknown (scrollTo/
+	 *  scrollBy move the native slot, so they invalidate the record). Scroll
+	 *  pipeline consumers use this as a readless source of truth during
+	 *  programmatic glides: a passing write every frame means the record IS
+	 *  the current position, no DOM read needed. */
+	lastWriteValue: number | null = null;
+
 	constructor(private readonly el: HTMLElement) {}
 
 	get active(): boolean {
@@ -73,6 +81,7 @@ export class ScrollGuard {
 			set: function (this: HTMLElement, v: number): void {
 				if (self.depth > 0) {
 					desc.set!.call(this, v);
+					self.lastWriteValue = v;
 					if (DebugLog.enabled) {
 						self.onEvent?.({ kind: 'scrollTop', value: v, blocked: false, label: stackLabel() });
 					}
@@ -92,6 +101,11 @@ export class ScrollGuard {
 			(this.el as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
 				if (self.depth > 0) {
 					bound(...args);
+					// scrollTo/scrollBy move the native scroll slot directly, and a
+					// smooth behavior animates it in the compositor — the record
+					// cannot track that, so mark the position as unknown rather than
+					// staling it; the next scroll event reads the DOM once.
+					self.lastWriteValue = null;
 					if (DebugLog.enabled) {
 						self.onEvent?.({ kind: name, value: null, blocked: false, label: stackLabel() });
 					}
@@ -113,6 +127,7 @@ export class ScrollGuard {
 		guards.delete(this.el);
 		this.installed = false;
 		this.depth = 0;
+		this.lastWriteValue = null;
 	}
 
 	/** Grant the callback permission to move the scroll position. */
@@ -132,4 +147,12 @@ export class ScrollGuard {
 export function guardedScrollWrite<T>(el: HTMLElement, fn: () => T): T {
 	const guard = guards.get(el);
 	return guard ? guard.run(fn) : fn();
+}
+
+/** The last scrollTop value written through `el`'s installed guard, or null
+ *  when no programmatic write passed yet or the position is unknown (set by
+ *  scrollTo/scrollBy, or no guard installed). Consumers use this instead of a
+ *  live scrollTop read on frames where the record is fresh. */
+export function guardedLastWriteValue(el: HTMLElement): number | null {
+	return guards.get(el)?.lastWriteValue ?? null;
 }

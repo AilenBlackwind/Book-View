@@ -15,6 +15,14 @@ const ACTIVE_EDGE_MARGIN = 52;
  *  gesture truly rests — not after the whole gesture-defer window (700ms). */
 const CENTER_SCROLL_SETTLE_MS = 50;
 
+/** How long the book must have been still before a pending visibility change
+ *  is applied to the panel. Mirrors CENTER_SCROLL_SETTLE_MS: measured from the
+ *  last book scroll event, so a glide keeps extending it and the one rebuild
+ *  that applies the final active path fires just past the moment the wheel
+ *  rests — instead of one ~30ms panel rebuild per heading crossing while the
+ *  glide is still running. */
+const APPLY_VISIBILITY_SETTLE_MS = 50;
+
 /** Scroll spy: maps the book's scroll position to the active ToC entry,
  *  maintains per-entry heading positions, and drives the highlight + panel
  *  centering. Runs off the shared manager frame; never reads layout inside
@@ -24,8 +32,11 @@ const CENTER_SCROLL_SETTLE_MS = 50;
 export class TocSpy {
 	/** Last bestIndex reported by pickActiveIndex; used to log only on change. */
 	private _prevSpyIndex = -1;
-	/** rAF id for a deferred applyVisibility (see scheduleApplyVisibility). */
+	/** Deferred applyVisibility settle timer (see scheduleApplyVisibility). */
 	private visibilityRafId = 0;
+	/** rAF id for the post-paint deferred panel center scroll (see
+	 *  scheduleCenterScroll). */
+	private centerDeferRaf = 0;
 
 	constructor(private state: TocState) {}
 
@@ -202,10 +213,11 @@ export class TocSpy {
 			this.scheduleCenterScroll(highlightIndex);
 		}
 
-		// Apply expand/collapse path immediately so sections expand while
-		// scrolling into them — unless sections are actively mounting fresh
-		// (first visit into new territory), in which case the ToC rebuild
-		// shifts by one frame to avoid compounding with markdown renders.
+		// Track the active path immediately (the pill and centering keep working
+		// off the virtual state), but defer the panel rebuild to the settle
+		// beat: each rebuild re-creates ~1000 elements of row DOM, and doing
+		// that once per heading crossing while the glide is still running
+		// made the ToC the dominant scroll-frame cost with auto-expand on.
 		if (bestIndex !== s.pendingPathIndex) {
 			s.pendingPathIndex = bestIndex;
 			let newPath: Set<number>;
@@ -263,7 +275,23 @@ export class TocSpy {
 		return item !== undefined && item >= 0;
 	}
 
+	/** Apply the highlight for the active row, synchronously in the scroll
+	 *  frame (before this frame paints), so the pill tracks the scroll live
+	 *  like Quartz's in-view toggle. The mutation is cheap here because (a) it
+	 *  only reruns when the active row actually changes — scrolling within one
+	 *  heading touches nothing; (b) the class toggle + pill reparent is
+	 *  style-only for the `.book-toc-spacer` (contain: layout paint style), so
+	 *  the recalc is scoped at paint instead of forcing a read-flush; and
+	 *  (c) the frame's own layout reads (scrollTop, positions, panelScrollTop)
+	 *  all happened earlier in onScrollTick against cached/virtual values, so
+	 *  no dirty-to-clean DOM read follows the mutation. The only read that
+	 *  could collide — the post-settle panel center scrollTo — is deferred
+	 *  through a double rAF (see scheduleCenterScroll) to land after paint. */
 	updateHighlight(index: number): void {
+		this.applyHighlight(index);
+	}
+
+	private applyHighlight(index: number): void {
 		const s = this.state;
 		if (index < 0) {
 			s.activeHeading?.removeClass('is-active');
@@ -297,21 +325,18 @@ export class TocSpy {
 		}
 	}
 
-	/** Apply the active path's visibility, always deferred past the current
-	 *  frame's paint. Scrolling through a large section crosses multiple
-	 *  headings per gesture; each crossing triggers a path change and a tree
-	 *  rebuild (~3-4ms of DOM row creation). Deferring by rAF was insufficient:
-	 *  both the visibility rAF and the manager's runFrame rAF land in the SAME
-	 *  frame batch, so applyVisibility's DOM mutation dirties the layout that
-	 *  runFrame's scrollTop read then force-reflows (9ms, 503 elements).
-	 *  setTimeout breaks out of the rAF batch: the mutation lands AFTER the
-	 *  current frame paints, so the browser pre-computes the layout during
-	 *  the normal rendering pipeline and the next frame's read is clean. */
+	/** Apply the active path's visibility on the settle beat. A visibility
+	 *  change rebuilds the row window (~1000 elements of DOM); applied once per
+	 *  heading crossing while the book is moving, that work sat squarely in
+	 *  the scroll frame and its layout dirt poisoned every read in the frame.
+	 *  Self-extending: while the book is still moving the timer re-arms, so a
+	 *  glide applies exactly one rebuild with the FINAL active path, just past
+	 *  the moment the wheel rests. */
 	private scheduleApplyVisibility(s: TocState): void {
 		// Initial application must be synchronous: deferring past paint makes
 		// the ToC render collapsed/empty then snap open — a visible flash.
 		// After the first applyVisibility, rowByEntry is populated and every
-		// subsequent call goes through the setTimeout deferral.
+		// subsequent call goes through the settle deferral.
 		if (!s.rowByEntry.size) {
 			s.applyVisibility();
 			return;
@@ -319,11 +344,20 @@ export class TocSpy {
 		if (this.visibilityRafId) return;
 		this.visibilityRafId = window.setTimeout(() => {
 			this.visibilityRafId = 0;
+			// The book may still be gliding after the wheel gesture ended; the
+			// rebuild competes with the flick's remaining frames. Extend until
+			// the book has been still for APPLY_VISIBILITY_SETTLE_MS.
+			if (s.positionSource?.isGestureActive(APPLY_VISIBILITY_SETTLE_MS)) {
+				this.scheduleApplyVisibility(s);
+				return;
+			}
 			s.applyVisibility();
-			// Flush layout dirtied by the tree rebuild so the next rAF's
-			// scrollTop reads find a clean layout instead of force-reflowing.
+			// Flush the layout dirtied by the row rebuild HERE, at the settle
+			// beat where the book is idle and no scroll frame competes: the
+			// next input's reads (wheel notch, native scroll event) then find a
+			// clean layout instead of force-reflowing a fresh panel rebuild.
 			void s.containerEl.offsetHeight;
-		}, 0);
+		}, APPLY_VISIBILITY_SETTLE_MS);
 	}
 
 	/** Re-apply the highlight after a window render replaced the row elements
@@ -350,17 +384,21 @@ export class TocSpy {
 		if (item === undefined || item < 0) return;
 		const top = s.virtualOffsets[item] ?? 0;
 		const bottom = top + s.rowHeight;
-		const scrollTop = s.containerEl.scrollTop;
+		const scrollTop = s.panelScrollTop;
 		const viewport = s.tocViewportHeight;
 		const pad = s.tocPaddingTop;
 		// Clamp so tiny panels can't oscillate between the two branches.
 		const margin = Math.min(ACTIVE_EDGE_MARGIN, viewport * 0.25);
 		if (top < scrollTop + margin - pad) {
-			s.containerEl.scrollTop = Math.max(0, top + pad - margin);
+			const next = Math.max(0, top + pad - margin);
+			s.containerEl.scrollTop = next;
+			s.panelScrollTop = next;
 		} else if (bottom > scrollTop + viewport - margin - pad) {
 			const total = s.virtualOffsets[s.virtualOffsets.length - 1] ?? 0;
 			const max = Math.max(0, total - viewport);
-			s.containerEl.scrollTop = Math.min(max, bottom - viewport + margin + pad);
+			const next = Math.min(max, bottom - viewport + margin + pad);
+			s.containerEl.scrollTop = next;
+			s.panelScrollTop = next;
 		}
 	}
 
@@ -389,7 +427,25 @@ export class TocSpy {
 			if (item === undefined || item < 0) return;
 			const top = s.virtualOffsets[item] ?? 0;
 			const target = Math.max(0, top - (s.tocViewportHeight - s.rowHeight) / 2);
-			s.containerEl.scrollTo({ top: target, behavior: 'smooth' });
+			// Skip when the panel is effectively already centered — avoids
+			// starting a smooth animation (and its panel-scroll churn) over a
+			// couple of pixels.
+			if (Math.abs(s.panelScrollTop - target) < 2) return;
+			// The highlight is applied at the same settle beat; its class
+			// toggle + pill reparent dirties the ToC tree, and a scrollTo here
+			// forces that fresh dirt into a synchronous recalc over the whole
+			// list (~27ms, 690 elements). Defer the write past the next paint
+			// (double rAF) so the browser recalculates the highlight in its
+			// normal rendering pipeline and this scroll lands on a clean
+			// layout — a cheap write instead of a forced reflow.
+			const doCenter = (): void => {
+				if (s.lastCenterIndex !== index) return;
+				s.containerEl.scrollTo({ top: target, behavior: 'smooth' });
+			};
+			if (this.centerDeferRaf) window.cancelAnimationFrame(this.centerDeferRaf);
+			this.centerDeferRaf = window.requestAnimationFrame(() => {
+				this.centerDeferRaf = window.requestAnimationFrame(doCenter);
+			});
 		}, CENTER_SCROLL_SETTLE_MS);
 	}
 
@@ -408,6 +464,8 @@ export class TocSpy {
 		window.clearTimeout(s.fadeTimer);
 		window.clearTimeout(s.centerScrollTimer);
 		window.clearTimeout(s.activePathTimer);
+		if (this.centerDeferRaf) window.cancelAnimationFrame(this.centerDeferRaf);
+		this.centerDeferRaf = 0;
 		s.viewportResizeObserver?.disconnect();
 		s.viewportResizeObserver = null;
 		s.tocResizeObserver?.disconnect();

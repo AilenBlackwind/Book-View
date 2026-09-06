@@ -79,7 +79,7 @@ export class TocWindow {
 		spacerEl.style.height = `${total}px`;
 
 		const viewport = s.tocViewportHeight > 0 ? s.tocViewportHeight : s.containerEl.clientHeight;
-		const scrollTop = s.containerEl.scrollTop;
+		const scrollTop = s.panelScrollTop;
 
 		// Lazy window: the rendered range only has to *cover* the visible one
 		// (it already spans OVERSCAN rows past it), so a scroll that stays
@@ -202,6 +202,11 @@ export class TocWindow {
 		const s = this.state;
 		if (s.virtualItems.length === 0) return;
 		this.scrollHandler = () => {
+			// Cache the panel scrollTop before deferring the render: the render
+			// (and every per-frame reader) reads from this cache instead of the
+			// live element, so a scroll frame never pays a forced style recalc
+			// for the panel subtree.
+			s.panelScrollTop = s.containerEl.scrollTop;
 			if (this.renderScheduled) return;
 			this.renderScheduled = true;
 			window.requestAnimationFrame(() => {

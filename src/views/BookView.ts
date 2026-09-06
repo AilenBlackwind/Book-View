@@ -157,6 +157,62 @@ export class BookView extends FileView {
 	private savedScrollTop: number = -1;
 	private savedContainer: HTMLElement | null = null;
 	private boundPersistScroll: (() => void) | null = null;
+	/** Middle-button autoscroll mirroring Chromium's native mode: a middle
+	 *  click ENTERS autoscroll (cursor becomes the scroll circle, the button
+	 *  is not held); the book scrolls continuously in the direction of the
+	 *  cursor relative to the press point, faster the further the cursor
+	 *  moves; ANY subsequent click (or Esc) exits the mode. Implemented here
+	 *  because Chromium's native autoscroll picks its target at mousedown and
+	 *  over this virtualized container often lands on a nested scroller (or
+	 *  fails to engage until the container is visibly scrollable), turning the
+	 *  fast-scroll gesture into a no-op. */
+	private autoScrollActive = false;
+	private autoScrollBaseY = 0;
+	private autoScrollDeltaY = 0;
+	private autoScrollRaf = 0;
+	private boundAutoScrollDown: ((evt: MouseEvent) => void) | null = null;
+	private boundAutoScrollMove: ((evt: MouseEvent) => void) | null = null;
+	private boundAutoScrollExit: ((evt: MouseEvent) => void) | null = null;
+	private boundAutoScrollEsc: ((evt: KeyboardEvent) => void) | null = null;
+
+	private autoScrollStep = (): void => {
+		this.autoScrollRaf = 0;
+		if (!this.autoScrollActive) return;
+		const container = this.contentContainer;
+		if (!container) {
+			this.endAutoScroll();
+			return;
+		}
+		// Dead zone keeps the still cursor from creeping; outside it, velocity
+		// is proportional to the cursor's offset from the press point, capped
+		// so a huge offset cannot rocket past the book in one frame.
+		const dy = Math.abs(this.autoScrollDeltaY) < 4 ? 0 : this.autoScrollDeltaY;
+		const v = Math.max(-500, Math.min(500, dy * 0.5));
+		if (v !== 0) {
+			guardedScrollWrite(container, () => {
+				container.scrollTop += v;
+			});
+		}
+		this.autoScrollRaf = window.requestAnimationFrame(this.autoScrollStep);
+	};
+
+	private endAutoScroll(): void {
+		this.autoScrollActive = false;
+		if (this.autoScrollRaf) {
+			window.cancelAnimationFrame(this.autoScrollRaf);
+		}
+		this.autoScrollRaf = 0;
+		this.contentContainer?.removeClass('book-autoscroll');
+		if (this.boundAutoScrollMove) {
+			window.removeEventListener('mousemove', this.boundAutoScrollMove);
+		}
+		if (this.boundAutoScrollExit) {
+			window.removeEventListener('mousedown', this.boundAutoScrollExit, { capture: true });
+		}
+		if (this.boundAutoScrollEsc) {
+			window.removeEventListener('keydown', this.boundAutoScrollEsc, { capture: true });
+		}
+	}
 	/** True while loadBook is running and before the persisted scroll position
 	 *  has been restored. The scroll listener must not overwrite the saved
 	 *  position in plugin.scrollPositions with 0 during the initial render
@@ -807,6 +863,61 @@ export class BookView extends FileView {
 		this.scrollGuard = new ScrollGuard(this.contentContainer);
 		this.scrollGuard.install();
 
+		// Middle-button autoscroll. Chromium's native autoscroll (the round cursor)
+		// decides its scroll target at mousedown by hit-testing; over this
+		// virtualized container it often picks a nested scroller (code block,
+		// embed) or refuses to engage until the container is visibly scrollable,
+		// so the gesture did nothing until the pick happened to land here. Take
+		// it over: a middle click ENTERS the mode (cursor becomes the scroll
+		// circle, button not held), the book scrolls in the direction of the
+		// cursor's offset from the press point, and ANY subsequent click or Esc
+		// exits it — exactly the native fast-scroll feel. Links keep the
+		// browser's default middle-click (open in new pane).
+		this.boundAutoScrollDown = (evt: MouseEvent) => {
+			if (this.autoScrollActive) return;
+			if (evt.button !== 1) return;
+			if (evt.target instanceof Element && evt.target.closest('a')) return;
+			const container = this.contentContainer;
+			if (!container) return;
+			evt.preventDefault();
+			this.autoScrollActive = true;
+			this.autoScrollBaseY = evt.clientY;
+			this.autoScrollDeltaY = 0;
+			container.addClass('book-autoscroll');
+			window.addEventListener('mousemove', this.boundAutoScrollMove!, { passive: true });
+			window.addEventListener('mousedown', this.boundAutoScrollExit!, { capture: true });
+			window.addEventListener('keydown', this.boundAutoScrollEsc!, { capture: true });
+			this.autoScrollRaf = window.requestAnimationFrame(this.autoScrollStep);
+		};
+		this.boundAutoScrollMove = (evt: MouseEvent) => {
+			if (!this.autoScrollActive) return;
+			this.autoScrollDeltaY = evt.clientY - this.autoScrollBaseY;
+		};
+		this.boundAutoScrollExit = (evt: MouseEvent) => {
+			if (!this.autoScrollActive) return;
+			this.endAutoScroll();
+			// Consume the exit click only when it landed on the book itself
+			// (an active autoscroll is a modal state; the first click closes it
+			// without scrolling/navigating — registers on the window in
+			// capture phase, BEFORE the book's own mousedown, so a middle click
+			// here toggles OFF instead of re-entering). Clicks elsewhere (ToC
+			// panel, sidebar) still exit but keep their normal behavior.
+			const container = this.contentContainer;
+			if (container && evt.target instanceof Node && container.contains(evt.target)) {
+				evt.preventDefault();
+				evt.stopImmediatePropagation();
+			}
+		};
+		this.boundAutoScrollEsc = (evt: KeyboardEvent) => {
+			if (!this.autoScrollActive) return;
+			if (evt.key === 'Escape') {
+				evt.preventDefault();
+				evt.stopImmediatePropagation();
+				this.endAutoScroll();
+			}
+		};
+		this.contentContainer.addEventListener('mousedown', this.boundAutoScrollDown, { capture: true });
+
 		// Debounced scroll-position persistence: writes the current scrollTop to
 		// plugin.scrollPositions after 2s of no scrolling (mirrors the height
 		// debounce in main.ts). The position is read back on the next loadBook
@@ -814,7 +925,14 @@ export class BookView extends FileView {
 		this.boundPersistScroll = () => {
 			if (this.initialLoadInProgress) return;
 			if (!this.contentContainer || !this.plugin || !this.filePath) return;
-			this.plugin.saveScrollPosition(this.filePath, this.contentContainer.scrollTop);
+			// Prefer the manager's per-frame scrollTop snapshot: the scroll
+			// event fires before the frame's layout is clean, and reading the
+			// live scrollTop there forces a synchronous style recalc of the
+			// whole book content. The frame snapshot is refreshed every rAF,
+			// so it trails the real position by at most one frame — invisible
+			// for a 2s-debounced persistence write.
+			const top = this.absoluteManager?.getScrollTop() ?? this.contentContainer.scrollTop;
+			this.plugin.saveScrollPosition(this.filePath, top);
 		};
 		this.contentContainer.addEventListener('scroll', this.boundPersistScroll, { passive: true });
 
@@ -1301,6 +1419,14 @@ export class BookView extends FileView {
 			this.contentContainer.removeEventListener('scroll', this.boundPersistScroll);
 		}
 		this.boundPersistScroll = null;
+		if (this.contentContainer) {
+			this.contentContainer.removeEventListener('mousedown', this.boundAutoScrollDown!);
+		}
+		this.endAutoScroll();
+		this.boundAutoScrollDown = null;
+		this.boundAutoScrollMove = null;
+		this.boundAutoScrollExit = null;
+		this.boundAutoScrollEsc = null;
 		for (const timer of this.refreshTimers.values()) {
 			window.clearTimeout(timer);
 		}

@@ -122,6 +122,12 @@ export class TocState {
 	viewportResizeObserver: ResizeObserver | null = null;
 	/** Cached TOC panel height for write-only scroll centering + the row window. */
 	tocViewportHeight = 0;
+	/** Cached TOC panel scrollTop. Refreshed from the panel's own scroll
+	 *  handler (window.ts) and after every internal panel scroll write, so the
+	 *  continuous per-frame reads in keepActiveInView never touch the DOM —
+	 *  reading scrollTop there forced a style recalc of the whole row list
+	 *  every frame. */
+	panelScrollTop = 0;
 	tocResizeObserver: ResizeObserver | null = null;
 
 	// --- Navigation guard ---
@@ -287,7 +293,11 @@ export class TocState {
 		const viewport = this.tocViewportHeight > 0 ? this.tocViewportHeight : this.containerEl.clientHeight;
 		const total = this.virtualOffsets[this.virtualOffsets.length - 1] ?? 0;
 		const max = Math.max(0, total - viewport);
-		this.containerEl.scrollTop = Math.max(0, Math.min(this.containerEl.scrollTop + delta, max));
+		// Read through the cached panel scrollTop (kept fresh by the panel's
+		// scroll handler and by every internal panel scroll write) so a layout
+		// change does not force a style recalc mid-tick.
+		this.containerEl.scrollTop = Math.max(0, Math.min(this.panelScrollTop + delta, max));
+		this.panelScrollTop = this.containerEl.scrollTop;
 
 		this.window?.render();
 	}

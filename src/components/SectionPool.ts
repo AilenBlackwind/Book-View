@@ -411,12 +411,14 @@ export class SectionPool {
 	private ioPending: { path: string; intersecting: boolean }[] = [];
 	private idleUnloadTimer = 0;
 	private ioWorkTimer = 0;
-	/** Scroll position captured at the last IntersectionObserver dispatch.
-	 *  Fresher than the manager's rAF snapshot (getScrollTop), which lags IO
-	 *  delivery by up to a frame — on a heavy book, by more, because the IO
-	 *  fires in its own task while the rAF callback is starved behind layout.
-	 *  drainQueue uses this as the primary drop-window position; a live read
-	 *  (readLiveScrollTop) corrects it when it drifted past the current spot. */
+	/** Scroll position captured at the last IntersectionObserver dispatch,
+	 *  taken from the manager's frame cache. drainQueue uses this as the
+	 *  primary drop-window position. It intentionally never reads the live
+	 *  scrollTop here: IO callbacks can land after a section mount dirtied the
+	 *  layout, and a live read then forces a full style recalc (measured
+	 *  33ms / 1277 elements). A TTL-gated live read (readLiveScrollTop)
+	 *  corrects the drop decision when this cached position drifted past the
+	 *  current spot. */
 	private ioScrollTop: number | null = null;
 	private liveScrollTop: number | null = null;
 	private liveScrollAt = 0;
@@ -503,14 +505,19 @@ export class SectionPool {
 				// boundary and let the next frame do the DOM work batched with
 				// the scroll-spy read. Loads/unloads here ran markdown renders
 				// and attach/detach churn synchronously inside the IO event.
-				// Capture the dispatch-time scroll position too. The browser has
-				// just computed the intersections, so its layout is clean and
-				// this read costs no reflow — unlike reading it later in
-				// drainQueue, after the mounts this batch may trigger. The frame
-				// snapshot (host.getScrollTop) can be stale when the main thread
-				// is busy, and judging the drop window against it drops sections
-				// entering the top overscan on a fast scroll-up.
-				this.ioScrollTop = this.host.scrollContainer.scrollTop;
+				// Capture the dispatch-time scroll position too — but from the
+				// manager's frame cache. A LIVE read of scrollTop here would
+				// force a full style recalc whenever this callback lands right
+				// after a drainQueue mount (measured 33ms / 1277 elements on
+				// DoOf); IO delivery is async, so "the browser just computed
+				// the intersections, layout is clean" does not hold by the time
+				// the callback actually runs. The frame snapshot is ~one frame
+				// stale at worst, which the drop window tolerates (hysteresis
+				// in processIoPending + reconcileVisibleSections + the
+				// TTL-gated readLiveScrollTop corrective keep it safe), while
+				// the frame's own read happens at the frame start where layout
+				// is clean — so it costs no reflow.
+				this.ioScrollTop = this.host.getScrollTop();
 				for (const entry of entries) {
 					const el = entry.target as HTMLElement;
 					const path = el.dataset.path;
@@ -1382,15 +1389,30 @@ export class SectionPool {
 		const clientHeight = this.host.getClientHeight();
 		const margin = OVERSCAN_TOP + this.host.loadMargin;
 		const primaryBottom = primary + clientHeight;
-		// EXPERIMENT (2026-08-11): the heavy-section placeholder path
-		// (loadPlaceholder + upgrade-on-settle) is disabled — heavy notes now
-		// full-render even mid-gesture. Rationale: the Phase-3 fixes (no
-		// compensation scrollTop writes during a gesture, no ToC rect reads
-		// during a gesture) broke the feedback loop, so far fewer sections load
-		// concurrently and the 100-260ms math renders may now fit in the spare
-		// frames. If the stress-book cold start still janks, restore the
-		// placeholder branch and the upgrade machinery (they are kept, inert).
-		// `scrolling` below is still used by the content-pending deferral.
+		// The heavy-subsection placeholder path (loadPlaceholder + upgrade-on-settle)
+		// is deliberately not used here. Heavy notes full-render even mid-gesture:
+		// the Phase-3 fixes (no compensation scrollTop writes during a gesture, no
+		// ToC rect reads during a gesture) broke the feedback loop, so far fewer
+		// sections load concurrently and the 100-260ms math renders fit in the
+		// spare frames. Deferring a big-prose note (large DOM, cheap render) to a
+		// placeholder made fast scrolls show placeholder excerpts instead of the
+		// real text, and moved the mount's style+layout flush to the moment the
+		// user rests on the note — the render must land somewhere, and users
+		// read that pop-in as a lag. `scrolling` here still gates the
+		// content-pending deferral below.
+		//
+		// Identified residual cost, left as-is for now (Decided 2026-09-06):
+		// the heavy fully-rendered mount (e.g. a 108KB note → 1411 elements)
+		// schedules a ~38ms "Recalculate style" pass over the freshly inserted
+		// subtree. The flame entry reads "Initiated by: Schedule style
+		// recalculation", "Pending for 0.2ms" — a plain scheduled recalc, NOT a
+		// forced reflow: nothing in the drainQueue/loadSection task reads
+		// geometry synchronously (applyTransform/types/fold-tag write only;
+		// fold-stub height → setTimeout, ToC rects → requestFrame). It is the
+		// inherent cost of inserting that much DOM and appears rarely (only on
+		// heavy mounts, mid-scroll or not). Deferring heavy mounts to a
+		// placeholder was tried and reverted (see above); if a scroll hitch ever
+		// shows up in the profiler, reconsider gate-only-during-gesture mounts.
 		const scrolling = Date.now() - this.lastUserScrollTimestamp < HEAVY_DEFER_MS;
 		let staleDropped: string[] = [];
 		// shift() per item was O(n²) when a cold-start IO storm queued ~2000
@@ -1493,14 +1515,29 @@ export class SectionPool {
 		// user scrolled past, which caused a multi-second lag after long fast
 		// scrolls while the accumulated sections were torn down. Immediate
 		// unload keeps the mounted set small; DOM is parked in the render
-		// cache, so scrolling back reattaches without a full re-render.
+		// cache, so scrolling back reattaches without a full re-render. Sections
+		// whose extent still overlaps the load window are kept mounted.
+		const viewport = this.host.getClientHeight();
+		const ioTop = this.ioScrollTop ?? 0;
+		const winTop = ioTop - OVERSCAN_TOP;
+		const winBottom = ioTop + viewport + this.host.loadMargin;
 		for (const item of pending) {
 			if (this.host.isDestroyed()) continue;
 			if (item.intersecting) {
 				this.enqueueRender(item.path);
-			} else {
-				this.unloadSection(item.path);
+				continue;
 			}
+			// Hysteresis around the section boundary: a pending non-center
+			// crossing inside the load window means the section's top just
+			// left it, while its content likely still fills the viewport (a
+			// small section at the end of a giant neighbor). Unloading now and
+			// re-mounting two frames later as the neighbor's scroll-back
+			// crosses the same boundary re-runs the whole markdown build just
+			// for that oscillation. Geometrically it belongs to the section
+			// still being read off-screen.
+			const data = this.host.sections.get(item.path);
+			if (data?.component && data.offset + data.height >= winTop && data.offset <= winBottom) continue;
+			this.unloadSection(item.path);
 		}
 		this.dbgQueueMs += performance.now() - t0;
 	}
