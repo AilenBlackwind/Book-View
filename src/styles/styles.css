@@ -249,8 +249,7 @@
 }
 
 .book-section-absolute .markdown-rendered > :first-child,
-.book-section-absolute .markdown-rendered > :first-child *,
-.book-section-absolute .markdown-rendered > [class*="el-"]:first-child * {
+.book-section-absolute .markdown-rendered > :first-child * {
 	margin-top: 0 !important;
 	margin-block-start: 0 !important;
 }
@@ -259,15 +258,12 @@
    the callout's padding is part of its own box (background + radius), and
    stripping it would push the title flush against the note's top edge. */
 .book-section-absolute .markdown-rendered > :first-child:not(.callout),
-.book-section-absolute .markdown-rendered > :first-child:not(.callout) *:not(.callout),
-.book-section-absolute .markdown-rendered > [class*="el-"]:first-child:not(.callout),
-.book-section-absolute .markdown-rendered > [class*="el-"]:first-child *:not(.callout) {
+.book-section-absolute .markdown-rendered > :first-child:not(.callout) *:not(.callout) {
 	padding-top: 0 !important;
 }
 
 .book-section-absolute .markdown-rendered > :last-child,
-.book-section-absolute .markdown-rendered > :last-child *,
-.book-section-absolute .markdown-rendered > [class*="el-"]:last-child * {
+.book-section-absolute .markdown-rendered > :last-child * {
 	margin-bottom: 0 !important;
 	margin-block-end: 0 !important;
 }
@@ -276,9 +272,7 @@
    of a note must keep its bottom padding or its last line is clipped flush
    against the callout's bottom border. */
 .book-section-absolute .markdown-rendered > :last-child:not(.callout),
-.book-section-absolute .markdown-rendered > :last-child:not(.callout) *:not(.callout),
-.book-section-absolute .markdown-rendered > [class*="el-"]:last-child:not(.callout),
-.book-section-absolute .markdown-rendered > [class*="el-"]:last-child *:not(.callout) {
+.book-section-absolute .markdown-rendered > :last-child:not(.callout) *:not(.callout) {
 	padding-bottom: 0 !important;
 }
 
@@ -368,11 +362,14 @@
 }
 
 /* Virtualized panel: the spacer sets the total scroll height (inline style),
-   the list is an absolutely positioned window over it. content-visibility
-   lets the browser skip layout of off-screen spacer content. */
+   the list is an absolutely positioned window over it. No content-visibility:
+   the list is virtualized (only the ~viewport window is in the DOM) and out of
+   flow, so there is nothing for CV-auto to skip — and any mutation inside a
+   CV-auto container makes Chromium recompute styles for its whole subtree
+   (~591 elements per pill/`is-active` change in profiles). `contain: layout
+   paint style` still scopes the recalc. */
 .book-toc-spacer {
 	position: relative;
-	content-visibility: auto;
 	contain: layout paint style;
 }
 
@@ -435,24 +432,28 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+	/* Rotation lives on the wrapper, not the inner svg: a transform
+	   transition on an HTML node is promoted to the compositor, while an
+	   svg target cannot be accelerated at all (Chrome logs "Compositing
+	   failed — Transform-related property cannot be accelerated on target"
+	   and repaints every frame on the main thread). The glyph is centered
+	   in the box, so rotating the wrapper turns the chevron in place
+	   exactly like the old svg transform. */
+	transform: translateY(-2px) rotate(90deg);
+	transition: transform 150ms ease;
 }
 
 .book-toc-chevron svg {
 	width: 12px;
 	height: 12px;
 	display: block;
-	/* Raised ~2px: the chevron glyph's optical bottom hangs below the heading
-	   text's baseline band. Applied in both states so the open↔collapsed
-	   rotation still turns around the same center. */
-	transform: translateY(-2px) rotate(90deg);
-	transition: transform 150ms ease;
 }
 
 .book-toc-chevron:hover {
 	color: var(--text-normal);
 }
 
-.book-toc-heading.book-toc-collapsed .book-toc-chevron svg {
+.book-toc-heading.book-toc-collapsed .book-toc-chevron {
 	transform: translateY(-2px) rotate(0deg);
 }
 
@@ -507,21 +508,35 @@
 
 .book-toc-highlight {
 	position: absolute;
-	/* Fill the item's content area (padding: 2px 8px) so the pill always
-	   matches the text region regardless of --font-smallest or UI zoom.
-	   Previous hardcoded top:-2px / bottom:6px shifted relative to the
-	   heading text at different font sizes. */
-	top: 2px;
-	bottom: 2px;
-	left: 4px;
-	right: 4px;
+	/* Static geometry: the bar is moved with `transform: translate3d(...)`
+	   only (compositor, no layout), so per-frame tracking of the active row
+	   costs nothing. top/left are 0 — the 4px side insets, 2px top inset and
+	   22px height (over a fixed 26px row) match the old in-row centering
+	   exactly, but the inset px are part of the transform, so the bar scales
+	   with the row at any Obsidian zoom instead of drifting. Width is fixed
+	   per heading level by the level classes below
+	   (indent padding = (level-1)*12px). */
+	top: 0;
+	left: 0;
+	height: 22px;
+	width: calc(100% - 8px);
 	background: var(--bv-toc-highlight-color, var(--interactive-accent));
 	opacity: 0.15;
 	border-radius: 4px;
 	pointer-events: none;
 	transition: opacity 0.4s ease-out;
-	z-index: 0;
+	will-change: transform;
+	/* The pill is a direct child of the spacer window (sibling of the row
+	   list), so it must paint above the rows it overlays. */
+	z-index: 1;
 }
+
+.book-toc-highlight-level-1 { width: calc(100% - 8px); }
+.book-toc-highlight-level-2 { width: calc(100% - 20px); }
+.book-toc-highlight-level-3 { width: calc(100% - 32px); }
+.book-toc-highlight-level-4 { width: calc(100% - 44px); }
+.book-toc-highlight-level-5 { width: calc(100% - 56px); }
+.book-toc-highlight-level-6 { width: calc(100% - 68px); }
 
 .book-toc-highlight.fading {
 	opacity: 0;
