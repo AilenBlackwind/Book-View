@@ -241,7 +241,7 @@ export class AbsoluteSectionManager {
 		links: ManifestLink[],
 		app: App,
 		masterFile: TFile,
-		loadMargin: number = 800,
+		loadMargin: number = 400,
 		persistence: HeightPersistence = {},
 		guard: ScrollGuard | null = null,
 	) {

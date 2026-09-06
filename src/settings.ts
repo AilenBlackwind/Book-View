@@ -58,7 +58,7 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	tocCollapseRestLevel: 0,
 	tocAutoOpen: true,
 	tocFocusOnBook: true,
-	loadMargin: 800,
+	loadMargin: 400,
 	wheelFlickEnabled: true,
 	wheelFlickStrength: 2,
 	wheelFlickFriction: 0.92,

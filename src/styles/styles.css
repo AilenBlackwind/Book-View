@@ -455,7 +455,13 @@
 	   in the box, so rotating the wrapper turns the chevron in place
 	   exactly like the old svg transform. */
 	transform: translateY(-2px) rotate(90deg);
-	transition: transform 150ms ease;
+	/* Scroll-perf A/B: the transform transition was temporarily disabled (was
+	   `transition: transform 150ms ease`). When toggling collapse classes live
+	   during fast scroll (auto-expand recycle), the starts of dozens of
+	   compositor transitions were the only per-row work left; this isolates
+	   whether the frame drops near them were the transitions or the rebuild.
+	   Restore the transition after the A/B. */
+	transition: none;
 }
 
 .book-toc-chevron svg {

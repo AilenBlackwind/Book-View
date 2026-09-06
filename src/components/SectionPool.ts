@@ -5,7 +5,7 @@ import { estimateHeight, startsWithHeading, endsWithHeading, guessFirstType, gue
 import { getFirstContentElement, getLastContentElement, getHeaderLevel } from '../utils/dom';
 import { DebugLog } from '../utils/debug';
 
-export const OVERSCAN_TOP = 2500;
+export const OVERSCAN_TOP = 1000;
 
 /** Path prefix of synthetic warning sections (broken/empty notes). These are
  *  layout-only slots: no file backs them, they never enter the render queue,
@@ -463,7 +463,6 @@ export class SectionPool {
 	 *  uses this to shift tree rebuilds out of frames that are already
 	 *  loaded with markdown rendering work (first-visit freeze). */
 	lastFreshLoadAt = 0;
-
 	// Debug counters (live in the togglable debug layer).
 	dbgIo = 0;
 	dbgLoads = 0;
@@ -935,18 +934,17 @@ export class SectionPool {
 		// Symmetric to the enqueue: reconcile is the only per-frame pass with
 		// fresh offsets, and unloads that live in IO exits (they coalesce late
 		// during fast glides) or on the idle-settle timer let the live DOM grow
-		// to span the whole scrubbed band — measured 65+ sections / 17K px,
-		// torn down in one late burst after the gesture. Prune mounted sections
-		// outside the same load window now, but only while the book actually
-		// moved, so idle cleanup stays with unloadFarSections and the prerender
-		// margin is untouched.
+		// to span the whole scrubbed band, torn down in one late burst after
+		// the gesture. Prune mounted sections outside the same load window now,
+		// but only while the book actually moved, so idle cleanup stays with
+		// unloadFarSections and the prerender margin is untouched.
 		if (moved) {
 			// Rate-limited: pruning is about bounding the set, not fixed
-			// cadence, and each unload itself pays a style recalc (~25ms/558
-			// nodes, enhancer-driven, :has()-invalidation that CSS containment
-			// cannot scope). Every 150ms of motion is plenty — the band kept
-			// grows only by the distance traveled in one interleave (a few
-			// sections), never by the whole scrubbed range.
+			// cadence, and each unload itself pays a style recalc of the whole
+			// mounted set. The load window is kept small (OVERSCAN_TOP 1000 +
+			// loadMargin), so the set stays ~150-250 nodes and the recalc stays
+			// a few ms. The band grows only by the distance traveled in one
+			// interleave — a few sections — never by the whole scrubbed range.
 			const now = performance.now();
 			if (now - this.lastPruneAt >= 150) {
 				this.lastPruneAt = now;
@@ -1058,6 +1056,7 @@ export class SectionPool {
 			this.sectionResizeObserver.observe(data.el);
 			data.deferralCount = 0;
 			data.renderFailures = 0;
+			this.flushMountStyle();
 			return;
 		}
 
@@ -1191,6 +1190,7 @@ export class SectionPool {
 			// then carries the real height AND the retyped gaps together.
 			this.gapsDirty = true;
 		}
+		this.flushMountStyle();
 	}
 
 	/** Run the deferred gap-only layout update if no height report merged it
@@ -1199,6 +1199,25 @@ export class SectionPool {
 		if (!this.gapsDirty) return;
 		this.gapsDirty = false;
 		this.host.scheduleUpdate();
+	}
+
+	/**
+	 * Force a synchronous flush of the style/layout recalc that mounting a
+	 * section just dirtied (insertion + Obsidian's enhancer class mutations
+	 * invalidate the whole mounted set, ~590 nodes on a small-notes book).
+	 * loadSection runs inside macrotasks (drainQueue's setTimeout, the
+	 * prerender batch, upgradePlaceholder's pump) — never inside the scroll
+	 * rAF frame — so paying the recalc here relocates it out of the glide:
+	 * WheelAccelerator's per-frame scrollTop write then lands on a clean tree
+	 * instead of being the first touch that forces the recalc synchronously
+	 * in that frame (the ~18ms Recalculate-style bars during fast scrolls).
+	 * The read is deliberately cheap-scoped parents-only (scrollTop), the same
+	 * primitive the codebase already reads in the idle-safe parkIfOutOfZone —
+	 * not getBoundingClientRect, which would demand the full book's layout.
+	 */
+	private flushMountStyle(): void {
+		if (this.host.isDestroyed()) return;
+		void this.host.scrollContainer.scrollTop;
 	}
 
 	/** Current scroll position, read live at most once per LIVE_READ_TTL.
@@ -1402,6 +1421,13 @@ export class SectionPool {
 
 	private drainQueue(): void {
 		if (this.host.isDestroyed()) return;
+		// Drain the full load window (OVERSCAN_TOP above, loadMargin below):
+		// mounts happen well before the user reads the section, so nothing
+		// visibly loads on screen. The mounted set is bounded by the window +
+		// the rate-limited far prune in reconcile, keeping each mount/unload's
+		// whole-set style recalc small. `scrolling` here only gates the
+		// content-pending deferral below.
+		const scrolling = Date.now() - this.lastUserScrollTimestamp < HEAVY_DEFER_MS;
 		const t0 = performance.now();
 		// Fast scroll enqueues every section that crossed the overscan window,
 		// but renders run at maxConcurrent so the queue drains slower than a
@@ -1436,19 +1462,18 @@ export class SectionPool {
 		// read that pop-in as a lag. `scrolling` here still gates the
 		// content-pending deferral below.
 		//
-		// Identified residual cost, left as-is for now (Decided 2026-09-06):
-		// the heavy fully-rendered mount (e.g. a 108KB note → 1411 elements)
-		// schedules a ~38ms "Recalculate style" pass over the freshly inserted
-		// subtree. The flame entry reads "Initiated by: Schedule style
-		// recalculation", "Pending for 0.2ms" — a plain scheduled recalc, NOT a
-		// forced reflow: nothing in the drainQueue/loadSection task reads
-		// geometry synchronously (applyTransform/types/fold-tag write only;
-		// fold-stub height → setTimeout, ToC rects → requestFrame). It is the
-		// inherent cost of inserting that much DOM and appears rarely (only on
-		// heavy mounts, mid-scroll or not). Deferring heavy mounts to a
-		// placeholder was tried and reverted (see above); if a scroll hitch ever
-		// shows up in the profiler, reconsider gate-only-during-gesture mounts.
-		const scrolling = Date.now() - this.lastUserScrollTimestamp < HEAVY_DEFER_MS;
+		// Identified residual cost, addressed by flushMountStyle: a mount
+		// invalidates the style of the whole mounted set (~590 nodes on a
+		// small-notes book). Without an explicit flush inside the loadSection
+		// task, that recalc was deferred and then paid synchronously by
+		// WheelAccelerator's next frame's scrollTop write — the ~18ms
+		// "Forced reflow" bars during fast scrolls (the flame stack read
+		// `set(scrollTop) < step`, First invalidated: loadSection->drainQueue).
+		// flushMountStyle now reads the same scrollTop in the mount macrotask,
+		// relocating the recalc out of the glide frame so the wheel's write
+		// lands on a clean tree. The heavy fully-rendered mount still pays its
+		// ~38ms subtree recalc (inherent to inserting that much DOM, "Pending")
+		// — that is not a forced flush and stays as-is.
 		let staleDropped: string[] = [];
 		// shift() per item was O(n²) when a cold-start IO storm queued ~2000
 		// sections at once. Consume a prefix by index and remove it with one
@@ -1458,9 +1483,16 @@ export class SectionPool {
 		let head = 0;
 		while (this.activeRenderCount < this.maxConcurrent && head < this.renderQueue.length) {
 			const path = this.renderQueue[head++]!;
-			this.renderQueueSet.delete(path);
 			const data = this.host.sections.get(path);
-			if (!data || data.component) continue;
+			if (!data) {
+				this.renderQueueSet.delete(path);
+				continue;
+			}
+			// Just-in-time gate is intentionally absent: the full load window
+			// drains while scrolling (mounts off-screen ahead), and the small
+			// window keeps each mount's whole-set style recalc in the low ms.
+			this.renderQueueSet.delete(path);
+			if (data.component) continue;
 			const raw = this.host.rawContent.get(path);
 			// Shared staleness gate: a full render of a far-drifted section is
 			// churn. reconcileVisibleSections re-enqueues it the moment it
@@ -1545,13 +1577,11 @@ export class SectionPool {
 		const t0 = performance.now();
 		const pending = this.ioPending;
 		this.ioPending = [];
-		// Unload far sections immediately instead of deferring until the
-		// scroll settles. Deferring made the DOM grow with every section the
-		// user scrolled past, which caused a multi-second lag after long fast
-		// scrolls while the accumulated sections were torn down. Immediate
-		// unload keeps the mounted set small; DOM is parked in the render
-		// cache, so scrolling back reattaches without a full re-render. Sections
-		// whose extent still overlaps the load window are kept mounted.
+		// Unload sections on IO exit immediately: transient outside-window
+		// sections are torn down right away so the mounted set stays at the
+		// load window even across long glides (the render cache parks the DOM,
+		// so scrolling back reattaches without a re-render). Sections whose
+		// extent still overlaps the window keep mounted (hysteresis).
 		const viewport = this.host.getClientHeight();
 		const ioTop = this.ioScrollTop ?? 0;
 		const winTop = ioTop - OVERSCAN_TOP;
@@ -1596,6 +1626,10 @@ export class SectionPool {
 				this.unloadSection(path);
 			}
 		}
+		// The gesture has settled: re-drain so sections that the scrolling
+		// viewport-gate left queued get their render now (the drain's `scrolling`
+		// gate is off, so the whole load window fills).
+		this.scheduleIoWork();
 	}
 
 	private schedulePreRender(): void {
