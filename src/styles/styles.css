@@ -45,7 +45,15 @@
 	content-visibility: visible;
 	contain-intrinsic-size: none;
 	display: flow-root;
-	contain: none;
+	/* Style containment scopes the style recalc that Obsidian's enhancer
+	   triggers by touching heading classes inside a section to that section's
+	   subtree. Without it Chromium propagates the invalidation across every
+	   mounted section (~500-700 nodes per load/unload in profiles). Layout
+	   containment stays off: the section's height is script-measured, and
+	   `contain: layout` would rebase position:sticky descendants to inside
+	   the section. content-visibility stays `visible` (skipping would break
+	   height measurement of far-overscan sections). */
+	contain: style;
 }
 
 .book-section-folded {
@@ -389,6 +397,11 @@
 .book-toc-file {
 	height: 34px;
 	box-sizing: border-box;
+	/* Style containment per row: without it any class/text change inside
+	   one row (the pill's is-active, auto-expand updates) forces Chromium to
+	   recalc the whole spacer's rows (~660 elements in profiles). Scoping to
+	   the row makes the per-crossing ToC rebuild ~row-sized. */
+	contain: style;
 }
 
 .book-toc-file-title {
@@ -410,6 +423,8 @@
 	height: 26px;
 	box-sizing: border-box;
 	opacity: 1;
+	/* See .book-toc-file: scope per-row class/text mutations. */
+	contain: style;
 }
 
 .book-toc-heading-inner {

@@ -453,6 +453,9 @@ export class SectionPool {
 	 *  that repositioning are the cold-start freeze (rm=2115ms in one debug
 	 *  window), so any movement must count as an active gesture. */
 	private lastReconcileScrollTop: number | null = null;
+	/** Last time pruneFarSections ran (mounted-set pruning is timeboxed so
+	 *  the unload-side style recalc de-duplicates across fast scrolls). */
+	private lastPruneAt = 0;
 	private upgradeQueue: string[] = [];
 	private upgradeInFlight = false;
 	private upgradePumpTimer = 0;
@@ -938,7 +941,17 @@ export class SectionPool {
 		// moved, so idle cleanup stays with unloadFarSections and the prerender
 		// margin is untouched.
 		if (moved) {
-			this.pruneFarSections(scrollTop, clientHeight);
+			// Rate-limited: pruning is about bounding the set, not fixed
+			// cadence, and each unload itself pays a style recalc (~25ms/558
+			// nodes, enhancer-driven, :has()-invalidation that CSS containment
+			// cannot scope). Every 150ms of motion is plenty — the band kept
+			// grows only by the distance traveled in one interleave (a few
+			// sections), never by the whole scrubbed range.
+			const now = performance.now();
+			if (now - this.lastPruneAt >= 150) {
+				this.lastPruneAt = now;
+				this.pruneFarSections(scrollTop, clientHeight);
+			}
 		}
 	}
 
