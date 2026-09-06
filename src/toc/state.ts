@@ -113,6 +113,9 @@ export class TocState {
 	pendingTagHeadings: PendingTagSection[] = [];
 	tagFrameRequested = false;
 	highlightEl: HTMLElement | null = null;
+	/** The spacer element that hosts the (single, transform-positioned)
+	 *  highlight bar — set by the window, removed on teardown. */
+	highlightHost: HTMLElement | null = null;
 	fadeTimer = 0;
 	lastCenterIndex = -1;
 	/** Trailing-debounce timer for post-settle scroll centering. */

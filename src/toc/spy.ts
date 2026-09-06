@@ -15,15 +15,8 @@ const ACTIVE_EDGE_MARGIN = 52;
  *  gesture truly rests — not after the whole gesture-defer window (700ms). */
 const CENTER_SCROLL_SETTLE_MS = 50;
 
-/** How long the book must have been still before a pending visibility change
- *  is applied to the panel. Mirrors CENTER_SCROLL_SETTLE_MS: measured from the
- *  last book scroll event, so a glide keeps extending it and the one rebuild
- *  that applies the final active path fires just past the moment the wheel
- *  rests — instead of one ~30ms panel rebuild per heading crossing while the
- *  glide is still running. */
-const APPLY_VISIBILITY_SETTLE_MS = 50;
-
-/** Scroll spy: maps the book's scroll position to the active ToC entry,
+/**
+ * Scroll spy: maps the book's scroll position to the active ToC entry,
  *  maintains per-entry heading positions, and drives the highlight + panel
  *  centering. Runs off the shared manager frame; never reads layout inside
  *  scroll events. With the virtualized panel the highlight and centering go
@@ -32,8 +25,11 @@ const APPLY_VISIBILITY_SETTLE_MS = 50;
 export class TocSpy {
 	/** Last bestIndex reported by pickActiveIndex; used to log only on change. */
 	private _prevSpyIndex = -1;
-	/** Deferred applyVisibility settle timer (see scheduleApplyVisibility). */
-	private visibilityRafId = 0;
+	/** Cached pill transform string; movePill skips the write when the value
+	 *  is unchanged (scrolling within one heading moves nothing). */
+	private lastPillTransform = '';
+	/** Last heading level applied as the pill's width class. */
+	private lastPillLevel = 0;
 	/** rAF id for the post-paint deferred panel center scroll (see
 	 *  scheduleCenterScroll). */
 	private centerDeferRaf = 0;
@@ -201,7 +197,10 @@ export class TocSpy {
 		}
 
 		this.updateHighlight(highlightIndex);
-		this.keepActiveInView(highlightIndex);
+
+		// keepActiveInView (panel edge pin) runs inside updateHighlight: its
+		// scrollTop write only fires when the active row crosses the edge
+		// margin, not on every frame.
 
 		// Center the active item once the scroll settles. Centering inside the
 		// scroll frame both forced a layout read (li.offsetTop) and restarted a
@@ -213,11 +212,17 @@ export class TocSpy {
 			this.scheduleCenterScroll(highlightIndex);
 		}
 
-		// Track the active path immediately (the pill and centering keep working
-		// off the virtual state), but defer the panel rebuild to the settle
-		// beat: each rebuild re-creates ~1000 elements of row DOM, and doing
-		// that once per heading crossing while the glide is still running
-		// made the ToC the dominant scroll-frame cost with auto-expand on.
+		// Expand the active path live, in the scroll frame: the pill's offset
+		// math reads the virtual list, so a section that is not yet expanded
+		// has no rows to land the highlight on, and deferring the rebuild to
+		// the settle beat ("the indicator only works on the last-opened level
+		// until the scroll stops") read as a bug. The rebuild is now cheap
+		// enough to run per crossing: rebuildVirtualData is one O(entries)
+		// pass, and the row window RECYCLES existing rows in place by
+		// data-index instead of re-creating the ~1000-element row DOM that the
+		// old settle-batching was built to avoid. Only far-expanded sections'
+		// rows outside the visible range are skipped (virtualized), so the
+		// panel follows the active heading while the book is still moving.
 		if (bestIndex !== s.pendingPathIndex) {
 			s.pendingPathIndex = bestIndex;
 			let newPath: Set<number>;
@@ -235,7 +240,11 @@ export class TocSpy {
 
 			if (!s.setsEqual(s.activePathSet, newPath)) {
 				s.activePathSet = newPath;
-				this.scheduleApplyVisibility(s);
+				s.applyVisibility();
+				// The rebuild changed the virtual offsets; re-pin the active
+				// row with the fresh geometry so the panel does not drift a
+				// frame behind the expansion above it.
+				this.keepActiveInView(highlightIndex);
 			}
 		}
 
@@ -275,89 +284,92 @@ export class TocSpy {
 		return item !== undefined && item >= 0;
 	}
 
-	/** Apply the highlight for the active row, synchronously in the scroll
-	 *  frame (before this frame paints), so the pill tracks the scroll live
-	 *  like Quartz's in-view toggle. The mutation is cheap here because (a) it
-	 *  only reruns when the active row actually changes — scrolling within one
-	 *  heading touches nothing; (b) the class toggle + pill reparent is
-	 *  style-only for the `.book-toc-spacer` (contain: layout paint style), so
-	 *  the recalc is scoped at paint instead of forcing a read-flush; and
-	 *  (c) the frame's own layout reads (scrollTop, positions, panelScrollTop)
-	 *  all happened earlier in onScrollTick against cached/virtual values, so
-	 *  no dirty-to-clean DOM read follows the mutation. The only read that
-	 *  could collide — the post-settle panel center scrollTo — is deferred
-	 *  through a double rAF (see scheduleCenterScroll) to land after paint. */
+	/** Apply the highlight live, once per scroll frame, with the (virtual)
+	 *  active index. Every write here is designed to be free of layout:
+	 *
+	 *  - The pill is a single absolutely-positioned element inside the spacer,
+	 *    moved with `transform: translate3d(...)` — a compositor-only change
+	 *    that invalidates NO layout and keeps the marker tracking the active
+	 *    row during fast flicks instead of waiting for the scroll to settle.
+	 *  - The `is-active` toggle is a style-only class swap on two anchors
+	 *    (native classList, not Obsidian's addClass/removeClass, whose
+	 *    bookkeeping showed up as the style-invalidating writer — "First
+	 *    invalidated: enhance.js" — in every earlier profile).
+	 *  - Identical frame-to-frame state writes nothing: movePill caches the
+	 *    transform string and the width/level class, apply matches against
+	 *    activeHeading, and keepActiveInView only writes panel scrollTop when
+	 *    the row crosses its edge margin.
+	 *
+	 *  Because no write here dirties the panel's layout, the panel window's
+	 *  ~600-700-element style recalc ("Recalculate style" in every earlier
+	 *  scroll-frame profile) no longer happens per frame: it came from the old
+	 *  appendChild-reparent of the pill onto the active row, from the core
+	 *  addClass wrapper, and from forced offsetHeight flushes — all removed.
+	 *  The frame's own layout reads are cached/virtual (no dirty-to-clean DOM
+	 *  read anywhere in the tick). */
 	updateHighlight(index: number): void {
 		this.applyHighlight(index);
+		this.keepActiveInView(index);
+	}
+
+	/** Apply the highlight synchronously (navigation clicks, visibility
+	 *  rebuilds). Same live writes as updateHighlight; nothing to defer. */
+	applyHighlightNow(index: number): void {
+		this.applyHighlight(index);
+		this.keepActiveInView(index);
 	}
 
 	private applyHighlight(index: number): void {
 		const s = this.state;
-		if (index < 0) {
-			s.activeHeading?.removeClass('is-active');
-			s.activeHeading = null;
-			s.highlightEl?.remove();
-			return;
-		}
-		const el = s.rowAnchorByEntry.get(index);
-		if (!el) return;
-
-		// Only touch the DOM when the active item actually changes; during a
-		// scroll within one heading the active item is stable.
+		const el = index >= 0 ? s.rowAnchorByEntry.get(index) : undefined;
 		if (el !== s.activeHeading) {
-			s.activeHeading?.removeClass('is-active');
-			el.addClass('is-active');
-			s.activeHeading = el;
-
-			// Host the highlight bar inside the active row: it then follows the
-			// item automatically through collapse/expand and window re-renders,
-			// so it can never sit on a stale cached position. Created lazily
-			// directly in its target <li>: eager creation left it as a
-			// full-width child of containerEl for one frame before being
-			// reparented — a visible flash.
-			const li = s.rowByEntry.get(index);
-			if (!li) return;
-			if (!s.highlightEl) {
-				s.highlightEl = li.createDiv({ cls: 'book-toc-highlight' });
-			} else if (s.highlightEl.parentElement !== li) {
-				li.appendChild(s.highlightEl);
-			}
+			s.activeHeading?.classList.remove('is-active');
+			if (el) el.classList.add('is-active');
+			s.activeHeading = el ?? null;
 		}
+		this.movePill(index);
 	}
 
-	/** Apply the active path's visibility on the settle beat. A visibility
-	 *  change rebuilds the row window (~1000 elements of DOM); applied once per
-	 *  heading crossing while the book is moving, that work sat squarely in
-	 *  the scroll frame and its layout dirt poisoned every read in the frame.
-	 *  Self-extending: while the book is still moving the timer re-arms, so a
-	 *  glide applies exactly one rebuild with the FINAL active path, just past
-	 *  the moment the wheel rests. */
-	private scheduleApplyVisibility(s: TocState): void {
-		// Initial application must be synchronous: deferring past paint makes
-		// the ToC render collapsed/empty then snap open — a visible flash.
-		// After the first applyVisibility, rowByEntry is populated and every
-		// subsequent call goes through the settle deferral.
-		if (!s.rowByEntry.size) {
-			s.applyVisibility();
-			return;
+	/** Move the single highlight bar onto the active row using virtual
+	 *  offsets, via `transform` ONLY — never top/left — so per-frame movement
+	 *  never dirties the panel's layout. The bar is a child of the spacer
+	 *  window (highlightHost), not of the row, so no reparent on row change;
+	 *  it and the row window share the spacer's coordinate space, so the
+	 *  row's toc offset IS the bar's y. Width and level come from static CSS
+	 *  classes (set only when the heading level changes); identical frames
+	 *  write nothing (cached transform string). A row outside the rendered
+	 *  window (or a file row, which gets no anchor) hides the bar below the
+	 *  spacer's paint clip; it returns the moment the row re-renders
+	 *  (reapplyHighlight runs after every window render). */
+	private movePill(index: number): void {
+		const s = this.state;
+		const host = s.highlightHost;
+		if (!host) return;
+		const el = index >= 0 ? s.rowAnchorByEntry.get(index) : undefined;
+		let transform = 'translate3d(0, -99999px, 0)';
+		let level = 0;
+		if (el) {
+			const item = s.entryToItem[index];
+			const top = item !== undefined && item >= 0 ? (s.virtualOffsets[item] ?? 0) : 0;
+			const entry = s.entries[index];
+			level = entry?.level ?? 1;
+			const indent = (level - 1) * 12;
+			transform = `translate3d(${indent + 4}px, ${top + 2}px, 0)`;
 		}
-		if (this.visibilityRafId) return;
-		this.visibilityRafId = window.setTimeout(() => {
-			this.visibilityRafId = 0;
-			// The book may still be gliding after the wheel gesture ended; the
-			// rebuild competes with the flick's remaining frames. Extend until
-			// the book has been still for APPLY_VISIBILITY_SETTLE_MS.
-			if (s.positionSource?.isGestureActive(APPLY_VISIBILITY_SETTLE_MS)) {
-				this.scheduleApplyVisibility(s);
-				return;
+		if (!s.highlightEl) {
+			s.highlightEl = host.createDiv({ cls: 'book-toc-highlight' });
+		}
+		const pill = s.highlightEl;
+		if (level !== this.lastPillLevel) {
+			this.lastPillLevel = level;
+			for (let lv = 1; lv <= 6; lv++) {
+				pill.classList.toggle(`book-toc-highlight-level-${lv}`, lv === level);
 			}
-			s.applyVisibility();
-			// Flush the layout dirtied by the row rebuild HERE, at the settle
-			// beat where the book is idle and no scroll frame competes: the
-			// next input's reads (wheel notch, native scroll event) then find a
-			// clean layout instead of force-reflowing a fresh panel rebuild.
-			void s.containerEl.offsetHeight;
-		}, APPLY_VISIBILITY_SETTLE_MS);
+		}
+		if (transform !== this.lastPillTransform) {
+			this.lastPillTransform = transform;
+			pill.setCssProps({ transform });
+		}
 	}
 
 	/** Re-apply the highlight after a window render replaced the row elements
@@ -366,7 +378,7 @@ export class TocSpy {
 		const s = this.state;
 		if (s.activeEntryIndex < 0) return;
 		const mode = s.settings?.autoExpandMode ?? 'disabled';
-		this.updateHighlight(this.visibleAncestor(s.activeEntryIndex, mode !== 'disabled'));
+		this.applyHighlightNow(this.visibleAncestor(s.activeEntryIndex, mode !== 'disabled'));
 	}
 
 	/** Write-only scroll to keep the active row inside the panel viewport.
@@ -453,10 +465,8 @@ export class TocSpy {
 		const s = this.state;
 		s.positionSource?.removeFrameCallback(this.onFrameTick);
 		s.tickScheduled = false;
-		if (this.visibilityRafId) {
-			window.clearTimeout(this.visibilityRafId);
-			this.visibilityRafId = 0;
-		}
+		this.lastPillTransform = '';
+		this.lastPillLevel = 0;
 		if (s.scrollHandler) {
 			s.scrollContainer.removeEventListener('scroll', s.scrollHandler);
 			s.scrollHandler = null;
@@ -471,6 +481,7 @@ export class TocSpy {
 		s.tocResizeObserver?.disconnect();
 		s.tocResizeObserver = null;
 		s.highlightEl = null;
+		s.highlightHost = null;
 		s.activeHeading = null;
 	}
 }

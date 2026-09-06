@@ -89,7 +89,7 @@ export class TocNavigator {
 			// leaves the pill orphaned and the next spy tick highlights a
 			// wrong heading based on stale estimates.
 			s.activeEntryIndex = entryIndex;
-			this.spy.updateHighlight(entryIndex);
+			this.spy.applyHighlightNow(entryIndex);
 
 			// Apply auto-expand for the clicked heading (a ToC click counts as
 			// visiting that section).

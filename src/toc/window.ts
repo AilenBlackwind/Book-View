@@ -47,10 +47,12 @@ export class TocWindow {
 		}
 		this.spacerEl = tocEl.createDiv({ cls: 'book-toc-spacer' });
 		this.listEl = this.spacerEl.createDiv({ cls: 'book-toc-list' });
-		// highlightEl is NOT created here — it's lazily created by
-		// updateHighlight when it has a proper parent row to live in.
-		// Creating it eagerly left it as a full-width child of containerEl
-		// for one frame before being reparented — a visible flash.
+		// The highlight bar lives in the spacer (parent of the row window) so
+		// it is never touched by the row reconciliation loop and can be moved
+		// with transform-only writes instead of reparenting into rows.
+		s.highlightHost = this.spacerEl;
+		// highlightEl is NOT created here — TocSpy.movePill lazily creates it
+		// as a child of the spacer on the first highlight application.
 		this.render();
 	}
 
@@ -119,9 +121,21 @@ export class TocWindow {
 		// (matched by data-index) instead of tearing down the whole list, so a
 		// visibility/path change mutates the same DOM nodes. The desired DOM
 		// order is then reconciled with minimal, in-place moves (no re-append
-		// that would scramble an already-correct order).
+		// that would scramble an already-correct order). Live auto-expand
+		// rebuilds the window on every active-path crossing, so the reuse
+		// scan is keyed by row kind + data-index in one pass instead of
+		// scanning the present set per desired row (O(rows²) on every build).
 		const present = new Set<HTMLElement>(Array.from(listEl.children) as HTMLElement[]);
-		const consumed = new Set<HTMLElement>();
+		const byKey = new Map<string, HTMLElement>();
+		for (const child of present) {
+			const idx = child.dataset.index;
+			if (!idx) continue;
+			// file and heading row indices share a numeric space; key both so
+			// a file row with file index N never reuses a heading row with
+			// entry index N (or vice versa).
+			const kind = child.classList.contains('book-toc-file') ? 'file' : 'heading';
+			byKey.set(`${kind}:${idx}`, child);
+		}
 		const out: HTMLElement[] = [];
 
 		for (let i = start; i < end; i++) {
@@ -130,19 +144,8 @@ export class TocWindow {
 			if (item.type === 'file') {
 				const file = s.files[item.index];
 				if (!file) continue;
-				let reused: HTMLElement | null = null;
-				for (const child of present) {
-					if (
-						!consumed.has(child) &&
-						child.classList.contains('book-toc-file') &&
-						child.dataset.index === String(item.index)
-					) {
-						reused = child;
-						break;
-					}
-				}
+				const reused = this.take(byKey, `file:${item.index}`);
 				if (reused) {
-					consumed.add(reused);
 					this.builder.updateFileRow(reused, item.index, file);
 					out.push(reused);
 				} else {
@@ -151,19 +154,8 @@ export class TocWindow {
 			} else {
 				const entry = s.entries[item.index];
 				if (!entry) continue;
-				let reused: HTMLElement | null = null;
-				for (const child of present) {
-					if (
-						!consumed.has(child) &&
-						child.classList.contains('book-toc-heading') &&
-						child.dataset.index === String(item.index)
-					) {
-						reused = child;
-						break;
-					}
-				}
+				const reused = this.take(byKey, `heading:${item.index}`);
 				if (reused) {
-					consumed.add(reused);
 					const a = this.builder.updateHeadingRow(reused, item.index, entry);
 					s.rowByEntry.set(item.index, reused);
 					s.rowAnchorByEntry.set(item.index, a);
@@ -187,14 +179,21 @@ export class TocWindow {
 			}
 		}
 
-		// Remove old rows that were not reused.
-		for (const child of present) {
-			if (!consumed.has(child)) {
-				child.remove();
-			}
+		// Remove old rows that were not reused (the survivors of `take`).
+		for (const child of byKey.values()) {
+			child.remove();
 		}
 
 		this.onRowsRendered?.();
+	}
+
+	/** Consume (remove + return) the row cached under `key` in the reuse map,
+	 *  or null when it is absent/foreign. Mutating the map instead of tracking
+	 *  a separate consumed set keeps the removal pass linear. */
+	private take(byKey: Map<string, HTMLElement>, key: string): HTMLElement | null {
+		const el = byKey.get(key);
+		if (el) byKey.delete(key);
+		return el ?? null;
 	}
 
 	/** Wire the panel scroll listener (coalesced to one rAF render). */
@@ -245,6 +244,7 @@ export class TocWindow {
 		this.spacerEl?.parentElement?.remove();
 		this.state.highlightEl?.remove();
 		this.state.highlightEl = null;
+		this.state.highlightHost = null;
 		this.spacerEl = null;
 		this.listEl = null;
 	}
