@@ -82,31 +82,26 @@ All classes from the manifest's `cssclasses` are applied to the book's root elem
 
 ### Customizing the ToC Highlight Colors
 
-The table of contents marks the active heading with a colored pill (background highlight) and accent-colored text. By default these follow Obsidian's accent color and switch automatically between dark and light themes. You can override them with a CSS snippet:
+The table of contents marks the active heading with a colored pill (background highlight) and accent-colored text. By default these follow Obsidian's accent color and switch automatically between dark and light themes.
 
-| Selector                   | What it controls                                                                                           |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `.bv-toc-highlight`      | The pill (background rectangle behind the active heading)                                                  |
-| `.bv-toc-item.is-active` | The active heading's text color                                                                            |
-| `--bv-toc-highlight-color` | Custom property on `.bv-toc-highlight` to override the pill color (falls back to `--interactive-accent`) |
+ToC rows live inside a shadow root, so document selectors cannot reach them — you cannot style `.bv-toc-highlight` directly anymore. Instead, customize through variables, which inherit through the shadow boundary. Set them on any ancestor of the ToC panel, typically the book's root element (see [Book-Specific CSS Snippets](#book-specific-css-snippets) above):
+
+| Variable | Controls |
+| --- | --- |
+| `--bv-toc-highlight-color` | The pill color (falls back to `--interactive-accent`) |
+| `--bv-toc-active-color` | The active heading's text color (falls back to `--text-accent`) |
 
 Example — blue pill in light theme, purple in dark:
 
 ```css
-body.theme-light .bv-toc-highlight {
+.my-book {
 	--bv-toc-highlight-color: #3b82f6;
+	--bv-toc-active-color: #2563eb;
 }
 
-body.theme-light .bv-toc-item.is-active {
-	color: #2563eb;
-}
-
-body.theme-dark .bv-toc-highlight {
+body.theme-dark .my-book {
 	--bv-toc-highlight-color: #a78bfa;
-}
-
-body.theme-dark .bv-toc-item.is-active {
-	color: #c4b5fd;
+	--bv-toc-active-color: #c4b5fd;
 }
 ```
 

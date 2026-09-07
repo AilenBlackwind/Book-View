@@ -143,7 +143,7 @@ export const TOC_SHADOW_CSS = `
 
 .bv-toc-item.is-active {
 	font-weight: 600;
-	color: var(--text-accent);
+	color: var(--bv-toc-active-color, var(--text-accent));
 }
 
 .bv-toc-highlight {
