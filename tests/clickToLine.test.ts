@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { foldIdLine, domToSectionOffset, lineAtFraction, type LineSection, type DomHeading } from '../src/utils/clickToLine';
+import {
+	foldIdLine,
+	domToSectionOffset,
+	lineAtFraction,
+	lineForListItem,
+	listItemStartLines,
+	scanContentBlocks,
+	type LineSection,
+	type DomHeading,
+} from '../src/utils/clickToLine';
 
 const sections = (rows: Array<[string, number, number]>): LineSection[] =>
 	rows.map(([type, startLine, endLine]) => ({ type, startLine, endLine }));
@@ -79,5 +88,168 @@ describe('lineAtFraction', () => {
 	it('clamps the fraction', () => {
 		expect(lineAtFraction({ type: 'paragraph', startLine: 2, endLine: 5 }, -1)).toBe(2);
 		expect(lineAtFraction({ type: 'paragraph', startLine: 2, endLine: 5 }, 2)).toBe(5);
+	});
+});
+
+describe('lineForListItem', () => {
+	it('maps the clicked item to its exact start line', () => {
+		const sec: LineSection = { type: 'list', startLine: 10, endLine: 12 };
+		// Three rendered items -> three cache item lines inside the span.
+		const itemLines = [10, 11, 12];
+		expect(lineForListItem(sec, 3, itemLines, 0)).toBe(10);
+		expect(lineForListItem(sec, 3, itemLines, 1)).toBe(11);
+		expect(lineForListItem(sec, 3, itemLines, 2)).toBe(12);
+	});
+
+	it('returns null when the rendered count disagrees with the cache span', () => {
+		const sec: LineSection = { type: 'list', startLine: 5, endLine: 6 };
+		// Only one cache item spans 5..6 but two items rendered -> drift.
+		expect(lineForListItem(sec, 2, [5], 1)).toBeNull();
+	});
+
+	it('returns null for an out-of-range item index', () => {
+		const sec: LineSection = { type: 'list', startLine: 5, endLine: 5 };
+		expect(lineForListItem(sec, 1, [5], 1)).toBeNull();
+		expect(lineForListItem(sec, 1, [5], -1)).toBeNull();
+	});
+
+	it('handles nested items: dom order matches listItems span order', () => {
+		const sec: LineSection = { type: 'list', startLine: 0, endLine: 2 };
+		// - A      <- A'li, nested B'li below
+		//   - B
+		// - C
+		// DOM: <ul><li>A<ul><li>B</li></ul></li><li>C</li></ul> -> 3 li.
+		// Obsidian listItems record every item, nested included.
+		const itemLines = [0, 1, 2];
+		expect(lineForListItem(sec, 3, itemLines, 0)).toBe(0); // A
+		expect(lineForListItem(sec, 3, itemLines, 1)).toBe(1); // B (nested)
+		expect(lineForListItem(sec, 3, itemLines, 2)).toBe(2); // C
+	});
+
+	it('maps items whose enclosing section is a callout, not a list', () => {
+		// > [!note]
+		// > - one
+		// > - two
+		// A callout is one root 'callout' section spanning the whole block;
+		// its inner list items are still recorded in cache.listItems.
+		const sec: LineSection = { type: 'callout', startLine: 0, endLine: 2 };
+		const itemLines = [1, 2];
+		expect(lineForListItem(sec, 2, itemLines, 0)).toBe(1);
+		expect(lineForListItem(sec, 2, itemLines, 1)).toBe(2);
+	});
+});
+
+describe('scanContentBlocks', () => {
+	it('splits a note into root blocks in source order, yaml excluded', () => {
+		const content = [
+			'---',
+			'title: x',
+			'---',
+			'# One',
+			'text a',
+			'text b',
+			'',
+			'- item 1',
+			'- item 2',
+			'  - sub',
+			'',
+			'```js',
+			'- not an item',
+			'```',
+			'',
+			'> [!note]',
+			'> - in callout',
+			'> - two',
+			'',
+			'h2 below',
+			'===',
+			'',
+			'a | b',
+			'--|--',
+			'1 | 2',
+		].join('\n');
+		expect(scanContentBlocks(content)).toEqual([
+			{ type: 'heading', startLine: 3, endLine: 3 },
+			{ type: 'paragraph', startLine: 4, endLine: 5 },
+			{ type: 'list', startLine: 7, endLine: 9 },
+			{ type: 'code', startLine: 11, endLine: 13 },
+			{ type: 'blockquote', startLine: 15, endLine: 17 },
+			{ type: 'heading', startLine: 19, endLine: 20 },
+			{ type: 'table', startLine: 22, endLine: 24 },
+		]);
+	});
+
+	it('treats a `---` underline as a setext heading, not a break', () => {
+		// title
+		// ---
+		// More
+		expect(scanContentBlocks(['title', '---', 'More'].join('\n'))).toEqual([
+			{ type: 'heading', startLine: 0, endLine: 1 },
+			{ type: 'paragraph', startLine: 2, endLine: 2 },
+		]);
+	});
+
+	it('keeps a standalone `---` between paragraphs as a thematic break', () => {
+		expect(scanContentBlocks(['a', '', '---'].join('\n'))).toEqual([
+			{ type: 'paragraph', startLine: 0, endLine: 0 },
+			{ type: 'hr', startLine: 2, endLine: 2 },
+		]);
+	});
+
+	it('does not mistake fenced-code content or a dash menu for blocks', () => {
+		const content = [
+			'para',
+			'- an actual list',
+			'  continuation',
+			'- c',
+			'',
+			'```',
+			'# fake',
+			'- fake item',
+			'---',
+			'```',
+		].join('\n');
+		expect(scanContentBlocks(content)).toEqual([
+			{ type: 'paragraph', startLine: 0, endLine: 0 },
+			{ type: 'list', startLine: 1, endLine: 3 },
+			{ type: 'code', startLine: 5, endLine: 9 },
+		]);
+	});
+});
+
+describe('listItemStartLines', () => {
+	it('collects bullets, ordered, tasks and quoted items in DOM order', () => {
+		const content = [
+			'---',
+			'tags: [a, - b]',
+			'---',
+			'- one',
+			'- two',
+			'  - nested',
+			'2. ordered',
+			'> - in callout',
+			'> - two',
+		].join('\n');
+		expect(listItemStartLines(content)).toEqual([3, 4, 5, 6, 7, 8]);
+	});
+
+	it('skips yaml and fenced-code lookalikes', () => {
+		const content = [
+			'text',
+			'',
+			'```',
+			'- one',
+			'```',
+			'- two',
+		].join('\n');
+		expect(listItemStartLines(content)).toEqual([5]);
+	});
+
+	it('does not count continuation lines as new items', () => {
+		// - a
+		//   b
+		// - c
+		const content = ['- a', '  b', '- c'].join('\n');
+		expect(listItemStartLines(content)).toEqual([0, 2]);
 	});
 });

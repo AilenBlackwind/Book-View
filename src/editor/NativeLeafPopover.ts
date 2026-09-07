@@ -298,6 +298,21 @@ export class NativeLeafPopover extends Modal {
 		this.modalEl.toggleClass('book-edit-modal-scrolling', isCapped);
 	}
 
+	/** Center the caret in the popup's visible area once the scroll layout has
+	 *  settled. The detached leaf mounts zero-sized and the modal grows to its
+	 *  content, possibly flipping between the content-sized and capped-80vh
+	 *  layouts; each flip changes which element owns scrolling, so a single
+	 *  scrollIntoView can land the caret above or below the viewport. Re-apply
+	 *  per frame until the layout stops changing — repeated no-op
+	 *  scrollIntoView calls are cheap. */
+	private alignEditorWithCursor(editor: Editor, framesLeft: number): void {
+		this.updateEditorScrollMode();
+		const pos = editor.getCursor();
+		editor.scrollIntoView({ from: pos, to: pos }, true);
+		if (framesLeft <= 0) return;
+		window.requestAnimationFrame(() => this.alignEditorWithCursor(editor, framesLeft - 1));
+	}
+
 	private createOpenTabButton(): void {
 		// Own class only: Obsidian's stock `.markdown-embed-link { display: none }`
 		// (show-on-embed-hover) would hide a body-level element carrying it.
@@ -442,10 +457,11 @@ export class NativeLeafPopover extends Modal {
 					// detached leaf still has zero size, so it does nothing.
 					// Scroll to the cursor explicitly now that the modal has
 					// real geometry (otherwise the popup opens at the top of
-					// the note with the caret somewhere down the page).
-					const pos = editor.getCursor();
-					editor.scrollIntoView({ from: pos, to: pos }, true);
-					this.updateEditorScrollMode();
+					// the note with the caret somewhere down the page). Keep
+					// re-aligning over a few frames: updateEditorScrollMode may
+					// flip the rolling owner mid-open, which would otherwise
+					// leave the caret above or below the viewport.
+					this.alignEditorWithCursor(editor, 4);
 				});
 			}
 		});

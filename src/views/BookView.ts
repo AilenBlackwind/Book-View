@@ -12,7 +12,16 @@ import { FindBar } from '../search/FindBar';
 import type { SearchHit } from '../search/matcher';
 import type BookViewPlugin from '../main';
 import type { ModifierConfig } from '../settings';
-import { domToSectionOffset, foldIdLine, lineAtFraction } from '../utils/clickToLine';
+import {
+	domToSectionOffset,
+	foldIdLine,
+	lineAtFraction,
+	lineForListItem,
+	listItemStartLines,
+	scanContentBlocks,
+	type LineSection,
+	type DomHeading,
+} from '../utils/clickToLine';
 
 function matchesModifiers(evt: MouseEvent, mod: ModifierConfig): boolean {
 	return evt.altKey === mod.alt && evt.ctrlKey === mod.ctrl && evt.shiftKey === mod.shift && evt.metaKey === mod.meta;
@@ -51,6 +60,7 @@ function estimateLineFromSection(
 	placeholder: HTMLElement,
 	evt: MouseEvent,
 	targetFile: TFile,
+	rawContent?: string | null,
 ): number | null {
 	const container = placeholder.querySelector<HTMLElement>(':scope > .markdown-rendered');
 	if (!container) return null;
@@ -79,12 +89,18 @@ function estimateLineFromSection(
 	if (blockIndex < 0) return null;
 
 	// data-fold-id carries the exact raw source line of each rendered heading;
-	// these are the DOM↔section alignment anchors.
+	// these are the DOM↔section alignment anchors. Restrict to ROOT-level
+	// headings only (the top-level rendered block is itself a heading): inner
+	// headings of callouts also carry data-fold-id but are NOT root heading
+	// sections, and collapsible list items carry one without being a heading —
+	// both would nul the whole estimate.
 	const domHeadings: Array<{ blockIndex: number; line: number }> = [];
 	for (let i = 0; i < blocks.length; i++) {
-		const heading = blocks[i]?.matches('[data-fold-id]')
+		const heading = blocks[i]?.matches(
+			'h1[data-fold-id],h2[data-fold-id],h3[data-fold-id],h4[data-fold-id],h5[data-fold-id],h6[data-fold-id]',
+		)
 			? blocks[i]
-			: blocks[i]?.querySelector<HTMLElement>('[data-fold-id]');
+			: null;
 		if (!(heading instanceof HTMLElement)) continue;
 		const line = foldIdLine(heading.dataset.foldId ?? '');
 		if (line !== null) domHeadings.push({ blockIndex: i, line });
@@ -93,24 +109,75 @@ function estimateLineFromSection(
 	const cache = app.metadataCache.getFileCache(targetFile);
 	const sections = cache?.sections ?? [];
 	const visibleSections = sections.filter((s) => s.type !== 'yaml' && !!s.position);
-	const lineSections: Array<{ startLine: number; endLine: number; type: string }> =
-		visibleSections.map((s) => ({
-			startLine: s.position.start.line,
-			endLine: s.position.end.line,
-			type: s.type,
-		}));
+	const lineSections: LineSection[] = visibleSections.map((s) => ({
+		startLine: s.position.start.line,
+		endLine: s.position.end.line,
+		type: s.type,
+	}));
 
-	const offset = domToSectionOffset(domHeadings, lineSections);
+	// Content-derived model. The section on screen is rendered from the pool's
+	// `rawContent`, so a model parsed from THAT text always agrees with the
+	// DOM — unlike metadataCache (refreshed async after an edit) and the
+	// plugin's data-fold-ids (re-tagged from a heading index built once per
+	// book load). Both can lag the DOM after an in-flight edit and skew the
+	// offset or the list-item lines; the raw model wins when the cache-offset
+	// is provably broken (a rendered heading that never matched a section).
+	const rawModel = rawContent ? scanContentBlocks(rawContent) : null;
+	const rawItems = rawContent ? listItemStartLines(rawContent) : null;
+	const rawHeadingLines = (rawModel ?? [])
+		.filter((s) => s.type === 'heading')
+		.map((s) => s.startLine);
+	const rawDomHeadings: DomHeading[] = domHeadings.map((h, k) => ({
+		blockIndex: h.blockIndex,
+		line: rawHeadingLines[k] ?? -1,
+	}));
+
+	const offsetRaw = rawModel ? domToSectionOffset(rawDomHeadings, rawModel) : null;
+	const offsetCache = domToSectionOffset(domHeadings, lineSections);
+	const offset = offsetRaw !== null && offsetCache === null ? offsetRaw : offsetCache;
 	if (offset === null) return null;
 
-	const sec = lineSections[blockIndex + offset];
+	const sec = offsetRaw !== null && offsetCache === null && rawModel
+		? rawModel[blockIndex + offset]
+		: lineSections[blockIndex + offset];
 	if (!sec) return null;
 
-	// A heading block is exact: its own anchor line.
+	// A list click (the clicked <li>, whether the enclosing root block is a UL,
+	// or a wrapper — callout/blockquote) maps to one section spanning every
+	// item, and each item carries its exact start line. Prefer the lines
+	// derived from the same rawContent the DOM was rendered from (they cannot
+	// lag the DOM); fall back to cache.listItems, which records nested items
+	// precisely when the content model's item count disagrees.
+	// Run before the heading check: a foldable list item also carries a
+	// data-fold-id, and treating the block as "the heading block" would
+	// snap every list click to whichever item holds the fold id.
+	const clickedEl = evt.target instanceof HTMLElement ? evt.target : null;
+	const clickedLi = clickedEl?.closest('li') ?? null;
+	if (clickedLi && block.contains(clickedLi)) {
+		const items = Array.from(block.querySelectorAll<HTMLElement>('li'));
+		const liIndex = items.indexOf(clickedLi);
+		if (liIndex >= 0) {
+			let exact: number | null = null;
+			if (rawItems) exact = lineForListItem(sec, items.length, rawItems, liIndex);
+			if (exact === null) {
+				const itemLines = (cache?.listItems ?? []).map((li) => li.position.start.line);
+				exact = lineForListItem(sec, items.length, itemLines, liIndex);
+			}
+			if (exact !== null) return exact;
+		}
+	}
+
+	// A heading block is exact: its own anchor line. Prefer the fresh source
+	// line from the raw model for root headings — re-tagged fold-ids may lag
+	// the current content after an edit.
 	const direct = block.matches('[data-fold-id]')
 		? block
 		: block.querySelector<HTMLElement>('[data-fold-id]');
 	if (direct instanceof HTMLElement) {
+		const rootIdx = domHeadings.findIndex((h) => h.blockIndex === blockIndex);
+		if (rootIdx >= 0 && rawHeadingLines[rootIdx] !== undefined) {
+			return rawHeadingLines[rootIdx];
+		}
 		const exact = foldIdLine(direct.dataset.foldId ?? '');
 		if (exact !== null) return exact;
 	}
@@ -528,7 +595,7 @@ export class BookView extends FileView {
 				`.book-section-placeholder[data-path="${CSS.escape(filePath)}"]`,
 			);
 			if (section && this.highlightMatch(section, query, occurrence)) {
-				await this.recenterOnMark(container, section);
+				this.recenterOnMark(container, section);
 				return;
 			}
 			await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
@@ -1030,8 +1097,13 @@ export class BookView extends FileView {
 			// carry exact raw lines via data-fold-id, so aligning DOM order to
 			// cache.sections and interpolating inside the matched section lands
 			// within the clicked block instead of somewhere in the same note.
+			// The rendered DOM and the pool's rawContent are the same text by
+			// construction (the section is re-rendered from it on every edit),
+			// so the click maps against that copy — metadataCache can lag the
+			// DOM right after an edit, and count mismatch would silently break
+			// the mapping.
 			const targetLine =
-				estimateLineFromSection(this.app, placeholder, evt, targetFile) ??
+				estimateLineFromSection(this.app, placeholder, evt, targetFile, this.absoluteManager?.getRawContent(path)) ??
 				estimateLineByRatio(this.app, placeholder, evt, targetFile);
 
 			// Two editor modes (toggle via settings/command):
