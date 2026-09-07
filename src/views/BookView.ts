@@ -856,7 +856,7 @@ export class BookView extends FileView {
 		this.findQuery = '';
 		this.findAllActive = false;
 
-		this.contentContainer = this.contentEl.createDiv({ cls: 'book-content-container' });
+		this.contentContainer = this.contentEl.createEl('section', { cls: 'book-content-container' });
 
 		// Install the scroll guard before any writer exists (accelerator,
 		// manager, ToC navigation all go through guardedScrollWrite).

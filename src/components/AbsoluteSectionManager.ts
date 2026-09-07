@@ -264,7 +264,12 @@ export class AbsoluteSectionManager {
 		this.persistence = persistence;
 
 		this.scrollContainer.addClass('book-absolute-container');
-		this.spacerEl = this.scrollContainer.createDiv({ cls: 'book-spacer' });
+		// Section element, not a div: Obsidian's reading-enhancement sheet
+		// (`div:has(...)` rules) re-scans div ancestors of any inserted node, so
+		// the mounted-set container being a div made every load/unload of a
+		// section during a glide recalc the spacer subtree (~230 nodes across
+		// app-container). Non-div tags are invisible to those selectors.
+		this.spacerEl = this.scrollContainer.createEl('section', { cls: 'book-spacer' });
 		ensureGlobalFrameProbe();
 		// The ScrollGuard owns the container's scroll accessors (installed by
 		// the view before this manager); its event hook feeds the writer

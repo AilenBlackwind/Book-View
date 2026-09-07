@@ -617,7 +617,7 @@ export class SectionPool {
 		for (const link of links) {
 			if (link.type === 'broken') {
 				const path = `${WARNING_PATH_PREFIX}${link.display}`;
-				const el = this.host.spacerEl.createDiv({
+				const el = this.host.spacerEl.createEl('section', {
 					cls: 'book-section-warning book-section-absolute',
 					attr: { 'data-path': path },
 				});
@@ -629,7 +629,7 @@ export class SectionPool {
 
 			if (link.type === 'empty') {
 				const path = `__book-warning__${link.file.path}`;
-				const el = this.host.spacerEl.createDiv({
+				const el = this.host.spacerEl.createEl('section', {
 					cls: 'book-section-warning book-section-absolute',
 					attr: { 'data-path': path },
 				});
@@ -642,7 +642,7 @@ export class SectionPool {
 			const file = link.file;
 			const path = file.path;
 
-			const el = this.host.spacerEl.createDiv({
+			const el = this.host.spacerEl.createEl('section', {
 				cls: 'book-section-placeholder book-section-absolute',
 				attr: { 'data-path': path },
 			});
