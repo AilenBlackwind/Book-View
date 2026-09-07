@@ -2,9 +2,35 @@ import { TocState } from './state';
 import type { TocBuilder } from './builder';
 import { firstItemAt, firstItemAfter } from './virtual';
 import type { VirtualItem } from './virtual';
+import { TOC_SHADOW_CSS } from './shadow.css';
 
 /** Extra rows rendered above/below the visible panel range. */
 const OVERSCAN = 10;
+
+/** A visibility rebuild that must create at least this many fresh rows defers
+ *  to the incremental fill (a batch of INCREMENTAL_BATCH rows per rAF) so the
+ *  auto-expand of a large section does not pay one ~24ms spike. Smaller rebuilds
+ *  and scroll-window moves stay fully synchronous. */
+const INCREMENTAL_THRESHOLD = 24;
+
+/** Rows created per rAF during an incremental fill. Roughly matches the ~15
+ *  rows per ~8ms a big expansion moved per paint when profiled, i.e. one
+ *  sub-frame of work that does not dominate the 16ms budget. */
+const INCREMENTAL_BATCH = 16;
+
+/** Experiment A/B: when true (default), large visibility rebuilds fill the row
+ *  window across a few rAFs (see startIncrementalFill); when false, the window
+ *  is rebuilt synchronously as before. Toggle via the "toggle-incremental-fill"
+ *  command. */
+let incrementalFillEnabled = true;
+
+export function setIncrementalFillEnabled(enabled: boolean): void {
+	incrementalFillEnabled = enabled;
+}
+
+export function isIncrementalFillEnabled(): boolean {
+	return incrementalFillEnabled;
+}
 
 /**
  * Virtualized row window for the ToC panel. The panel is a plain scrollable
@@ -16,12 +42,27 @@ const OVERSCAN = 10;
 export class TocWindow {
 	private spacerEl: HTMLElement | null = null;
 	private listEl: HTMLElement | null = null;
+	/** Last height written to the spacer (px). The spacer height only changes
+	 *  when the virtual total changes (expand/collapse), so writing it on
+	 *  every render dirties the spacer's style — now a leaf, but still cheaper
+	 *  to skip when unchanged. */
+	private spacerHeightPx = -1;
 	private startIndex = 0;
 	private endIndex = 0;
 	/** The virtual item list rendered in the current window. Compared against
 	 *  `state.virtualItems` so a collapse that hides/folds rows re-creates the
 	 *  window even when the visible [start, end) range did not move. */
 	private renderedItems: VirtualItem[] | null = null;
+	/** When a visibility rebuild needs to create many fresh rows (auto-expand
+	 *  of a large section), the row window is filled progressively — a batch of
+	 *  rows per rAF — instead of tearing up and re-creating the whole window in
+	 *  one main-thread hit. `incrementalFrom` is the next desired row index to
+	 *  create; -1 while not filling. */
+	private incrementalFrom = -1;
+	private incrementalItems: VirtualItem[] | null = null;
+	private incrementalEnd = 0;
+	private incrementalByKey: Map<string, HTMLElement> | null = null;
+	private incrementalRaf = 0;
 	private scrollHandler: (() => void) | null = null;
 	private clickHandler: ((evt: MouseEvent) => void) | null = null;
 	private renderScheduled = false;
@@ -34,6 +75,15 @@ export class TocWindow {
 
 	/** Build the panel skeleton (spacer + window + highlight bar) and render
 	 *  the initial row window. */
+/** Build the panel skeleton (spacer + window + highlight bar) and render
+	 *  the initial row window. Rows live inside a shadow root attached to the
+	 *  panel's content element so document-level `:has()` selectors (Obsidian's
+	 *  reading-enhancement sheet re-scans every div ancestor of an inserted
+	 *  node) can never see them: a wheel-glide auto-expand used to hit a
+	 *  ~670-element panel-wide style recalc on every crossing. The highlight
+	 *  and the row window are separated again — the spacer is a bare height
+	 *  holder, the list + pill are its siblings — and the shadow CSS (mirror of
+	 *  the ToC block in styles.css) is injected as a <style> child. */
 	mount(): void {
 		const s = this.state;
 		// Scope layout invalidation to this panel: applyVisibility mutates ToC
@@ -41,18 +91,31 @@ export class TocWindow {
 		// wakes layout from <body> down (500+ elements, ~9ms forced reflow).
 		// With containment the browser scopes the reflow to this subtree.
 		s.containerEl.addClass('bv-contain-layout');
-		const tocEl = s.containerEl.createDiv({ cls: 'book-toc' });
+		const shadow = s.ensureShadow();
+		// Idempotent cleanup for rebuild(): drop rows/highlight from the
+		// previous mount, keep the (already injected) <style>.
+		shadow.replaceChildren();
+		const style = s.containerEl.ownerDocument.createElement('style');
+		style.textContent = TOC_SHADOW_CSS;
+		shadow.appendChild(style);
+		const tocEl = s.containerEl.ownerDocument.createElement('section');
+		tocEl.className = 'bv-toc';
+		shadow.appendChild(tocEl);
 		if (s.settings?.tocGuides) {
-			tocEl.addClass('book-toc-guides');
+			tocEl.classList.add('bv-toc-guides');
 		}
-		this.spacerEl = tocEl.createDiv({ cls: 'book-toc-spacer' });
-		this.listEl = this.spacerEl.createDiv({ cls: 'book-toc-list' });
-		// The highlight bar lives in the spacer (parent of the row window) so
-		// it is never touched by the row reconciliation loop and can be moved
-		// with transform-only writes instead of reparenting into rows.
-		s.highlightHost = this.spacerEl;
+		this.spacerEl = tocEl.createEl('section', { cls: 'bv-toc-spacer' });
+		// The highlight bar lives in the row window's parent (not the spacer,
+		// which is now a bare height holder), so it is never touched by the row
+		// reconciliation loop and can be moved with transform-only writes
+		// instead of reparenting into rows. The pill shares the tocEl
+		// coordinate space with the spacer (spacer is its first in-flow child),
+		// so virtual row offsets are exact for both.
+		this.listEl = tocEl.createEl('ul', { cls: 'bv-toc-list' });
+		s.highlightHost = tocEl;
 		// highlightEl is NOT created here — TocSpy.movePill lazily creates it
-		// as a child of the spacer on the first highlight application.
+		// as a child of the row window's parent on the first highlight
+		// application.
 		this.render();
 	}
 
@@ -62,12 +125,33 @@ export class TocWindow {
 		const s = this.state;
 		const listEl = this.listEl;
 		const spacerEl = this.spacerEl;
-		if (!listEl || !spacerEl) return;
+		if (!listEl || !spacerEl) {
+			this.cancelIncremental();
+			return;
+		}
 
 		const items = s.virtualItems;
 		const offsets = s.virtualOffsets;
 		const n = items.length;
+		const viewport = s.tocViewportHeight > 0 ? s.tocViewportHeight : s.containerEl.clientHeight;
+		const scrollTop = s.panelScrollTop;
+
+		// Mid-fill: keep the running batch alive on its own rAF, but only while
+		// the visible scroll range still falls inside the window being filled
+		// (the fill lags a panel scroll that leaps outside its range — then it
+		// is cancelled and the range is rebuilt synchronously).
+		if (this.incrementalFrom >= 0 && this.incrementalItems === items) {
+			const coveredTop = offsets[this.startIndex] ?? 0;
+			const coveredBottom = offsets[this.endIndex] ?? Infinity;
+			if (coveredTop <= scrollTop && scrollTop + viewport <= coveredBottom) {
+				this.scheduleFillFrame();
+				return;
+			}
+			this.cancelIncremental();
+		}
+
 		if (n === 0) {
+			this.cancelIncremental();
 			spacerEl.setCssProps({ height: '0px' });
 			this.startIndex = 0;
 			this.endIndex = 0;
@@ -78,10 +162,10 @@ export class TocWindow {
 		}
 
 		const total = offsets[n] ?? 0;
-		spacerEl.style.height = `${total}px`;
-
-		const viewport = s.tocViewportHeight > 0 ? s.tocViewportHeight : s.containerEl.clientHeight;
-		const scrollTop = s.panelScrollTop;
+		if (this.spacerHeightPx !== total) {
+			this.spacerHeightPx = total;
+			spacerEl.style.height = `${total}px`;
+		}
 
 		// Lazy window: the rendered range only has to *cover* the visible one
 		// (it already spans OVERSCAN rows past it), so a scroll that stays
@@ -109,19 +193,22 @@ export class TocWindow {
 		// hidden/folded and the surviving rows need fresh collapsed/leaf state.
 		if (start === this.startIndex && end === this.endIndex && this.renderedItems === items) return;
 
+		this.cancelIncremental();
 		this.startIndex = start;
 		this.endIndex = end;
 		this.renderedItems = items;
 
-		listEl.style.top = `${offsets[start] ?? 0}px`;
+		// Rows are absolutely positioned at their virtual offsets (top set per
+		// row), so the list element itself never needs to translate — inserting
+		// or removing a row does not shift any sibling.
 		s.rowByEntry.clear();
 		s.rowAnchorByEntry.clear();
 
 		// Recycle page rows: keep and patch existing heading/file rows in place
 		// (matched by data-index) instead of tearing down the whole list, so a
-		// visibility/path change mutates the same DOM nodes. The desired DOM
-		// order is then reconciled with minimal, in-place moves (no re-append
-		// that would scramble an already-correct order). Live auto-expand
+		// visibility/path change mutates the same DOM nodes. Because rows are
+		// absolutely positioned, DOM order never affects layout — each new row
+		// simply appends and unused ones are removed at the end. Live auto-expand
 		// rebuilds the window on every active-path crossing, so the reuse
 		// scan is keyed by row kind + data-index in one pass instead of
 		// scanning the present set per desired row (O(rows²) on every build).
@@ -133,58 +220,175 @@ export class TocWindow {
 			// file and heading row indices share a numeric space; key both so
 			// a file row with file index N never reuses a heading row with
 			// entry index N (or vice versa).
-			const kind = child.classList.contains('book-toc-file') ? 'file' : 'heading';
+			const kind = child.classList.contains('bv-toc-file') ? 'file' : 'heading';
 			byKey.set(`${kind}:${idx}`, child);
 		}
-		const out: HTMLElement[] = [];
 
+		// Count how many rows in [start, end) already exist (reusable). When a
+		// large expansion creates most of the visible rows fresh, building the
+		// window in one hit pays a ~24ms panel-wide recalc that hitches the
+		// frame. Spreading the *creation* over a few rAF (rows land at exact
+		// offsets, so positions never shift, the list just fills in) turns the
+		// single spike into several small ones. Small rebuilds and scrolls
+		// stay fully synchronous.
+		let newRows = 0;
 		for (let i = start; i < end; i++) {
 			const item = items[i];
 			if (!item) continue;
-			if (item.type === 'file') {
-				const file = s.files[item.index];
-				if (!file) continue;
-				const reused = this.take(byKey, `file:${item.index}`);
-				if (reused) {
-					this.builder.updateFileRow(reused, item.index, file);
-					out.push(reused);
-				} else {
-					out.push(this.builder.createFileRow(listEl, item.index, file));
-				}
-			} else {
-				const entry = s.entries[item.index];
-				if (!entry) continue;
-				const reused = this.take(byKey, `heading:${item.index}`);
-				if (reused) {
-					const a = this.builder.updateHeadingRow(reused, item.index, entry);
-					s.rowByEntry.set(item.index, reused);
-					s.rowAnchorByEntry.set(item.index, a);
-					out.push(reused);
-				} else {
-					const row = this.builder.createHeadingRow(listEl, item.index, entry);
-					s.rowByEntry.set(item.index, row.li);
-					s.rowAnchorByEntry.set(item.index, row.a);
-					out.push(row.li);
-				}
-			}
+			const kind = item.type === 'file' ? 'file' : 'heading';
+			if (!byKey.has(`${kind}:${item.index}`)) newRows++;
 		}
 
-		// Reconcile: place each desired row at its absolute index, moving only
-		// those that are out of place; already-correct rows are untouched.
-		for (let k = 0; k < out.length; k++) {
-			const desired = out[k]!;
-			const current = listEl.children[k];
-			if (current !== desired) {
-				listEl.insertBefore(desired, current ?? null);
-			}
+		if (newRows >= INCREMENTAL_THRESHOLD && incrementalFillEnabled) {
+			this.startIncrementalFill(start, end, items, byKey);
+			return;
 		}
 
-		// Remove old rows that were not reused (the survivors of `take`).
+		this.renderWindowRange(start, end, byKey);
+		this.onRowsRendered?.();
+	}
+
+	/** Synchronously build every row in [start, end) into `listEl`. Rows are
+	 *  absolutely positioned at their virtual offsets, so build order is
+	 *  irrelevant to layout; reused rows keep their node (patched), new rows
+	 *  append, and unused rows are removed at the end. Used for scroll-window
+	 *  moves and small rebuilds; large fills go through startIncrementalFill. */
+	private renderWindowRange(start: number, end: number, byKey: Map<string, HTMLElement>): void {
+		const s = this.state;
+		const listEl = this.listEl!;
+		for (let i = start; i < end; i++) {
+			const item = s.virtualItems[i];
+			if (!item) continue;
+			this.buildRow(listEl, item, byKey, s.virtualOffsets[i] ?? 0);
+		}
+		this.removeUnused(byKey);
+	}
+
+	/** Kick off an incremental fill of the visible window when a rebuild has to
+	 *  create many fresh rows: the first batch renders immediately (the viewport
+	 *  is populated right away, rows land at their exact offsets so nothing
+	 *  shifts), then one rAF drives each subsequent batch. */
+	private startIncrementalFill(
+		start: number,
+		end: number,
+		items: VirtualItem[],
+		byKey: Map<string, HTMLElement>,
+	): void {
+		this.incrementalFrom = start;
+		this.incrementalEnd = end;
+		this.incrementalItems = items;
+		this.incrementalByKey = byKey;
+		this.fillWindowBatch();
+	}
+
+	/** Create and reconcile the next INCREMENTAL_BATCH of rows, then either
+	 *  schedule the following batch or finish the fill (removing leftover rows
+	 *  and firing onRowsRendered so the highlight re-hosts). */
+	private fillWindowBatch(): void {
+		const listEl = this.listEl;
+		if (!listEl) {
+			this.cancelIncremental();
+			return;
+		}
+		if (this.incrementalFrom < 0 || this.incrementalEnd < 0) return;
+		const items = this.incrementalItems!;
+		const byKey = this.incrementalByKey!;
+		const offsets = this.state.virtualOffsets;
+
+		const from = this.incrementalFrom;
+		const to = Math.min(this.incrementalEnd, from + INCREMENTAL_BATCH);
+		// Rows are absolutely positioned, so a batch can simply create/append
+		// its rows at their virtual offsets — no ordering or slot reconciles.
+		for (let i = from; i < to; i++) {
+			const item = items[i];
+			if (!item) continue;
+			this.buildRow(listEl, item, byKey, offsets[i] ?? 0);
+		}
+		this.incrementalFrom = to;
+
+		if (this.incrementalFrom >= this.incrementalEnd) {
+			this.removeUnused(byKey);
+			this.incrementalFrom = -1;
+			this.incrementalItems = null;
+			this.incrementalByKey = null;
+			this.incrementalRaf = 0;
+			this.onRowsRendered?.();
+			return;
+		}
+
+		this.scheduleFillFrame();
+	}
+
+	/** Schedule the next incremental-fill rAF, coalescing duplicate schedules. */
+	private scheduleFillFrame(): void {
+		if (this.incrementalFrom < 0) return;
+		if (this.incrementalRaf) return;
+		this.incrementalRaf = window.requestAnimationFrame(() => {
+			this.incrementalRaf = 0;
+			this.fillWindowBatch();
+		});
+	}
+
+	/** Abort any in-flight incremental fill (teardown, full re-render, empty
+	 *  list). */
+	private cancelIncremental(): void {
+		this.incrementalFrom = -1;
+		this.incrementalItems = null;
+		this.incrementalByKey = null;
+		if (this.incrementalRaf) {
+			window.cancelAnimationFrame(this.incrementalRaf);
+			this.incrementalRaf = 0;
+		}
+	}
+
+/** Create (or patch-and-reuse) the row for one virtual item, returning the
+ *  <li> to place, or null when the item references a missing file. Rows are
+ *  absolutely positioned at their virtual offset so no sibling shifts when a
+ *  row is added/removed. */
+	private buildRow(
+		listEl: HTMLElement,
+		item: VirtualItem,
+		byKey: Map<string, HTMLElement>,
+		top: number,
+	): HTMLElement | null {
+		const s = this.state;
+		if (item.type === 'file') {
+			const file = s.files[item.index];
+			if (!file) return null;
+			const reused = this.take(byKey, `file:${item.index}`);
+			if (reused) {
+				this.builder.updateFileRow(reused, item.index, file);
+				reused.style.top = `${top}px`;
+				return reused;
+			}
+			const created = this.builder.createFileRow(listEl, item.index, file);
+			created.style.top = `${top}px`;
+			return created;
+		}
+		const entry = s.entries[item.index];
+		if (!entry) return null;
+		const reused = this.take(byKey, `heading:${item.index}`);
+		if (reused) {
+			const a = this.builder.updateHeadingRow(reused, item.index, entry);
+			s.rowByEntry.set(item.index, reused);
+			s.rowAnchorByEntry.set(item.index, a);
+			reused.style.top = `${top}px`;
+			return reused;
+		}
+		const row = this.builder.createHeadingRow(listEl, item.index, entry);
+		s.rowByEntry.set(item.index, row.li);
+		s.rowAnchorByEntry.set(item.index, row.a);
+		row.li.style.top = `${top}px`;
+		return row.li;
+	}
+
+	/** Remove rows in the reuse map that were not reused (collapsed/folded rows
+	 *  that no longer belong to the window). Must run only after all reuse is
+	 *  done, i.e. at the end of a synchronous render or the last fill batch. */
+	private removeUnused(byKey: Map<string, HTMLElement>): void {
 		for (const child of byKey.values()) {
 			child.remove();
 		}
-
-		this.onRowsRendered?.();
 	}
 
 	/** Consume (remove + return) the row cached under `key` in the reuse map,
@@ -234,14 +438,20 @@ export class TocWindow {
 			this.clickHandler = null;
 		}
 		this.renderScheduled = false;
+		this.cancelIncremental();
 		this.startIndex = 0;
 		this.endIndex = 0;
 		this.renderedItems = null;
 		// Remove the DOM this window created (skeleton + highlight). The view
 		// also empties the panel on full teardown, but the incremental rebuild
 		// (TocController.rebuild) re-runs mount without a view-level wipe, so
-		// the old skeleton must not leak into the panel.
-		this.spacerEl?.parentElement?.remove();
+		// the old skeleton must not leak into the panel. The shadow root stays
+		// attached (a second attachShadow on the same host would throw); mount
+		// clears and re-seeds its children each time.
+		const shadow = this.state.shadowRoot;
+		if (shadow) {
+			shadow.replaceChildren();
+		}
 		this.state.highlightEl?.remove();
 		this.state.highlightEl = null;
 		this.state.highlightHost = null;

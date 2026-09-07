@@ -19,14 +19,14 @@
 ## Что сделано в этой ветке
 
 ### 1. Живой transform-pill (индикатор активной строки)
-- Один элемент `.book-toc-highlight` — ребёнок spacer-элемента (`state.highlightHost`, ставит `window.mount`, снимает teardown). Позиция — только `transform: translate3d(indent + 4px, top + 2px, 0)`; ширина — CSS-классы по уровню `book-toc-highlight-level-1..6` = `calc(100% - 8/20/32/44/56/68px)`; скрытие — `translate3d(0, -99999px, 0)`.
+- Один элемент `.bv-toc-highlight` — ребёнок spacer-элемента (`state.highlightHost`, ставит `window.mount`, снимает teardown). Позиция — только `transform: translate3d(indent + 4px, top + 2px, 0)`; ширина — CSS-классы по уровню `bv-toc-highlight-level-1..6` = `calc(100% - 8/20/32/44/56/68px)`; скрытие — `translate3d(0, -99999px, 0)`.
 - Движение коалицуется в один кадр: scroll-обработчик панели шлёт `positionSource` frame-callback, `onFrameTick(spy)` выполняется раз за rAF (`tickScheduled`), все чтения — из кадрового кэша (`getScrollTop()/getClientHeight()`), без layout-floor.
 - Файлы: `src/toc/spy.ts`, `src/toc/state.ts` (highlightHost), `src/toc/window.ts` (mount: highlightHost = spacerEl), `src/styles/styles.css` (~511-536), `src/toc/navigation.ts` (клик по строке → `applyHighlightNow`, «применить сразу»).
 
 ### 2. Геометрия пилюли («двойной инсет», фикс замеченного бага)
 - Симптом: пилюля смещена вниз/вправо, величина смещения зависела от зума.
 - Причина: в CSS остались `top:2px; left:4px` **И** transform добавлял `+2/+4` → итого `(top+4px, indent+8px)`, смещение нелинейно масштабировалось ансестор-зумом.
-- Фикс: CSS `.book-toc-highlight { top:0; left:0 }`; **все** инсеты несёт transform (масштабируются тем же зумом, что и фикс 26px строки). Width-классы изначально были под полный инсет (indent+4 слева, 4 справа) — их не трогали. Пользователь подтвердил геометрию на нескольких зумах.
+- Фикс: CSS `.bv-toc-highlight { top:0; left:0 }`; **все** инсеты несёт transform (масштабируются тем же зумом, что и фикс 26px строки). Width-классы изначально были под полный инсет (indent+4 слева, 4 справа) — их не трогали. Пользователь подтвердил геометрию на нескольких зумах.
 
 ### 3. Профайлинг остаточных recalc — закрытая ветка (выводы)
 - Три источника «Recalculate style»:
@@ -54,7 +54,7 @@
 ## Смежные знания (контекст)
 
 - В панели редактирования/чтения ToC — одно и то же состояние; пилюля едина.
-- `.book-toc-heading` строки — фикс 26px (`line-height:22px`, `padding:2px 8px`) — зум согласуется.
+- `.bv-toc-heading` строки — фикс 26px (`line-height:22px`, `padding:2px 8px`) — зум согласуется.
 - Скрипт монтирует pyлю сразу после первого `applyVisibility`; `rowByEntry` пуст до первого применения (это использовалось как «первый вызов должен быть синхронным» в старом settle-коде).
 - После ребилда DOM окна `onRowsRendered → reapplyHighlight(visibleAncestor(activeEntryIndex, mode!=='disabled'))` заново накладывает пилюлю (старый активный узел мог быть детачен).
 - При редактировании любой грязи, ложащейся на layout: путь чтения в кадре должен опираться на кэши, а не на живые rect'ы; если когда-нибудь вернёшь settle-батчинг — верни и принудительный flush (`void containerEl.offsetHeight`) в вызове ребилда, чтобы следующий ввод не поймал reflow от свежей пересборки.

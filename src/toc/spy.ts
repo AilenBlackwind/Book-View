@@ -165,7 +165,9 @@ export class TocSpy {
 		}
 
 		if (bestIndex < 0) {
-			window.clearTimeout(s.activePathTimer);
+window.clearTimeout(s.activePathTimer);
+		s.activePathPending = false;
+			s.activePathPending = false;
 			s.pendingPathIndex = -1;
 			if (s.activePathSet.size > 0) {
 				s.activePathSet.clear();
@@ -212,17 +214,16 @@ export class TocSpy {
 			this.scheduleCenterScroll(highlightIndex);
 		}
 
-		// Expand the active path live, in the scroll frame: the pill's offset
-		// math reads the virtual list, so a section that is not yet expanded
-		// has no rows to land the highlight on, and deferring the rebuild to
-		// the settle beat ("the indicator only works on the last-opened level
-		// until the scroll stops") read as a bug. The rebuild is now cheap
-		// enough to run per crossing: rebuildVirtualData is one O(entries)
-		// pass, and the row window RECYCLES existing rows in place by
-		// data-index instead of re-creating the ~1000-element row DOM that the
-		// old settle-batching was built to avoid. Only far-expanded sections'
-		// rows outside the visible range are skipped (virtualized), so the
-		// panel follows the active heading while the book is still moving.
+		// Expand the active path live, off the book's scroll frame: the pill's
+		// offset math reads the virtual list, so a section that is not yet
+		// expanded has no rows to land the highlight on. The rebuild itself is
+		// cheap — one O(entries) pass — but the resulting row mutations pay a
+		// panel-wide style recalc (~24ms/690 elements measured) that hitched
+		// the crossing frame when run synchronously here. schedulePathRebuild
+		// defers it to a coalesced macrotask right after this frame paints
+		// (last path wins); the pill re-pins on the rebuilt window via
+		// onRowsRendered → reapplyHighlight, at most a frame late, while the
+		// book's scroll frame stays free.
 		if (bestIndex !== s.pendingPathIndex) {
 			s.pendingPathIndex = bestIndex;
 			let newPath: Set<number>;
@@ -240,11 +241,7 @@ export class TocSpy {
 
 			if (!s.setsEqual(s.activePathSet, newPath)) {
 				s.activePathSet = newPath;
-				s.applyVisibility();
-				// The rebuild changed the virtual offsets; re-pin the active
-				// row with the fresh geometry so the panel does not drift a
-				// frame behind the expansion above it.
-				this.keepActiveInView(highlightIndex);
+				s.schedulePathRebuild();
 			}
 		}
 
@@ -357,13 +354,13 @@ export class TocSpy {
 			transform = `translate3d(${indent + 4}px, ${top + 2}px, 0)`;
 		}
 		if (!s.highlightEl) {
-			s.highlightEl = host.createDiv({ cls: 'book-toc-highlight' });
+			s.highlightEl = host.createSpan({ cls: 'bv-toc-highlight' });
 		}
 		const pill = s.highlightEl;
 		if (level !== this.lastPillLevel) {
 			this.lastPillLevel = level;
 			for (let lv = 1; lv <= 6; lv++) {
-				pill.classList.toggle(`book-toc-highlight-level-${lv}`, lv === level);
+				pill.classList.toggle(`bv-toc-highlight-level-${lv}`, lv === level);
 			}
 		}
 		if (transform !== this.lastPillTransform) {

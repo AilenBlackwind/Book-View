@@ -5,6 +5,7 @@ import type { TocWindow } from './window';
 import type { VirtualItem } from './virtual';
 import { computeActivePath, computeHiddenState } from '../utils/toc';
 import { buildVirtualItems, computeVirtualOffsets } from './virtual';
+import { TOC_SHADOW_CSS } from './shadow.css';
 
 /** One deferred heading-rect measurement queued by tagHeadings. */
 export interface PendingTagHeading {
@@ -32,6 +33,9 @@ export interface GuideStyle {
  */
 export class TocState {
 	containerEl: HTMLElement;
+	/** Attached to `containerEl` once; rows, spacer and highlight bar live
+	 *  inside it so document-level `:has()` selectors can never match them. */
+	shadowRoot: ShadowRoot | null = null;
 	files: TFile[];
 	app: App;
 	scrollContainer: HTMLElement;
@@ -95,6 +99,10 @@ export class TocState {
 	activeEntryIndex = -1;
 	pendingPathIndex = -1;
 	activePathTimer = 0;
+	/** true while a coalesced auto-expand rebuild is scheduled
+	 *  (schedulePathRebuild). Guards against one crossing per frame queueing a
+	 *  second rebuild, and against applying a stale path after teardown. */
+	activePathPending = false;
 	defaultLevel = 0;
 	/** Rest-collapse level for 'expand-collapse-level' mode, copied from
 	 *  settings at build time (separate from the initial-collapse defaultLevel). */
@@ -169,6 +177,33 @@ export class TocState {
 		this.scrollContainer = scrollContainer;
 		this.settings = settings;
 		this.positionSource = positionSource;
+	}
+
+	/** Create (or reuse) the open shadow root on `containerEl` and inject the
+	 *  ToC stylesheet into it. All row/highlight/spacer DOM must live in the
+	 *  shadow tree so Obsidian's `div:has(...)` enhancement sheet (which
+	 *  re-rescans every div ancestor when a node is inserted) can never match
+	 *  the rows: the row window's own stylesheet is injected here, scoped to
+	 *  the shadow tree, and `var(--...)` custom properties inherit across the
+	 *  boundary so book-scope theming keeps working. Idempotent: a second call
+	 *  only re-injects the stylesheet if it was removed (e.g. the window
+	 *  emptied the root in destroy()). */
+	ensureShadow(): ShadowRoot {
+		const existing = this.containerEl.shadowRoot;
+		if (existing) {
+			this.shadowRoot = existing;
+		} else {
+			this.shadowRoot = this.containerEl.attachShadow({ mode: 'open' });
+		}
+		const hasStyle = Array.from(this.shadowRoot.childNodes).some(
+			(n) => n.nodeName === 'STYLE',
+		);
+		if (!hasStyle) {
+			const style = this.containerEl.ownerDocument.createElement('style');
+			style.textContent = TOC_SHADOW_CSS;
+			this.shadowRoot.appendChild(style);
+		}
+		return this.shadowRoot;
 	}
 
 	/** Reset build-scoped state before a rebuild. */
@@ -303,6 +338,27 @@ export class TocState {
 		this.panelScrollTop = this.containerEl.scrollTop;
 
 		this.window?.render();
+	}
+
+	/** Schedule the merged auto-expand rebuild off the book's scroll frame.
+	 *  The scroll spy updates the active path live, but applyVisibility +
+	 *  the row-window render mutate the panel and pay a panel-wide style
+	 *  recalc over the panel subtree (measured ~24ms/690 elements here);
+	 *  running it synchronously in the crossing frame hitches the scroll.
+	 *  A single macrotask runs right after the current frame paints (macrotasks
+	 *  run after the rendering steps), rebuilding for the newest path and
+	 *  clearing the pending flag — crossings that arrive while a rebuild is
+	 *  scheduled fold into it, so a glide across several sections settles on
+	 *  one rebuild instead of one O(entries) pass + recalc per crossing. */
+	schedulePathRebuild(): void {
+		if (this.activePathPending) return;
+		this.activePathPending = true;
+		window.clearTimeout(this.activePathTimer);
+		this.activePathTimer = window.setTimeout(() => {
+			this.activePathTimer = 0;
+			this.activePathPending = false;
+			this.applyVisibility();
+		}, 0);
 	}
 
 	/** Recompute hidden state → virtual items → offsets from the current

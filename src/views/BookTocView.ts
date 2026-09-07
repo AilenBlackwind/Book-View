@@ -54,7 +54,7 @@ export class BookTocView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
-		this.contentEl.addClass('book-toc-view-root');
+		this.contentEl.addClass('bv-toc-view-root');
 	}
 
 	async onClose(): Promise<void> {
@@ -79,8 +79,8 @@ export class BookTocView extends ItemView {
 
 		this.boundBook = book;
 		this.contentEl.empty();
-		this.contentEl.addClass('book-toc-view-root');
-		this.contentEl.addClass('book-toc-relative');
+		this.contentEl.addClass('bv-toc-view-root');
+		this.contentEl.addClass('bv-toc-relative');
 
 		// Mirror the book's manifest `cssclasses` onto the panel root so
 		// book-scoped CSS variables (e.g. heading colors from a snippet) also
@@ -121,7 +121,7 @@ export class BookTocView extends ItemView {
 		}
 		this.boundBook = null;
 		this.contentEl.empty();
-		this.contentEl.addClass('book-toc-view-root');
+		this.contentEl.addClass('bv-toc-view-root');
 		for (const cls of this.scopeClasses) this.contentEl.removeClass(cls);
 		this.scopeClasses = [];
 	}

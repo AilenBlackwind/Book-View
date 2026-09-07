@@ -37,7 +37,7 @@ export class TocBuilder {
 		s.autoCollapseRestLevel = s.settings?.tocCollapseRestLevel ?? 0;
 		s.visitedSet.clear();
 
-		s.containerEl.addClass('book-toc-relative');
+		s.containerEl.addClass('bv-toc-relative');
 		s.tocPaddingTop = parseFloat(getComputedStyle(s.containerEl).paddingTop) || 0;
 
 		this.measureRowHeights();
@@ -49,9 +49,9 @@ export class TocBuilder {
 	/** Create a file-title row. The row height is fixed (see CSS), so the
 	 *  virtual offsets computed at build time stay exact. */
 	createFileRow(listEl: HTMLElement, index: number, file: TFile): HTMLElement {
-		const li = listEl.createEl('li', { cls: 'book-toc-file' });
+		const li = listEl.createEl('li', { cls: 'bv-toc-file' });
 		li.dataset.index = String(index);
-		li.createDiv({ cls: 'book-toc-file-title', text: file.basename });
+		li.createSpan({ cls: 'bv-toc-file-title', text: file.basename });
 		return li;
 	}
 
@@ -59,12 +59,12 @@ export class TocBuilder {
 	 *  highlights via the anchor; the window registers both in its row maps). */
 	createHeadingRow(listEl: HTMLElement, entryIndex: number, entry: TocEntry): { li: HTMLElement; a: HTMLElement } {
 		const s = this.state;
-		const li = listEl.createEl('li', { cls: 'book-toc-heading' });
+		const li = listEl.createEl('li', { cls: 'bv-toc-heading' });
 		li.style.paddingLeft = `${(entry.level - 1) * 12}px`;
 		li.dataset.level = String(entry.level);
 		li.dataset.index = String(entryIndex);
 
-		const inner = li.createDiv({ cls: 'book-toc-heading-inner' });
+		const inner = li.createSpan({ cls: 'bv-toc-heading-inner' });
 
 		// Inline SVG chevron: currentColor inherits the row's text color and the
 		// glyph is centered in its box, so rotating it between the open (down)
@@ -72,7 +72,7 @@ export class TocBuilder {
 		// pseudo element had its optical center ~2px off the box center, which
 		// made it sit crooked against the heading text and shift when rotated.
 		// Orientation matches the book's fold chevrons: open points down.
-		const chevron = inner.createSpan({ cls: 'book-toc-chevron' });
+		const chevron = inner.createSpan({ cls: 'bv-toc-chevron' });
 		const chevronSvg = chevron.createSvg('svg', { attr: { viewBox: '0 0 16 16' } });
 		chevronSvg.createSvg('path', {
 			attr: {
@@ -86,7 +86,7 @@ export class TocBuilder {
 		});
 
 		const a = inner.createEl('a', {
-			cls: 'book-toc-item',
+			cls: 'bv-toc-item',
 			attr: {
 				'data-path': entry.file.path,
 				'data-line': String(entry.line),
@@ -107,9 +107,9 @@ export class TocBuilder {
 		}
 
 		if (s.isLeaf[entryIndex]) {
-			li.addClass('book-toc-leaf');
+			li.addClass('bv-toc-leaf');
 		} else if (!s.isEntryExpanded(entryIndex)) {
-			li.addClass('book-toc-collapsed');
+			li.addClass('bv-toc-collapsed');
 		}
 
 		const guide = s.guideStyles[entryIndex];
@@ -136,21 +136,21 @@ export class TocBuilder {
 		// a style recalculation on every wheel tick, so skip all mutations.
 		const leafNow = !!s.isLeaf[entryIndex];
 		const collNow = !leafNow && !s.isEntryExpanded(entryIndex);
-		const hasLeaf = li.classList.contains('book-toc-leaf');
-		const hasColl = li.classList.contains('book-toc-collapsed');
+		const hasLeaf = li.classList.contains('bv-toc-leaf');
+		const hasColl = li.classList.contains('bv-toc-collapsed');
 		if (li.dataset.index === String(entryIndex) && li.dataset.level === String(entry.level) && hasLeaf === leafNow && hasColl === collNow) {
-			return li.querySelector<HTMLElement>('a.book-toc-item')!;
+			return li.querySelector<HTMLElement>('a.bv-toc-item')!;
 		}
 
 		li.style.paddingLeft = `${(entry.level - 1) * 12}px`;
 		li.dataset.level = String(entry.level);
 		li.dataset.index = String(entryIndex);
-		li.addClass('book-toc-heading');
+		li.addClass('bv-toc-heading');
 
-		let inner = li.querySelector<HTMLElement>('.book-toc-heading-inner');
+		let inner = li.querySelector<HTMLElement>('.bv-toc-heading-inner');
 		if (!inner) {
-			inner = li.createDiv({ cls: 'book-toc-heading-inner' });
-			const chevron = inner.createSpan({ cls: 'book-toc-chevron' });
+			inner = li.createSpan({ cls: 'bv-toc-heading-inner' });
+			const chevron = inner.createSpan({ cls: 'bv-toc-chevron' });
 			const chevronSvg = chevron.createSvg('svg', { attr: { viewBox: '0 0 16 16' } });
 			chevronSvg.createSvg('path', {
 				attr: {
@@ -164,9 +164,9 @@ export class TocBuilder {
 			});
 		}
 
-		let a = inner.querySelector<HTMLElement>('a.book-toc-item');
+		let a = inner.querySelector<HTMLElement>('a.bv-toc-item');
 		if (!a) {
-			a = inner.createEl('a', { cls: 'book-toc-item' });
+			a = inner.createEl('a', { cls: 'bv-toc-item' });
 		}
 		a.setAttribute('data-path', entry.file.path);
 		a.setAttribute('data-line', String(entry.line));
@@ -188,12 +188,12 @@ export class TocBuilder {
 		}
 
 		// Reset then re-apply per-entry state classes.
-		li.removeClass('book-toc-leaf');
-		li.removeClass('book-toc-collapsed');
+		li.removeClass('bv-toc-leaf');
+		li.removeClass('bv-toc-collapsed');
 		if (s.isLeaf[entryIndex]) {
-			li.addClass('book-toc-leaf');
+			li.addClass('bv-toc-leaf');
 		} else if (!s.isEntryExpanded(entryIndex)) {
-			li.addClass('book-toc-collapsed');
+			li.addClass('bv-toc-collapsed');
 		}
 
 		// Reset then re-apply the nesting-guide background.
@@ -207,11 +207,11 @@ export class TocBuilder {
 
 	/** Update an existing file-title <li> in place (see updateHeadingRow). */
 	updateFileRow(li: HTMLElement, index: number, file: TFile): void {
-		li.addClass('book-toc-file');
+		li.addClass('bv-toc-file');
 		li.dataset.index = String(index);
-		let title = li.querySelector<HTMLElement>('.book-toc-file-title');
+		let title = li.querySelector<HTMLElement>('.bv-toc-file-title');
 		if (!title) {
-			title = li.createDiv({ cls: 'book-toc-file-title' });
+			title = li.createSpan({ cls: 'bv-toc-file-title' });
 		}
 		title.setText(file.basename);
 	}
@@ -224,7 +224,7 @@ export class TocBuilder {
 		const target = evt.target as HTMLElement;
 
 		// Chevron toggles collapse/expand without navigating.
-		const chevron = target.closest<HTMLElement>('.book-toc-chevron');
+		const chevron = target.closest<HTMLElement>('.bv-toc-chevron');
 		if (chevron) {
 			evt.preventDefault();
 			evt.stopPropagation();
@@ -236,7 +236,7 @@ export class TocBuilder {
 		}
 
 		// Anchor navigates to the heading.
-		const a = target.closest<HTMLElement>('a.book-toc-item');
+		const a = target.closest<HTMLElement>('a.bv-toc-item');
 		if (a) {
 			evt.preventDefault();
 			const li = a.closest<HTMLElement>('li[data-index]');
@@ -247,21 +247,25 @@ export class TocBuilder {
 	}
 
 	/** Measure the fixed row heights (heading row + file row) from a probe
-	 *  appended to the connected panel, so the virtual offsets match the real
-	 *  rendered rows. The probe can measure nothing (0) while the panel has no
-	 *  layout (sidebar hidden at bind); remeasure() re-runs it on visibility. */
+	 *  appended inside the panel's shadow tree, so the virtual offsets match
+	 *  the real rendered rows. The probe can measure nothing (0) while the
+	 *  panel has no layout (sidebar hidden at bind); remeasure() re-runs it
+	 *  on visibility. */
 	private measureRowHeights(): void {
 		const s = this.state;
-		const probe = s.containerEl.createDiv({ cls: 'book-toc-list' });
-	
-		const li = probe.createEl('li', { cls: 'book-toc-heading' });
-		const inner = li.createDiv({ cls: 'book-toc-heading-inner' });
-		inner.createSpan({ cls: 'book-toc-chevron' });
-		const a = inner.createEl('a', { cls: 'book-toc-item' });
+		const shadow = s.ensureShadow();
+		const probe = s.containerEl.ownerDocument.createElement('ul');
+		probe.className = 'bv-toc-list';
+		shadow.appendChild(probe);
+
+		const li = probe.createEl('li', { cls: 'bv-toc-heading' });
+		const inner = li.createSpan({ cls: 'bv-toc-heading-inner' });
+		inner.createSpan({ cls: 'bv-toc-chevron' });
+		const a = inner.createEl('a', { cls: 'bv-toc-item' });
 		a.createSpan({ text: 'X' });
 
-		const fileLi = probe.createEl('li', { cls: 'book-toc-file' });
-		fileLi.createDiv({ cls: 'book-toc-file-title', text: 'X' });
+		const fileLi = probe.createEl('li', { cls: 'bv-toc-file' });
+		fileLi.createSpan({ cls: 'bv-toc-file-title', text: 'X' });
 
 		const headingH = li.offsetHeight;
 		const fileH = fileLi.offsetHeight;

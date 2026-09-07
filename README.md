@@ -86,26 +86,26 @@ The table of contents marks the active heading with a colored pill (background h
 
 | Selector                   | What it controls                                                                                           |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `.book-toc-highlight`      | The pill (background rectangle behind the active heading)                                                  |
-| `.book-toc-item.is-active` | The active heading's text color                                                                            |
-| `--bv-toc-highlight-color` | Custom property on `.book-toc-highlight` to override the pill color (falls back to `--interactive-accent`) |
+| `.bv-toc-highlight`      | The pill (background rectangle behind the active heading)                                                  |
+| `.bv-toc-item.is-active` | The active heading's text color                                                                            |
+| `--bv-toc-highlight-color` | Custom property on `.bv-toc-highlight` to override the pill color (falls back to `--interactive-accent`) |
 
 Example — blue pill in light theme, purple in dark:
 
 ```css
-body.theme-light .book-toc-highlight {
+body.theme-light .bv-toc-highlight {
 	--bv-toc-highlight-color: #3b82f6;
 }
 
-body.theme-light .book-toc-item.is-active {
+body.theme-light .bv-toc-item.is-active {
 	color: #2563eb;
 }
 
-body.theme-dark .book-toc-highlight {
+body.theme-dark .bv-toc-highlight {
 	--bv-toc-highlight-color: #a78bfa;
 }
 
-body.theme-dark .book-toc-item.is-active {
+body.theme-dark .bv-toc-item.is-active {
 	color: #c4b5fd;
 }
 ```
