@@ -528,6 +528,7 @@ export class BookView extends FileView {
 				`.book-section-placeholder[data-path="${CSS.escape(filePath)}"]`,
 			);
 			if (section && this.highlightMatch(section, query, occurrence)) {
+				await this.recenterOnMark(container, section);
 				return;
 			}
 			await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
@@ -599,6 +600,26 @@ export class BookView extends FileView {
 			heading.removeEventListener('animationend', onEnd);
 		};
 		heading.addEventListener('animationend', onEnd);
+	}
+
+	/** After a search jump lands on a match, re-center the marked word in the
+	 *  scroller. The estimation scroll (`estimatedY - 100`) only puts the line
+	 *  near the top of the viewport; the word can live anywhere inside a tall
+	 *  section. Center the mark so the user always sees what was found. Called
+	 *  while the section is already mounted and the mark is in the DOM. */
+	private recenterOnMark(container: HTMLElement, section: HTMLElement): void {
+		const mark = section.querySelector<HTMLElement>('mark.book-search-current');
+		if (!mark) return;
+		const containerRect = container.getBoundingClientRect();
+		const markRect = mark.getBoundingClientRect();
+		const target =
+			container.scrollTop +
+			(markRect.top - containerRect.top) -
+			container.clientHeight / 2 +
+			markRect.height / 2;
+		guardedScrollWrite(container, () => {
+			container.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
+		});
 	}
 
 	/** Wraps the `occurrence`-th case-insensitive match of `query` in a
