@@ -14,6 +14,7 @@ import { DebugLog } from './utils/debug';
 import { ensureGlobalFrameProbe } from './components/AbsoluteSectionManager';
 import { updateManifestLinksOnRename } from './components/LinkUpdater';
 import { setIncrementalFillEnabled, isIncrementalFillEnabled } from './toc/window';
+import { scanHasPerformance, logHasFindings, maybeWarnHasSelectors } from './utils/cssDiag';
 
 export default class BookViewPlugin extends Plugin {
 	settings: BookViewSettings = DEFAULT_SETTINGS;
@@ -352,6 +353,23 @@ export default class BookViewPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'diagnose-css-has',
+			name: 'Diagnose expensive CSS :has() selectors',
+			callback: () => {
+				const findings = scanHasPerformance();
+				logHasFindings(findings, true);
+				const n = findings.length;
+				const high = findings.filter((f) => f.severity === 'high').length;
+				new Notice(
+					n === 0
+						? 'Book View: no expensive :has() selectors found.'
+						: `Book View: ${n} expensive :has() selectors (${high} high-impact). Details in console.`,
+					6000,
+				);
+			},
+		});
+
+		this.addCommand({
 			id: 'copy-debug-log',
 			name: 'Copy debug log to clipboard',
 			callback: async () => {
@@ -576,6 +594,12 @@ export default class BookViewPlugin extends Plugin {
 		return Boolean(document.querySelector(
 			'body > .modal-container, body > .menu-container, body > .suggestion-container, body > .popover',
 		));
+	}
+
+	/** Called by BookView after a book finishes rendering. Runs the one-time
+	 *  per-session :has() diagnostic (see utils/cssDiag). */
+	onBookOpened(): void {
+		maybeWarnHasSelectors(this);
 	}
 
 	private async activateBookView(filePath: string, targetLeaf: WorkspaceLeaf) {

@@ -1074,6 +1074,7 @@ export class BookView extends FileView {
 		// BookTocView owns TocController + tagHeadings via the coordinator,
 		// which rebinds after this book finishes loading.
 		this.plugin?.tocCoordinator?.setCurrentBook(this);
+		this.plugin?.onBookOpened();
 
 		comp.registerDomEvent(this.contentContainer, 'dblclick', (evt: MouseEvent) => {
 			const mod = this.plugin?.settings.editorModifiers;

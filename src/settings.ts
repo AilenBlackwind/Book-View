@@ -48,6 +48,7 @@ export interface BookViewSettings {
 	editorModifiers: ModifierConfig;
 	editorMode: EditorMode;
 	popupHideFrontmatter: boolean;
+	cssHasWarningEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -71,4 +72,5 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	editorModifiers: { alt: false, ctrl: true, shift: false, meta: false },
 	editorMode: 'popup',
 	popupHideFrontmatter: false,
+	cssHasWarningEnabled: true,
 };

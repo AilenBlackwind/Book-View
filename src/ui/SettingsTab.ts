@@ -213,6 +213,18 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(el)
+			.setName('Warn about expensive CSS :has() selectors')
+			.setDesc('Scan themes and CSS snippets for :has() selectors that make Obsidian recalculate styles across the whole app on every section mount, and warn once per session when one is found. Sibling-scoped :has(+ X) selectors are safe and are not reported.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.cssHasWarningEnabled)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.cssHasWarningEnabled = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
 			.setName('Wheel flick')
 			.setHeading();
 
