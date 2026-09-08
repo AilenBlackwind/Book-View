@@ -1245,6 +1245,18 @@ export class BookView extends FileView {
 		// "hover first, press the modifier later" case, where no new
 		// mouseover event fires. The source is registered in main.ts.
 		let hoveredLink: { href: string; sourcePath: string; el: HTMLElement } | null = null;
+		// The anchor we have already surfaced a Page Preview for, plus the last
+		// time it was triggered. While the pointer stays on the SAME `<a>`,
+		// every further mouseover (moving across its child spans/icons) and —
+		// more importantly — ctrl KEYDOWN AUTO-REPEAT would otherwise re-emit
+		// 'hover-link' for each keydown (~30ms apart while ctrl is held), and
+		// core Page Preview hides and re-creates the popover on each event: a
+		// visible blink until the modifier is released. Re-triggering the same
+		// anchor is gated to once per PREVIEW_RETRIGGER_MS; a different anchor
+		// (or leaving it) re-arms it immediately.
+		const PREVIEW_RETRIGGER_MS = 800;
+		let previewShownFor: HTMLElement | null = null;
+		let previewShownAt = 0;
 		const triggerHover = (evt: MouseEvent | KeyboardEvent): void => {
 			if (!hoveredLink) return;
 			this.app.workspace.trigger('hover-link', {
@@ -1263,9 +1275,16 @@ export class BookView extends FileView {
 				if (!evt.ctrlKey && !evt.metaKey) return;
 				if (hoveredLink && !hoveredLink.el.isConnected) {
 					hoveredLink = null;
+					previewShownFor = null;
 					return;
 				}
-				if (hoveredLink) triggerHover(evt);
+				if (hoveredLink) {
+					const now = Date.now();
+					if (previewShownFor === hoveredLink.el && now - previewShownAt < PREVIEW_RETRIGGER_MS) return;
+					previewShownFor = hoveredLink.el;
+					previewShownAt = now;
+					triggerHover(evt);
+				}
 			},
 			{ capture: true },
 		);
@@ -1275,29 +1294,39 @@ export class BookView extends FileView {
 			(evt: MouseEvent) => {
 				const target = evt.target as HTMLElement;
 				const container = this.contentContainer;
-				if (!container || !container.contains(target)) {
+				const clearHover = (): void => {
 					hoveredLink = null;
+					previewShownFor = null;
+				};
+				if (!container || !container.contains(target)) {
+					clearHover();
 					return;
 				}
 				const link = target.closest<HTMLElement>('a.internal-link');
-				if (!link || !container.contains(link)) {
-					hoveredLink = null;
+				if (!link || !container.contains(link) || !link.isConnected) {
+					clearHover();
 					return;
 				}
 				const href = link.getAttribute('data-href') ?? link.getAttribute('href');
 				if (!href) {
-					hoveredLink = null;
+					clearHover();
 					return;
 				}
 				const placeholder = target.closest<HTMLElement>('.book-section-placeholder');
 				const sourcePath = placeholder?.dataset.path ?? this.filePath;
 				if (!this.app.metadataCache.getFirstLinkpathDest(href, sourcePath)) {
-					hoveredLink = null;
+					clearHover();
 					return;
 				}
 				hoveredLink = { href, sourcePath, el: link };
 				if (!evt.ctrlKey && !evt.metaKey) return;
+				// Keep core Page Preview out of the loop: it re-creates the
+				// popover on every mouseover, which reads as a blink.
 				evt.stopPropagation();
+				const now = Date.now();
+				if (previewShownFor === link && now - previewShownAt < PREVIEW_RETRIGGER_MS) return;
+				previewShownFor = link;
+				previewShownAt = now;
 				triggerHover(evt);
 			},
 			{ capture: true },
