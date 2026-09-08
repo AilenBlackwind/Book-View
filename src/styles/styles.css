@@ -195,9 +195,6 @@
 	max-width: var(--file-line-width, 750px);
 	margin-left: auto;
 	margin-right: auto;
-	contain: paint layout;
-	content-visibility: auto;
-	contain-intrinsic-size: auto 300px;
 }
 
 .book-section-placeholder:last-child {
@@ -521,14 +518,6 @@
 	overflow: auto !important;
 }
 
-.book-edit-modal-editor {
-	flex: 1;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-m);
-	overflow: hidden;
-	min-height: 0;
-}
-
 /* Hover popovers (page preview, hover editors) opened while a Book View
    popover editor is on screen: the stock .popover layer sits below the modal
    layer, so such a popover would render underneath the editor. The class is
@@ -717,12 +706,6 @@
 	height: auto !important;
 	max-height: none !important;
 	overflow: visible !important;
-}
-.book-edit-modal-editor .cm-content .cm-tag {
-	color: var(--tag-color, var(--text-accent));
-	background-color: var(--tag-background, transparent);
-	border-radius: var(--radius-s, 4px);
-	padding: 0 3px;
 }
 
 /* Script context menu */
@@ -1225,12 +1208,6 @@ mark.book-search-all {
 	margin-left: 8px;
 	font-size: 0.85em;
 	color: var(--text-muted);
-}
-
-
-
-.book-edit-modal-editor .cm-content .bv-cm-hidden {
-	display: none;
 }
 
 /* Final overrides for a capped native popup. Keep these after all generic

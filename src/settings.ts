@@ -19,9 +19,10 @@ export interface MenuProfile {
 	scripts: ScriptEntry[];
 }
 
-/** Which editor double-click opens a note in: the fast in-window popup (own
- *  CodeMirror, no third-party editor scripts) or the native editor in a
- *  separate popout window (full Obsidian Editor API, so editor scripts run). */
+/** Which editor double-click opens a note in: the in-window popup (a detached
+ *  native WorkspaceLeaf embedded in the modal — real Live Preview, no separate
+ *  window) or the native editor in a separate popout window (full Obsidian
+ *  Editor API, so editor scripts run). */
 export type EditorMode = 'popup' | 'native';
 
 import type { AutoExpandMode } from './toc/types';

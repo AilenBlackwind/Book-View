@@ -15,11 +15,10 @@ import { collectCommandHotkeys, matchesHotkey, type CommandLike, type HotkeyComm
  * Caveats:
  * - `new (WorkspaceLeaf as any)(this.app)` uses a private constructor (the
  *   public API only exposes `getLeaf()`), so this may break on future Obsidian
- *   versions. If it throws, fall back to the manual `LiveEditModal` stack or
- *   to `openPopoutLeaf()`.
- * - Save semantics differ from the manual editor: the native leaf is backed by
- *   a real vault file, and Obsidian persists it itself (auto-save). On close we
- *   just notify the caller to re-render; we do not force a `vault.modify`.
+ *   versions. If it throws, fall back to `openPopoutLeaf()`.
+ * - Save semantics: the native leaf is backed by a real vault file, and Obsidian
+ *   persists it itself (auto-save). On close we just notify the caller to
+ *   re-render; we do not force a `vault.modify`.
  * - The detached leaf is invisible to the workspace's active-leaf tracking, so
  *   commands and plugins that resolve "the current editor" would see the book
  *   view instead of the note in the popover. While the modal is open we claim

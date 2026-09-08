@@ -1113,9 +1113,6 @@ export class BookView extends FileView {
 			//    popout window. The book re-renders this section automatically
 			//    via vault.on('modify'); NativeLeafPopover also re-renders on close.
 			//  - 'native': the native editor in a separate popout window.
-			// Note: the hand-rolled CodeMirror popup (src/editor/LiveEditModal.ts)
-			// is temporarily disabled in favour of the detached leaf; see the
-			// note at the top of that file to restore it.
 			if (this.plugin?.settings.editorMode === 'popup') {
 				// The popup relies on a private WorkspaceLeaf constructor; if a
 				// future Obsidian version removes/breaks it, open the native
