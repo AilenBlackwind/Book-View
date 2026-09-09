@@ -85,7 +85,9 @@ export const TOC_SHADOW_CSS = `
 	align-items: center;
 	justify-content: center;
 	transform: translateY(-2px) rotate(90deg);
-	transition: none;
+	/* Scroll-perf A/B is over (auto-expand frame drops were the rebuild, not
+	   the transitions): the chevron rotate transition is back. */
+	transition: transform 150ms ease;
 }
 
 .bv-toc-chevron svg {
