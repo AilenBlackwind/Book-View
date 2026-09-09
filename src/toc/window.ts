@@ -7,30 +7,15 @@ import { TOC_SHADOW_CSS } from './shadow.css';
 /** Extra rows rendered above/below the visible panel range. */
 const OVERSCAN = 10;
 
-/** A visibility rebuild that must create at least this many fresh rows defers
- *  to the incremental fill (a batch of INCREMENTAL_BATCH rows per rAF) so the
- *  auto-expand of a large section does not pay one ~24ms spike. Smaller rebuilds
- *  and scroll-window moves stay fully synchronous. */
+/** Experiment A/B (resolved): large visibility rebuilds fill the row window
+ *  across a few rAFs (see startIncrementalFill); the synchronous path remains
+ *  for scroll-window moves and small rebuilds (INCREMENTAL_THRESHOLD). */
 const INCREMENTAL_THRESHOLD = 24;
 
 /** Rows created per rAF during an incremental fill. Roughly matches the ~15
  *  rows per ~8ms a big expansion moved per paint when profiled, i.e. one
  *  sub-frame of work that does not dominate the 16ms budget. */
 const INCREMENTAL_BATCH = 16;
-
-/** Experiment A/B: when true (default), large visibility rebuilds fill the row
- *  window across a few rAFs (see startIncrementalFill); when false, the window
- *  is rebuilt synchronously as before. Toggle via the "toggle-incremental-fill"
- *  command. */
-let incrementalFillEnabled = true;
-
-export function setIncrementalFillEnabled(enabled: boolean): void {
-	incrementalFillEnabled = enabled;
-}
-
-export function isIncrementalFillEnabled(): boolean {
-	return incrementalFillEnabled;
-}
 
 /**
  * Virtualized row window for the ToC panel. The panel is a plain scrollable
@@ -239,7 +224,7 @@ export class TocWindow {
 			if (!byKey.has(`${kind}:${item.index}`)) newRows++;
 		}
 
-		if (newRows >= INCREMENTAL_THRESHOLD && incrementalFillEnabled) {
+		if (newRows >= INCREMENTAL_THRESHOLD) {
 			this.startIncrementalFill(start, end, items, byKey);
 			return;
 		}

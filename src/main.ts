@@ -13,7 +13,6 @@ import { BookViewAPI } from './BookViewAPI';
 import { DebugLog } from './utils/debug';
 import { ensureGlobalFrameProbe } from './components/AbsoluteSectionManager';
 import { updateManifestLinksOnRename } from './components/LinkUpdater';
-import { setIncrementalFillEnabled, isIncrementalFillEnabled } from './toc/window';
 import { maybeWarnHasSelectors } from './utils/cssDiag';
 import { CssFingerprint, makeCssFingerprint, cssFingerprintsMatch } from './utils/cssFingerprint';
 
@@ -342,16 +341,6 @@ export default class BookViewPlugin extends Plugin {
 				const on = DebugLog.toggle();
 				if (on) ensureGlobalFrameProbe();
 				new Notice(on ? 'Book View: debug logging on' : 'Book View: debug logging off');
-			},
-		});
-
-		this.addCommand({
-			id: 'toggle-incremental-fill',
-			name: 'Toggle incremental toc row fill (experiment)',
-			callback: () => {
-				const on = !isIncrementalFillEnabled();
-				setIncrementalFillEnabled(on);
-				new Notice(`Book View: incremental ToC row fill ${on ? 'on' : 'off'}`);
 			},
 		});
 
