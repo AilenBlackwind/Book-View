@@ -89,6 +89,27 @@ export class WheelAccelerator {
 	private pos = 0;
 	private lastSeenWrite = 0;
 
+	// Uniform-coast tail (see stopAndLogCadence/step): once the per-frame
+	// velocity drops below one pixel the geometric decay keeps emitting
+	// fractional scrollTop steps, but the compositor rasterizes at integer
+	// device pixels, so the visible motion is a series of 1px ticks whose
+	// pauses grow as the decay slows — the "grainy glide tail" complaint.
+	// Below 1px/frame the remaining travel (v/(1-f)) is instead replayed as
+	// whole-pixel steps at a constant 1px/frame cadence, then a clean stop.
+	/** Remaining whole-pixel steps of the coast tail; 0 = not coasting. Signed
+	 *  to preserve direction (the impulse only ever feeds one direction). */
+	private coast = 0;
+
+	// Temporary cadence probe (DebugLog-gated): logs an interval when the
+	// time between two consecutive step frames exceeds a threshold, to
+	// discriminate "grainy glide" causes (Hypothesis B in IDEAS.md): if step
+	// intervals stay ~16.6ms even during load-heavy passages, the grain is the
+	// sub-pixel quantisation tail (Hypothesis A); if intervals periodically
+	// jump to 33/50ms, the main thread is losing frames and the glide timing
+	// itself is broken.
+	private lastStepAt = 0;
+	private stepProbeLongFrames = 0;
+
 	// Temporary gesture-accuracy probe (DebugLog-gated): accumulates the
 	// intended travel of one wheel gesture (Σ deltaY × strength × combo) and,
 	// after the glide settles, reports it against the actual displacement.
@@ -188,11 +209,16 @@ export class WheelAccelerator {
 		// A notch in the opposite direction kills the current flick instantly.
 		// The stacked combo resets with it: without this, a small "scroll back
 		// a bit" notch right after two fast forward notches would travel at
-		// combo 2.5× and overshoot wildly.
-		if (this.velocity !== 0 && Math.sign(px) !== Math.sign(this.velocity)) {
+		// combo 2.5× and overshoot wildly. During a uniform-coast tail the
+		// velocity is held at 0, so the direction is read from the coast count.
+		const movingDir = this.coast !== 0 ? Math.sign(this.coast) : Math.sign(this.velocity);
+		if (movingDir !== 0 && Math.sign(px) !== movingDir) {
 			this.velocity = 0;
 			this.combo = 1;
 		}
+		// A new notch always resumes the full impulse — cancel any in-flight
+		// uniform-coast tail so the fresh velocity drives the glide.
+		this.coast = 0;
 
 		// The impulse is sized so total flick travel equals px * strength *
 		// combo: the sum of the geometric velocity series is impulse / (1 - friction).
@@ -263,6 +289,44 @@ export class WheelAccelerator {
 			maxScroll = Math.max(0, c.scrollHeight - c.clientHeight);
 			this.cachedMaxScroll = maxScroll;
 		}
+
+		// Uniform-coast tail: below 1px/frame the geometric decay keeps summing
+		// sub-pixel steps that the compositor snaps to integer device pixels,
+		// so the visible motion is clusters of frozen frames + a 1px tick with
+		// ever-growing pauses — the "grainy when slowing down" feel. Once the
+		// per-frame speed drops under a pixel, replay the remaining travel
+		// (velocity/(1-f)) as whole-pixel steps at a constant 1px/frame cadence
+		// and end with a clean stop: same distance, no cluster-pause pattern.
+		if (this.coast !== 0) {
+			const dir = this.coast > 0 ? 1 : -1;
+			let next = this.pos + dir;
+			if (next < 0) {
+				next = 0;
+			} else if (next > maxScroll) {
+				next = maxScroll;
+			}
+			guardedScrollWrite(c, () => {
+				c.scrollTop = next;
+			});
+			this.pos = next;
+			this.lastSeenWrite = next;
+			this.coast -= dir;
+			// Cadence probe (see GESTURE comment): also valid during the coast.
+			if (DebugLog.enabled && next > 0 && next < maxScroll) {
+				const now = performance.now();
+				if (this.lastStepAt !== 0 && now - this.lastStepAt > 30) {
+					this.stepProbeLongFrames++;
+				}
+				this.lastStepAt = now;
+			}
+			if (this.coast === 0 || next <= 0 || next >= maxScroll) {
+				this.stopAndLogCadence();
+				return;
+			}
+			this.rafId = window.requestAnimationFrame(this.step);
+			return;
+		}
+
 		const next = Math.min(Math.max(this.pos + this.velocity, 0), maxScroll);
 		guardedScrollWrite(c, () => {
 			c.scrollTop = next;
@@ -272,22 +336,62 @@ export class WheelAccelerator {
 		const friction = this.getConfig().friction;
 		this.velocity *= friction;
 		const atEdge = (next <= 0 && this.velocity < 0) || (next >= maxScroll && this.velocity > 0);
-		// Stop when the un-run remainder of the geometric series (v/(1-f))
-		// drops under one pixel: everything past that is sub-pixel drift,
-		// which the fractional scrollTop accumulation still applies frame by
-		// frame, fading out smoothly. Cutting earlier threw away up to ~6px
-		// per gesture (systematic undershoot), and landing the remainder in
-		// one jump read as a hard terminal notch — this cutoff keeps both
-		// accuracy and the smooth decay.
-		if (atEdge || (this.velocity !== 0 && Math.abs(this.velocity) / (1 - friction) < 1)) {
+		// Cadence probe: a gap over 30ms (≥2 dropped frames at 60Hz, or a
+		// panel that drops to 30Hz regardless of load) means the glide timing
+		// itself is affected — not the quantisation tail. Log the worst gap per
+		// gesture so the copy-debug-log command can tell A (sub-pixel, timing
+		// clean) from B (main-thread frame drops) apart.
+		if (DebugLog.enabled && !atEdge && this.velocity !== 0) {
+			const now = performance.now();
+			if (this.lastStepAt !== 0 && now - this.lastStepAt > 30) {
+				this.stepProbeLongFrames++;
+			}
+			this.lastStepAt = now;
+		}
+		// Switch to the uniform-coast tail once the per-frame speed drops under
+		// one pixel (see the coast branch above). Rounding the remaining
+		// geometric travel (v/(1-f)) to whole pixels preserves the path.
+		if (!atEdge && this.velocity !== 0 && Math.abs(this.velocity) < 1) {
+			this.coast = Math.round(this.velocity / (1 - friction));
 			this.velocity = 0;
+			if (this.coast === 0) {
+				this.stopAndLogCadence();
+				return;
+			}
+			this.rafId = window.requestAnimationFrame(this.step);
+			return;
+		}
+		// Stop when the un-run remainder of the geometric series (v/(1-f))
+		// drops under one pixel (reached when friction*frames already got us
+		// here at |v| >= 1, e.g. the 1/framerate upper bound of the decay).
+		if (atEdge || (this.velocity !== 0 && Math.abs(this.velocity) / (1 - friction) < 1)) {
+			this.stopAndLogCadence();
 			return;
 		}
 		this.rafId = window.requestAnimationFrame(this.step);
 	};
 
+	/** End of a gesture: reset the velocity and report the cadence probe if any
+	 *  long step gaps were observed (DebugLog-gated, safe no-op otherwise). */
+	private stopAndLogCadence(): void {
+		this.velocity = 0;
+		this.coast = 0;
+		if (DebugLog.enabled && this.stepProbeLongFrames > 0) {
+			DebugLog.log(
+				'GLIDE',
+				'',
+				`longFrameGaps=${this.stepProbeLongFrames}`,
+			);
+		}
+		this.stepProbeLongFrames = 0;
+		this.lastStepAt = 0;
+	}
+
 	private kill = (): void => {
 		this.velocity = 0;
+		this.coast = 0;
 		this.combo = 1;
+		this.lastStepAt = 0;
+		this.stepProbeLongFrames = 0;
 	};
 }
