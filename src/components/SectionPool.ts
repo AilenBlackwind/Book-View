@@ -369,6 +369,11 @@ export interface SectionData {
 export interface HeightPersistence {
 	get?: (path: string, mtime: number, width: number) => number | undefined;
 	put?: (path: string, mtime: number, width: number, height: number) => void;
+	/** Backstop for CSS edits that the fingerprint layer misses (in-place edits
+	 *  inside the same theme/snippet file whose spacings did not move): fired
+	 *  by AbsoluteSectionManager when several distinct trusted heights correct
+	 *  by >15% within a short window. The hook drops the persisted store. */
+	onStaleCache?: () => void;
 }
 
 export interface SectionPoolHost {

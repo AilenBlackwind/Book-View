@@ -14,7 +14,8 @@ import { DebugLog } from './utils/debug';
 import { ensureGlobalFrameProbe } from './components/AbsoluteSectionManager';
 import { updateManifestLinksOnRename } from './components/LinkUpdater';
 import { setIncrementalFillEnabled, isIncrementalFillEnabled } from './toc/window';
-import { scanHasPerformance, logHasFindings, maybeWarnHasSelectors } from './utils/cssDiag';
+import { maybeWarnHasSelectors } from './utils/cssDiag';
+import { CssFingerprint, makeCssFingerprint, cssFingerprintsMatch } from './utils/cssFingerprint';
 
 export default class BookViewPlugin extends Plugin {
 	settings: BookViewSettings = DEFAULT_SETTINGS;
@@ -31,6 +32,17 @@ export default class BookViewPlugin extends Plugin {
 	heightStore: Record<string, { m: number; h: number; w: number }> = {};
 	scrollPositions: Record<string, number> = {};
 	themeSpacings: ThemeSpacings = { h1TopGap: 52, h2TopGap: 34, headerToHeaderGap: 0, textGap: 16 };
+	/** The css identity + rhythm the persisted heights were last measured under.
+	 *  Compared with the current fingerprint on book open and on css-change; a
+	 *  mismatch invalidates heightStore + scrollPositions so nothing mounts
+	 *  with a height measured under a different theme/snippet set. null until
+	 *  the first read (data.json shape migration) — then a baseline is adopted
+	 *  without invalidating. */
+	cssFingerprint: CssFingerprint | null = null;
+	/** One-shot-per-session guard for the "theme changed" Notice, so a burst
+	 *  of css-change events (theme + snippet + dark/light) doesn't stack
+	 *  Notices; the store is invalidated every time regardless. */
+	private cssFingerprintNoticeShown = false;
 	tocCoordinator: TocCoordinator | null = null;
 	private saveHeightsTimer = 0;
 	private saveScrollTimer = 0;
@@ -89,6 +101,7 @@ export default class BookViewPlugin extends Plugin {
 		const payload = Object.assign({}, this.settings, {
 			measuredHeights: this.heightStore,
 			scrollPositions: this.scrollPositions,
+			cssFingerprint: this.cssFingerprint,
 		});
 		return this.saveData(payload)
 			.then(() => {
@@ -138,6 +151,7 @@ export default class BookViewPlugin extends Plugin {
 		this.registerEvent(
 			this.app.workspace.on('css-change', async () => {
 				this.themeSpacings = await measureThemeSpacings(this.app);
+				this.checkCssFingerprint();
 				this.recalculateBookLayouts();
 			}),
 		);
@@ -353,23 +367,6 @@ export default class BookViewPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'diagnose-css-has',
-			name: 'Diagnose expensive CSS :has() selectors',
-			callback: () => {
-				const findings = scanHasPerformance();
-				logHasFindings(findings, true);
-				const n = findings.length;
-				const high = findings.filter((f) => f.severity === 'high').length;
-				new Notice(
-					n === 0
-						? 'Book View: no expensive :has() selectors found.'
-						: `Book View: ${n} expensive :has() selectors (${high} high-impact). Details in console.`,
-					6000,
-				);
-			},
-		});
-
-		this.addCommand({
 			id: 'copy-debug-log',
 			name: 'Copy debug log to clipboard',
 			callback: async () => {
@@ -454,6 +451,11 @@ export default class BookViewPlugin extends Plugin {
 			measuredHeights?: Record<string, { m: number; h: number; w?: number }>;
 			scrollPositions?: Record<string, number>;
 			tocAutoCollapse?: boolean;
+			cssFingerprint?: {
+				themeId?: string;
+				snippets?: string[];
+				spacings?: Partial<ThemeSpacings>;
+			} | null;
 		}) | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.heightStore = {};
@@ -476,6 +478,25 @@ export default class BookViewPlugin extends Plugin {
 			delete (this.settings as unknown as Record<string, unknown>).tocAutoCollapse;
 			void this.saveNow();
 		}
+
+		// Restore the css fingerprint stored with the heights (see cssFingerprint
+		// field doc). Missing/invalid data.jsons keep null → baseline adopted.
+		const fp = data?.cssFingerprint;
+		if (fp && typeof fp === 'object') {
+			const s = fp.spacings;
+			if (s && typeof s.h1TopGap === 'number' && typeof s.textGap === 'number') {
+				this.cssFingerprint = {
+					themeId: typeof fp.themeId === 'string' ? fp.themeId : '',
+					snippets: Array.isArray(fp.snippets) ? fp.snippets.filter((x): x is string => typeof x === 'string').sort() : [],
+					spacings: {
+						h1TopGap: s.h1TopGap,
+						h2TopGap: typeof s.h2TopGap === 'number' ? s.h2TopGap : 0,
+						headerToHeaderGap: typeof s.headerToHeaderGap === 'number' ? s.headerToHeaderGap : 0,
+						textGap: s.textGap,
+					},
+				};
+			}
+		}
 	}
 
 	async saveSettings() {
@@ -493,6 +514,63 @@ export default class BookViewPlugin extends Plugin {
 			});
 		}
 		return this.themeSpacingsReady;
+	}
+
+	/** Adopt the current css fingerprint as the baseline without invalidating. */
+	private adoptCssFingerprint(): void {
+		this.cssFingerprint = makeCssFingerprint(this.app, this.themeSpacings);
+	}
+
+	/** Compare the current css identity + rhythm against the one the persisted
+	 *  heights were measured under. On mismatch (theme switched, snippet
+	 *  toggled, or rhythm moved), drop heightStore + scrollPositions and
+	 *  re-adopt the current fingerprint so the book re-measures from scratch.
+	 *  Called from BookView.loadBook (before the manager reads persisted
+	 *  heights) and from the css-change handler. idempotent. */
+	checkCssFingerprint(): void {
+		if (!this.cssFingerprint) {
+			// First run / data.json migration: no stored baseline yet. Adopt
+			// the current look without invalidating — heights already in the
+			// store were measured under this same css anyway.
+			this.adoptCssFingerprint();
+			void this.saveNow();
+			return;
+		}
+		const current = makeCssFingerprint(this.app, this.themeSpacings);
+		if (cssFingerprintsMatch(this.cssFingerprint, current)) return;
+		const hadStore = Object.keys(this.heightStore).length > 0 || Object.keys(this.scrollPositions).length > 0;
+		this.heightStore = {};
+		this.scrollPositions = {};
+		this.adoptCssFingerprint();
+		void this.saveNow();
+		DebugLog.startup(
+			'css fingerprint changed',
+			`theme=${current.themeId || '(none)'} snippets=${current.snippets.length}`,
+			`gaps=${current.spacings.h1TopGap}/${current.spacings.h2TopGap}/${current.spacings.headerToHeaderGap}/${current.spacings.textGap}`,
+		);
+		if (hadStore && !this.cssFingerprintNoticeShown) {
+			this.cssFingerprintNoticeShown = true;
+			new Notice(
+				'Book view: theme/snippets changed — heights will be re-measured once.',
+				6000,
+			);
+		}
+	}
+
+	/** Drop every persisted height and scroll position so all sections re-measure
+	 *  under the current CSS. Used by the delta backstop (a burst of >15%
+	 *  corrections on trusted heights signals an in-place theme/snippet edit the
+	 *  fingerprint layer missed). Notice is one-shot per session. */
+	invalidateHeightStore(): void {
+		const hadStore = Object.keys(this.heightStore).length > 0 || Object.keys(this.scrollPositions).length > 0;
+		this.heightStore = {};
+		this.scrollPositions = {};
+		void this.saveNow();
+		DebugLog.startup('height store invalidated (stale-cache backstop)');
+		if (hadStore && !this.cssFingerprintNoticeShown) {
+			this.cssFingerprintNoticeShown = true;
+			new Notice('Book view: appearance changed — heights will be re-measured once.', 6000);
+		}
 	}
 
 	refreshAllTocs() {

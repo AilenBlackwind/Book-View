@@ -1056,13 +1056,23 @@ export class BookView extends FileView {
 		// premature reading (see main.ts ensureThemeSpacings).
 		if (this.plugin) await this.plugin.ensureThemeSpacings();
 
+		// Invalidate persisted heights if the css identity/rhythm under which
+		// they were measured no longer matches (theme/snippet switch). Must run
+		// BEFORE the manager below reads persisted heights, or sections would
+		// mount at stale heights until the ResizeObserver corrected them.
+		this.plugin?.checkCssFingerprint();
+
 		this.absoluteManager = new AbsoluteSectionManager(
 			this.contentContainer,
 			links,
 			this.app,
 			file,
 			settings?.loadMargin,
-			{ get: this.plugin?.getPersistedHeight, put: this.plugin?.persistHeight },
+			{
+				get: this.plugin?.getPersistedHeight,
+				put: this.plugin?.persistHeight,
+				onStaleCache: () => this.plugin?.invalidateHeightStore(),
+			},
 			this.scrollGuard,
 		);
 		if (this.plugin?.themeSpacings) {

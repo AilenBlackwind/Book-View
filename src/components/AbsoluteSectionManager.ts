@@ -224,10 +224,62 @@ export class AbsoluteSectionManager {
 		this.dbgHs++;
 		const c = (this.dbgSpam.get(path) ?? 0) + 1;
 		this.dbgSpam.set(path, c);
+		// Delta backstop for the CSS fingerprint layer.
+		this.maybeDetectStaleCache(path, newHeight);
 		this.pendingHeights.set(path, newHeight);
 		if (this.pendingHeights.size > 0) {
 			this.scheduleUpdate();
 		}
+	}
+
+	// Delta backstop state. See maybeDetectStaleCache.
+	private staleWindowStart = 0;
+	private staleWindowWidth = 0;
+	private stalePaths = new Set<string>();
+	private staleFired = false;
+
+	/** Backstop for in-place theme/snippet edits that change heights without
+	 *  changing the css-identity fingerprint (themeId+snippets+spacings): a
+	 *  persisted height was measured under the old CSS, so sections mounted
+	 *  with it correct by >15% in a burst — the stored cache as a whole is
+	 *  suspect. Fires after 3 distinct paths within 2s and lets the hook
+	 *  (plugin) drop the store. A single section correcting >15% is normal
+	 *  (image load, user content edit); several distinct trusted heights
+	 *  shifting at once means the persisted geometry no longer matches reality.
+	 *  Width changes reset the window: a pane resize shifts every section, but
+	 *  that is a layout change the store is deliberately width-agnostic about
+	 *  (the RO re-measures the residual on mount, no store drop needed). */
+	private maybeDetectStaleCache(path: string, newHeight: number): void {
+		if (this.staleFired) return;
+		const data = this.sections.get(path);
+		// Only persisted/session-cached heights are suspect; a first-measure
+		// correction from the text-estimate is expected and must not count
+		// (every cold-start section would flag in the same window).
+		if (!data || !data.heightTrusted || data.height <= 0) return;
+		const oldHeight = data.height;
+		if (Math.abs(newHeight - oldHeight) / oldHeight <= 0.15) return;
+
+		const now = performance.now();
+		if (this.stalePaths.size === 0 || now - this.staleWindowStart > 2000) {
+			this.staleWindowStart = now;
+			this.staleWindowWidth = this.lastContainerWidth;
+			this.stalePaths.clear();
+		}
+		if (Math.abs(this.lastContainerWidth - this.staleWindowWidth) > 2) {
+			// Pane resized mid-window: the geometry change came from the width,
+			// not from CSS. Reset the window without counting this section.
+			this.staleWindowStart = now;
+			this.staleWindowWidth = this.lastContainerWidth;
+			this.stalePaths.clear();
+			return;
+		}
+		if (this.stalePaths.has(path)) return;
+		this.stalePaths.add(path);
+		if (this.stalePaths.size < 3) return;
+		this.staleFired = true;
+		this.staleWindowStart = 0;
+		this.stalePaths.clear();
+		this.persistence.onStaleCache?.();
 	}
 
 	onHeightMeasured: ((path: string, estimated: number, actual: number) => void) | null = null;

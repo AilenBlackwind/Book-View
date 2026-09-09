@@ -234,7 +234,7 @@ export function maybeWarnHasSelectors(plugin: BookViewPlugin): void {
 	if (high === 0) return;
 	const example = findings.find((f) => f.severity === 'high')!.selector;
 	new Notice(
-		`Book View: ${high} expensive :has() selector${high > 1 ? 's' : ''} in your themes/snippets — they can cause style-recalc freezes on every section mount (details in console; run "Diagnose CSS :has()" to re-scan). Example: ${example}`,
+		`Book View: ${high} expensive :has() selector${high > 1 ? 's' : ''} in your themes/snippets — they can cause style-recalc freezes on every section mount (details in console). Example: ${example}`,
 		15000,
 	);
 }
