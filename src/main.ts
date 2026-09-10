@@ -6,7 +6,7 @@ import { TocCoordinator } from './components/TocCoordinator';
 import { getManifestFiles, isBookManifest } from './components/ManifestParser';
 import { registerBookViewCodeBlock } from './components/CodeBlockProcessor';
 import { WheelAccelerator } from './components/WheelAccelerator';
-import { BookViewSettings, DEFAULT_SETTINGS } from './settings';
+import { BookViewSettings, DEFAULT_SETTINGS, BOOK_WIDTH_MIN, BOOK_WIDTH_MAX } from './settings';
 import { BookViewSettingTab } from './ui/SettingsTab';
 import { BufferManager } from './BufferManager';
 import { BookViewAPI } from './BookViewAPI';
@@ -486,11 +486,32 @@ export default class BookViewPlugin extends Plugin {
 				};
 			}
 		}
+
+		this.applyBookWidthSetting();
 	}
 
 	async saveSettings() {
 		await this.saveNow();
 		this.refreshAllTocs();
+	}
+
+	/** Push the book width setting into the DOM as a body-level CSS variable
+	 *  that .book-section-placeholder / .book-section-warning max-widths
+	 *  consume before falling back to the vault's --file-line-width. Applied
+	 *  on <body> so every open book picks the change up instantly (the
+	 *  sections' ResizeObserver re-measures the shifted heights) and a
+	 *  reopened book restores it without per-view plumbing. 'obsidian' mode
+	 *  removes the variable so the vault value — including themes like
+	 *  Minimal that relocate it — stays authoritative. */
+	applyBookWidthSetting(): void {
+		if (this.settings.bookWidthMode === 'custom') {
+			const px = Math.round(
+				Math.min(BOOK_WIDTH_MAX, Math.max(BOOK_WIDTH_MIN, this.settings.bookWidth)),
+			);
+			document.body.style.setProperty('--bv-book-line-width', `${px}px`);
+		} else {
+			document.body.style.removeProperty('--bv-book-line-width');
+		}
 	}
 
 	/** Lazy, memoized theme-spacing measurement. Awaited by BookView.loadBook

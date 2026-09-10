@@ -192,7 +192,7 @@
 
 .book-section-placeholder {
 	margin-bottom: 16px;
-	max-width: var(--file-line-width, 750px);
+	max-width: var(--bv-book-line-width, var(--content-line-width, var(--file-line-width, 750px)));
 	margin-left: auto;
 	margin-right: auto;
 }
@@ -209,7 +209,7 @@
 	   layout from the cascade. */
 	margin-left: auto;
 	margin-right: auto;
-	max-width: var(--file-line-width, 750px);
+	max-width: var(--bv-book-line-width, var(--content-line-width, var(--file-line-width, 750px)));
 	border-radius: var(--radius-s);
 	background: var(--background-modifier-error);
 	color: var(--text-normal);

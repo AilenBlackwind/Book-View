@@ -25,6 +25,15 @@ export interface MenuProfile {
  *  Editor API, so editor scripts run). */
 export type EditorMode = 'popup' | 'native';
 
+/** Book container width source: 'obsidian' follows the vault's readable line
+ *  length (--file-line-width, the same variable regular notes use), 'custom'
+ *  overrides it with bookWidth px. */
+export type BookWidthMode = 'obsidian' | 'custom';
+
+/** Sane limits for the custom book width (px). */
+export const BOOK_WIDTH_MIN = 400;
+export const BOOK_WIDTH_MAX = 1600;
+
 import type { AutoExpandMode } from './toc/types';
 
 export type { AutoExpandMode } from './toc/types';
@@ -49,6 +58,8 @@ export interface BookViewSettings {
 	editorMode: EditorMode;
 	popupHideFrontmatter: boolean;
 	cssHasWarningEnabled: boolean;
+	bookWidthMode: BookWidthMode;
+	bookWidth: number;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -73,4 +84,6 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	editorMode: 'popup',
 	popupHideFrontmatter: false,
 	cssHasWarningEnabled: true,
+	bookWidthMode: 'obsidian',
+	bookWidth: 750,
 };

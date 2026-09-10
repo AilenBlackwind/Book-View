@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import type BookViewPlugin from '../main';
-import type { ModifierConfig, MenuProfile, EditorMode } from '../settings';
+import type { ModifierConfig, MenuProfile, EditorMode, BookWidthMode } from '../settings';
+import { BOOK_WIDTH_MIN, BOOK_WIDTH_MAX } from '../settings';
 import { CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
 
 type SettingsSection = 'toc' | 'menus' | 'general';
@@ -197,6 +198,41 @@ export class BookViewSettingTab extends PluginSettingTab {
 		new Setting(el)
 			.setName('Reading')
 			.setHeading();
+
+		new Setting(el)
+			.setName('Book width')
+			.setDesc('Container width for book content. Match notes follows the vault readable line length setting, the same width regular notes use.')
+			.addDropdown((drop) =>
+				drop
+					.addOption('obsidian', 'Match notes')
+					.addOption('custom', 'Custom')
+					.setValue(this.plugin.settings.bookWidthMode)
+					.onChange(async (value: string) => {
+						this.plugin.settings.bookWidthMode = value as BookWidthMode;
+						await this.plugin.saveSettings();
+						this.plugin.applyBookWidthSetting();
+						// Re-render so the custom-width slider only appears in
+						// custom mode.
+						this.display();
+					}),
+			);
+
+		if (this.plugin.settings.bookWidthMode === 'custom') {
+			new Setting(el)
+				.setName('Custom book width')
+				.setDesc('Book container width in pixels.')
+				.addSlider((slider) =>
+					slider
+						.setLimits(BOOK_WIDTH_MIN, BOOK_WIDTH_MAX, 10)
+						.setValue(this.plugin.settings.bookWidth)
+						.setDynamicTooltip()
+						.onChange(async (value: number) => {
+							this.plugin.settings.bookWidth = value;
+							await this.plugin.saveSettings();
+							this.plugin.applyBookWidthSetting();
+						}),
+				);
+		}
 
 		new Setting(el)
 			.setName('Lazy load margin')
