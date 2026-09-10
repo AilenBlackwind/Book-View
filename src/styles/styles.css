@@ -140,14 +140,6 @@
 	overflow-anchor: none !important;
 }
 
-/* Middle-button autoscroll mode: replace the browser cursor with the scroll
-   circle while the book scrolls in the direction of the pointer. */
-.book-content-container.book-autoscroll {
-	cursor: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='white' stroke='black' stroke-width='1.5'/%3E%3Cpath d='M12 5 L15 9 L9 9 Z' fill='black'/%3E%3Cpath d='M12 19 L15 15 L9 15 Z' fill='black'/%3E%3C/svg%3E")
-			4 4,
-		auto;
-}
-
 /* Core's node-inserted animation cost (micro-freeze fix). The 0.01ms
    outline-color "flash" is Obsidian's DOM-insertion signal that mermaid and
    the enhancer hook onto; inside the huge transformed book container the
@@ -188,6 +180,14 @@
 	padding: 12px;
 	font-size: var(--font-smallest);
 	contain: layout;
+	/* Disable native scroll anchoring on the panel scroller itself: the
+	   virtualized row window adds/removes absolutely-positioned rows above
+	   the viewport during rebuilds, and the browser would auto-adjust
+	   scrollTop to keep its anchored node stable — a visible "bounce back"
+	   when the window churns (most noticeable with expanded headings, which
+	   make the panel long and trigger big rebuilds). The window restores its
+	   own scrollTop reads/writes. */
+	overflow-anchor: none !important;
 }
 
 .book-section-placeholder {

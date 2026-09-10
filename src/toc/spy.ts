@@ -370,12 +370,17 @@ window.clearTimeout(s.activePathTimer);
 	}
 
 	/** Re-apply the highlight after a window render replaced the row elements
-	 *  (the previous activeHeading node may be detached). */
+	 *  (the previous activeHeading node may be detached). The panel scroll is
+	 *  deliberately NOT touched here: this runs after every panel render,
+	 *  including renders caused by the user manually scrolling the panel, and
+	 *  keepActiveInView would snap the panel back to the active row against
+	 *  that scroll. Following the reading position stays in updateHighlight
+	 *  (book scroll) and applyHighlightNow (explicit navigation). */
 	reapplyHighlight(): void {
 		const s = this.state;
 		if (s.activeEntryIndex < 0) return;
 		const mode = s.settings?.autoExpandMode ?? 'disabled';
-		this.applyHighlightNow(this.visibleAncestor(s.activeEntryIndex, mode !== 'disabled'));
+		this.applyHighlight(this.visibleAncestor(s.activeEntryIndex, mode !== 'disabled'));
 	}
 
 	/** Write-only scroll to keep the active row inside the panel viewport.

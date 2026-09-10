@@ -3,6 +3,7 @@ import type { TocBuilder } from './builder';
 import { firstItemAt, firstItemAfter } from './virtual';
 import type { VirtualItem } from './virtual';
 import { TOC_SHADOW_CSS } from './shadow.css';
+import { DebugLog } from '../utils/debug';
 
 /** Extra rows rendered above/below the visible panel range. */
 const OVERSCAN = 10;
@@ -51,6 +52,11 @@ export class TocWindow {
 	private scrollHandler: (() => void) | null = null;
 	private clickHandler: ((evt: MouseEvent) => void) | null = null;
 	private renderScheduled = false;
+	/** Debug-only probe (see installDebugProbe): original PropertyDescriptor
+	 *  backups needed to restore the panel accessors in destroy(). */
+	private dbgOrigScrollTop: PropertyDescriptor | null = null;
+	private dbgOrigScrollTo: (() => void) | null = null;
+	private dbgOrigScrollBy: (() => void) | null = null;
 
 	/** Called after a row-window rebuild (used to re-host the highlight pill
 	 *  into the active row, which may have been re-created). */
@@ -385,11 +391,60 @@ export class TocWindow {
 		return el ?? null;
 	}
 
+	/** Debug: intercept every programmatic scrollTop/scrollTo/scrollBy write on
+	 *  the panel and log it with a caller label. Native user scrolling never
+	 *  goes through the JS setters — the compositor writes the native slot
+	 *  directly — so any captured write is plugin code (or a foreign library)
+	 *  moving the panel, i.e. the possible source of a perceived bounce-back.
+	 *  No-op while DebugLog is disabled. Uninstalled in destroy(). */
+	private installDebugProbe(): void {
+		const el = this.state.containerEl;
+		const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+		if (!desc?.set || !desc.get) return;
+		const label = (): string =>
+			new Error().stack?.split('\n').slice(2, 4).map((l) => l.trim().match(/at (.+)/)?.[1] ?? l.trim()).join(' > ') ?? '';
+		Object.defineProperty(el, 'scrollTop', {
+			configurable: true,
+			get: function (this: HTMLElement): number {
+				return desc.get!.call(this) as number;
+			},
+			set: function (this: HTMLElement, v: number): void {
+				if (DebugLog.enabled) {
+					DebugLog.log('TOCWRITE', '', `scrollTop=${Math.round(v)}`, label());
+				}
+				desc.set!.call(this, v);
+			},
+		});
+		this.dbgOrigScrollTop = desc;
+		for (const name of ['scrollTo', 'scrollBy'] as const) {
+			const original = (el as unknown as Record<string, unknown>)[name] as
+				| ((...a: unknown[]) => void)
+				| undefined;
+			if (typeof original !== 'function') continue;
+			const bound = original.bind(el);
+			(el as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
+				if (DebugLog.enabled) {
+					DebugLog.log('TOCWRITE', '', `${name}`, label());
+				}
+				bound(...args);
+			};
+			if (name === 'scrollTo') this.dbgOrigScrollTo = original.bind(el);
+			else this.dbgOrigScrollBy = original.bind(el);
+		}
+	}
+
 	/** Wire the panel scroll listener (coalesced to one rAF render). */
 	setup(): void {
 		const s = this.state;
 		if (s.virtualItems.length === 0) return;
+		this.installDebugProbe();
 		this.scrollHandler = () => {
+			// Debug: log every panel scroll event (native user scrolls AND any
+			// programmatic jump) so a bounce-back is visible in the log as a
+			// scroll event whose position regresses after a jump.
+			if (DebugLog.enabled) {
+				DebugLog.log('TOCSCROLL', '', `scrollTop=${Math.round(s.containerEl.scrollTop)}`);
+			}
 			// Cache the panel scrollTop before deferring the render: the render
 			// (and every per-frame reader) reads from this cache instead of the
 			// live element, so a scroll frame never pays a forced style recalc
@@ -442,5 +497,29 @@ export class TocWindow {
 		this.state.highlightHost = null;
 		this.spacerEl = null;
 		this.listEl = null;
+		this.uninstallDebugProbe();
+	}
+
+	/** Debug: restore the panel's native scroll accessors patched by
+	 *  installDebugProbe (idempotent, safe after any teardown order). */
+	private uninstallDebugProbe(): void {
+		const el = this.state.containerEl;
+		if (this.dbgOrigScrollTop) {
+			try {
+				Object.defineProperty(el, 'scrollTop', this.dbgOrigScrollTop);
+			} catch {
+				/* panel re-created; nothing to restore */
+			}
+			this.dbgOrigScrollTop = null;
+		}
+		const rec = el as unknown as Record<string, unknown>;
+		if (this.dbgOrigScrollTo && typeof rec.scrollTo === 'function' && rec.scrollTo !== this.dbgOrigScrollTo) {
+			rec.scrollTo = this.dbgOrigScrollTo;
+		}
+		if (this.dbgOrigScrollBy && typeof rec.scrollBy === 'function' && rec.scrollBy !== this.dbgOrigScrollBy) {
+			rec.scrollBy = this.dbgOrigScrollBy;
+		}
+		this.dbgOrigScrollTo = null;
+		this.dbgOrigScrollBy = null;
 	}
 }
