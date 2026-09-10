@@ -15,6 +15,16 @@ const ACTIVE_EDGE_MARGIN = 52;
  *  gesture truly rests — not after the whole gesture-defer window (700ms). */
 const CENTER_SCROLL_SETTLE_MS = 50;
 
+/** Watchdog bound for a stuck navigation guard: onScrollTick bails while
+ *  isJumping is set, and a superseded navigation that loses the reset-timer
+ *  race (its finally clears the winner's pending reset, then fails its own
+ *  generation check) would otherwise hold the flag forever — the panel
+ *  stops tracking the book until a rebind. Force-clear after a generous
+ *  multiple of the normal navigation duration so a real jump (bounded by
+ *  settleScrollToHeading's 30 attempts + waitForScrollSettle) is never
+ *  interrupted, but a lost reset costs at most a few seconds of tracking. */
+const IS_JUMPING_WATCHDOG_MS = 5000;
+
 /**
  * Scroll spy: maps the book's scroll position to the active ToC entry,
  *  maintains per-entry heading positions, and drives the highlight + panel
@@ -142,7 +152,16 @@ export class TocSpy {
 	/** Called once per rAF frame on scroll */
 	onScrollTick(): void {
 		const s = this.state;
-		if (s.isJumping) return;
+		if (s.isJumping) {
+			if (s.isJumpingSince && performance.now() - s.isJumpingSince > IS_JUMPING_WATCHDOG_MS) {
+				// Lost navigation reset (see IS_JUMPING_WATCHDOG_MS): recover
+				// instead of tracking nothing until a rebind.
+				s.isJumping = false;
+				s.navigating = false;
+			} else {
+				return;
+			}
+		}
 
 		this.updatePositionsIfDirty();
 

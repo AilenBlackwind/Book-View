@@ -149,6 +149,10 @@ export class TocState {
 	navigationGeneration = 0;
 	/** true while programmatic scroll is in progress */
 	isJumping = false;
+	/** performance.now() when isJumping was last set; the spy's watchdog
+	 *  force-clears the flag after IS_JUMPING_WATCHDOG_MS so a lost reset
+	 *  (superseded navigation race) can only delay tracking, not kill it. */
+	isJumpingSince = 0;
 	/** Timestamp (ms) when heading positions last changed.  The spy's
 	 *  expand/collapse path is suppressed briefly after a position change so
 	 *  that estimated heading offsets (which shift as sections lazy-mount) do

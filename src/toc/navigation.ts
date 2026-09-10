@@ -28,6 +28,7 @@ export class TocNavigator {
 
 		s.navigating = true;
 		s.isJumping = true;
+		s.isJumpingSince = performance.now();
 		try {
 			const sectionOffset = s.positionSource.getOffset(entry.file.path) ?? 0;
 			const estimatedY = sectionOffset + entry.line * HEIGHT_PER_LINE;
@@ -107,8 +108,13 @@ export class TocNavigator {
 			// Without this the spy wakes up on an intermediate scrollTop,
 			// momentarily highlights a wrong heading and toggles expand/collapse.
 			await this.waitForScrollSettle();
-			window.clearTimeout(s.navigationTimer);
+			// Only the latest navigation may touch the reset timer. A
+			// superseded run clearing the current run's pending reset (then
+			// failing its own generation check) would leave isJumping stuck
+			// true forever — the spy's onScrollTick bails on that flag and
+			// the panel freezes until a rebind.
 			if (s.navigationGeneration === gen) {
+				window.clearTimeout(s.navigationTimer);
 				s.navigationTimer = window.setTimeout(() => {
 					s.navigating = false;
 					s.isJumping = false;
