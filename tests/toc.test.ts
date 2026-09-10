@@ -5,13 +5,13 @@ import { computeHeadingFoldState } from '../src/utils/fold';
 describe('pickActiveIndex', () => {
 	it('returns the last entry above the trigger line', () => {
 		const positions = [0, 500, 1000];
-		// scrollTop 200 + 30% of a 1000px viewport = 500 → the heading at 500 wins.
+		// scrollTop 200 + 50% of a 1000px viewport = 700 → the heading at 500 wins.
 		expect(pickActiveIndex(positions, 200, 1000)).toBe(1);
 	});
 
 	it('returns -1 when scrolled above the first heading', () => {
 		const positions = [100, 500];
-		// triggerY = 0 + 30% of 100px = 30, nothing is above it.
+		// triggerY = 0 + 50% of 100px = 50, nothing is above it.
 		expect(pickActiveIndex(positions, 0, 100)).toBe(-1);
 	});
 
@@ -25,10 +25,48 @@ describe('pickActiveIndex', () => {
 		// This is the "highlight flies away" regression: the highlight must
 		// follow the *new* offsets, not keep pointing at the stale one.
 		const scrollTop = 300;
-		const before = [0, 400, 700];
+		const before = [0, 400, 900];
 		const after = [0, 900, 1300];
 		expect(pickActiveIndex(before, scrollTop, 1000)).toBe(1);
 		expect(pickActiveIndex(after, scrollTop, 1000)).toBe(0);
+	});
+
+	it('holds the previous entry while the next heading is inside the hysteresis band', () => {
+		// triggerY = 300 + 500 = 800; the heading at 790 is above the line but
+		// within the 24px dead band (800 - 24 = 776 < 790), so the previous
+		// entry is held — parking on the boundary must not flip the highlight.
+		const positions = [0, 790];
+		expect(pickActiveIndex(positions, 300, 1000, 0)).toBe(0);
+		// 30px further down the heading clears the band: 790 <= 806 → switch.
+		expect(pickActiveIndex(positions, 330, 1000, 0)).toBe(1);
+	});
+
+	it('holds the previous entry while scrolling up until it drops below the band', () => {
+		const positions = [0, 790];
+		// triggerY = 270 + 500 = 770; the held heading at 790 is past the line
+		// but inside the band (770 + 24 = 794) → held.
+		expect(pickActiveIndex(positions, 270, 1000, 1)).toBe(1);
+		// triggerY = 250 + 500 = 750; 790 > 774 → decisive switch.
+		expect(pickActiveIndex(positions, 250, 1000, 1)).toBe(0);
+	});
+
+	it('holds the first entry above the document top boundary', () => {
+		// Scrolled above the first heading (nothing above the line), but the
+		// heading is within the band below the line: hold instead of flapping
+		// between -1 and 0.
+		const positions = [560];
+		expect(pickActiveIndex(positions, 40, 1000, 0)).toBe(0);
+		// Well above the line → clear.
+		expect(pickActiveIndex(positions, 0, 1000, 0)).toBe(-1);
+	});
+
+	it('accepts a decisive jump immediately (teleport, multi-section frames)', () => {
+		const positions = [0, 500, 1000, 1500];
+		// Far teleport down: the new heading is far above the line.
+		expect(pickActiveIndex(positions, 2400, 1000, 0)).toBe(3);
+		// Far jump up: the held heading (1500) is far below the line (500) →
+		// decisive switch to the best candidate (500 is exactly on the line).
+		expect(pickActiveIndex(positions, 0, 1000, 3)).toBe(1);
 	});
 });
 

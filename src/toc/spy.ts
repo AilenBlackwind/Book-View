@@ -23,7 +23,8 @@ const CENTER_SCROLL_SETTLE_MS = 50;
  *  through the virtual offsets + the window's row maps instead of direct row
  *  DOM lookups. */
 export class TocSpy {
-	/** Last bestIndex reported by pickActiveIndex; used to log only on change. */
+	/** Last bestIndex reported by pickActiveIndex; feeds the spy's change
+	 *  log and the pick's hysteresis dead band (see pickActiveIndex). */
 	private _prevSpyIndex = -1;
 	/** Cached pill transform string; movePill skips the write when the value
 	 *  is unchanged (scrolling within one heading moves nothing). */
@@ -147,7 +148,7 @@ export class TocSpy {
 
 		const scrollTop = s.positionSource?.getScrollTop() ?? s.scrollContainer.scrollTop;
 		const viewportHeight = s.viewportHeight;
-		const bestIndex = pickActiveIndex(s.headingPositions, scrollTop, viewportHeight);
+		const bestIndex = pickActiveIndex(s.headingPositions, scrollTop, viewportHeight, this._prevSpyIndex);
 
 		// After a navigation (teleport), trust the teleported-to entry until
 		// the user scrolls significantly away from the teleport target.
