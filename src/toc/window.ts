@@ -364,7 +364,9 @@ export class TocWindow {
  *  absolutely positioned at their virtual offset so no sibling shifts when a
  *  row is added/removed. On a structural (visibility-change) render, surviving
  *  rows FLIP-glide from their previous offset and fresh rows slink in, so an
- *  expand/collapse reads as a flow instead of a snap. */
+ *  expand/collapse reads as a flow instead of a snap. Only the row content
+ *  animates — the nesting-guide background on the li stays at its final
+ *  offset, keeping the guide lines continuous for the whole animation. */
 	private buildRow(
 		listEl: HTMLElement,
 		item: VirtualItem,
@@ -401,7 +403,7 @@ export class TocWindow {
 			s.rowAnchorByEntry.set(item.index, a);
 			reused.style.top = `${top}px`;
 			if (animate && isFinite(prevTop) && Math.abs(prevTop - top) > 0.5) {
-				this.glideRow(reused, prevTop - top);
+				this.glideRow(this.glideTarget(reused), prevTop - top);
 			}
 			return reused;
 		}
@@ -431,11 +433,25 @@ export class TocWindow {
 		return el ?? null;
 	}
 
-	/** FLIP-glide a surviving row from its previous top to the new one. The
-	 *  row's layout `top` is already the new offset; translateY inverts it so
-	 *  the first painted frame is the old position, then the animation eases it
-	 *  to 0. Transform + opacity only, so the whole thing runs on the compositor
-	 *  (the panel is `contain: layout`, rows stay paint/transform-isolated). */
+	/** The animatable content of a row: the .bv-toc-heading-inner wrapper
+	 *  (chevron + anchor) for heading rows, or the whole element for rows
+	 *  without a guide background (file rows). Everything that carries nesting
+	 *  guides must stay at its final offset during an expand/collapse — moving
+	 *  the li would drag its background segments and tear the lines at the
+	 *  seam with the freshly-unfolded block — so glides/fades always target
+	 *  the content, never the li's background. */
+	private glideTarget(li: HTMLElement): HTMLElement {
+		return li.querySelector<HTMLElement>('.bv-toc-heading-inner') ?? li;
+	}
+
+	/** FLIP-glide a surviving row's content from its previous top to the new
+	 *  one. The row's guide background is NOT animated: it lives on the <li>
+	 *  at its final offset, so the nesting lines stay continuous through the
+	 *  whole animation — only the chevron+label travels. The layout `top` is
+	 *  already the new offset; translateY inverts it so the first painted
+	 *  frame is the old position, then the animation eases it to 0. Transform
+	 *  + opacity only, so the whole thing runs on the compositor (the panel is
+	 *  `contain: layout`, rows stay paint/transform-isolated). */
 	private glideRow(el: HTMLElement, translatePx: number): void {
 		if (this.reducedMotion() || typeof el.animate !== 'function') return;
 		try {
@@ -452,9 +468,12 @@ export class TocWindow {
 	}
 
 	/** Slink a freshly-created row in (a section just unfolded): fade + a 5px
-	 *  rise, so the expanded children land visibly instead of popping. */
-	private fadeInRow(el: HTMLElement): void {
-		if (this.reducedMotion() || typeof el.animate !== 'function') return;
+	 *  rise applied only to the row content, so the guides (background on the
+	 *  li) are already at their final position while the text appears — the
+	 *  nesting lines never move or tear even on the fresh rows. */
+	private fadeInRow(li: HTMLElement): void {
+		if (this.reducedMotion() || typeof li.animate !== 'function') return;
+		const el = this.glideTarget(li);
 		try {
 			el.animate(
 				[
