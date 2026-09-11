@@ -463,6 +463,12 @@ export class AbsoluteSectionManager {
 			} else {
 				this.lastScrollTop = this.scrollContainer.scrollTop;
 				this.lastClientHeight = this.scrollContainer.clientHeight;
+				// The position change did not come from a guard write: native
+				// movement (middle-click autoscroll, scrollbar drag, native
+				// wheel). The wheel accelerator reads this to pass notches
+				// through instead of hijacking the ongoing gesture — its glide
+				// writes would cancel the browser's autoscroll.
+				this.lastNativeScrollAt = Date.now();
 			}
 			// The one-shot flag is consumed here — boundScrollHandler is
 			// registered before the spy's scroll listener, so this event is
@@ -890,12 +896,23 @@ export class AbsoluteSectionManager {
 			// still — masked by the scroll, and re-anchored at settle. Large
 			// corrections are not masked though (a section above loading taller
 			// than its estimate slides the reading content down mid-scroll), so
-			// those are anchored immediately.
-			if (this.layout.restoreScrollAt(anchor, scrollTop, GESTURE_ANCHOR_PX)) {
-				this.dbgAnchorDuringGesture++;
-			} else {
+			// those are anchored immediately — BUT only while the movement is
+			// programmatic (our glide keeps the guard record fresh, and its
+			// writes compose harmlessly with our own). During sustained NATIVE
+			// scrolling a compensation write kills the browser's middle-click
+			// autoscroll outright: the round cursor stays, the book freezes
+			// (probe logs 2026-09: a 64px correction fired mid-gesture, the
+			// gesture never moved again). Native deltas are event-driven and
+			// tolerate nothing rewriting the position under them, so there the
+			// large-correction exception is dropped and everything defers to
+			// the settle update, like small corrections already do.
+			const lastWrite = guardedLastWriteValue(this.scrollContainer);
+			const nativeDriven = lastWrite === null || Math.abs(lastWrite - scrollTop) > 1;
+			if (nativeDriven || !this.layout.restoreScrollAt(anchor, scrollTop, GESTURE_ANCHOR_PX)) {
 				this.dbgDeferComp++;
 				this.armDeferredCompensation();
+			} else {
+				this.dbgAnchorDuringGesture++;
 			}
 		} else {
 			this.layout.restoreScrollAt(anchor, scrollTop);
@@ -914,6 +931,18 @@ export class AbsoluteSectionManager {
 			if (this.destroyed) return;
 			this.scheduleUpdate();
 		}, GESTURE_DEFER_MS);
+	}
+
+	/** Timestamp of the most recent scroll event whose position change did not
+	 *  come from a guard write, i.e. genuine native scrolling. */
+	private lastNativeScrollAt = 0;
+
+	/** True while native scrolling is visibly in progress (a scroll event not
+	 *  produced by our writes arrived within the last ~8 frames). Autoscroll
+	 *  and native wheel emit scroll events every frame, so this holds for the
+	 *  whole gesture; idle and glide periods leave it false. */
+	isNativeScrollActive(): boolean {
+		return Date.now() - this.lastNativeScrollAt < 130;
 	}
 
 	getOffset(path: string): number {

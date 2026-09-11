@@ -124,6 +124,7 @@ export class WheelAccelerator {
 	constructor(
 		private readonly container: HTMLElement,
 		private readonly getConfig: WheelFlickConfigGetter,
+		private readonly isNativeScrollActive: () => boolean = () => false,
 	) {
 		WheelAccelerator.instances.set(container, this);
 		this.container.addEventListener('mousedown', this.kill, { capture: true });
@@ -150,6 +151,14 @@ export class WheelAccelerator {
 
 		// Nested scrollables (embeds, code blocks…) keep native behavior.
 		if (this.findScrollableTarget(evt.target) !== this.container) return;
+
+		// A notch while a NATIVE scroll is in progress (the browser's
+		// middle-click autoscroll, a scrollbar drag, a native wheel coast)
+		// passes through untouched. Taking over here would start the JS
+		// glide, and its per-frame scrollTop writes cancel the autoscroll
+		// gesture outright — the round cursor stays and the book freezes.
+		// Natively the notch simply composes with the ongoing gesture.
+		if (this.isNativeScrollActive()) return;
 
 		// Shield: claim every vertical wheel over the book container from other
 		// listeners, BEFORE any delta classification or accelerator gating.
@@ -388,6 +397,15 @@ export class WheelAccelerator {
 	}
 
 	private kill = (): void => {
+		// Cancel the pending step, not just the velocity: the step writes the
+		// position unconditionally (from the possibly-stale guard record) even
+		// at zero velocity, and a write right after the browser started its
+		// middle-click autoscroll cancels the gesture — the exact "flick then
+		// middle-click kills autoscroll" report.
+		if (this.rafId !== 0) {
+			window.cancelAnimationFrame(this.rafId);
+			this.rafId = 0;
+		}
 		this.velocity = 0;
 		this.coast = 0;
 		this.combo = 1;

@@ -1,7 +1,7 @@
 import { App, Component, FileView, HoverPopover, Scope, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 import { cssClassesFromFrontmatter, getManifestLinks } from '../components/ManifestParser';
 import { AbsoluteSectionManager } from '../components/AbsoluteSectionManager';
-import { ScrollGuard, guardedScrollWrite } from '../components/ScrollGuard';
+import { ScrollGuard, guardedScrollWrite, guardedLastWriteValue } from '../components/ScrollGuard';
 import { HEIGHT_PER_LINE } from '../toc/types';
 import { WheelAccelerator } from '../components/WheelAccelerator';
 import { showScriptMenu } from '../ui/ContextMenu';
@@ -901,6 +901,58 @@ export class BookView extends FileView {
 		// container and the ScrollGuard does not block its writes (2026-09).
 		// History and fallback plan: IDEAS.md.
 
+		// TEMPORARY autoscroll diagnosis probes (DebugLog-gated). Chromium
+		// picks the autoscroll target by hit-testing at mousedown and walks up
+		// from the clicked node to the first user-scrollable box; over the
+		// virtualized book the round cursor appears even when the walk stops
+		// at a nested scrollable (code block, table…) whose vertical autoscroll
+		// is a no-op — the gesture then "engages but never moves". Probe 1
+		// logs every non-flow box between the click target and the container;
+		// probe 2 logs container movement that no guarded JS write performed
+		// (i.e. genuinely native scrolling, including an engaged autoscroll).
+		this.contentContainer.addEventListener('mousedown', (evt: MouseEvent) => {
+			if (evt.button !== 1 || !DebugLog.enabled) return;
+			const chain: string[] = [];
+			let node: HTMLElement | null = evt.target as HTMLElement;
+			while (node && node !== this.contentContainer && chain.length < 6) {
+				const cs = getComputedStyle(node);
+				if (cs.overflowY !== 'visible' || cs.overflowX !== 'visible') {
+					const cls = typeof node.className === 'string' ? node.className.split(' ').slice(0, 2).join('.') : '';
+					chain.push(`${node.tagName.toLowerCase()}.${cls} x=${cs.overflowX} y=${cs.overflowY}`);
+				}
+				node = node.parentElement;
+			}
+			DebugLog.log('BV-MID', chain.length ? chain.join(' | ') : '(clean path to container)');
+			// Cursor tracker: for 6s after the middle click, sample the cursor's
+			// vertical offset from the press point next to the container's
+			// scrollTop. Native autoscroll speed follows the offset — a flat
+			// scrollTop while the offset is far from zero is a real stall.
+			const pressY = evt.clientY;
+			const el = this.contentContainer;
+			if (!el) return;
+			let lastLog = 0;
+			const track = (me: MouseEvent): void => {
+				const now = performance.now();
+				if (now - lastLog < 100) return;
+				lastLog = now;
+				DebugLog.log('BV-CURSOR', `dy=${Math.round(me.clientY - pressY)} top=${Math.round(el.scrollTop)}`);
+			};
+			window.addEventListener('mousemove', track, { passive: true });
+			window.setTimeout(() => window.removeEventListener('mousemove', track), 6000);
+		}, { capture: true });
+		const nativeProbeEl = this.contentContainer;
+		this.contentContainer.addEventListener('scroll', (evt: Event) => {
+			if (!evt.isTrusted || !DebugLog.enabled || !nativeProbeEl) return;
+			const last = guardedLastWriteValue(nativeProbeEl);
+			const top = nativeProbeEl.scrollTop;
+			// A delta the guard never wrote came from the browser itself
+			// (native autoscroll, scrollbar drag…). Log it so failing
+			// gestures show up as missing NATIVE lines.
+			if (last === null || Math.abs(top - last) > 1) {
+				DebugLog.log('BV-NATIVE', `top=${Math.round(top)} lastWrite=${last === null ? 'none' : Math.round(last)}`);
+			}
+		}, { passive: true });
+
 		// Debounced scroll-position persistence: writes the current scrollTop to
 		// plugin.scrollPositions after 2s of no scrolling (mirrors the height
 		// debounce in main.ts). The position is read back on the next loadBook
@@ -921,16 +973,20 @@ export class BookView extends FileView {
 
 		this.startFindObserver();
 
-		this.wheelAccelerator = new WheelAccelerator(this.contentContainer, () => {
-			const s = this.plugin?.settings;
-			return {
-				enabled: s?.wheelFlickEnabled ?? true,
-				strength: s?.wheelFlickStrength ?? 2,
-				friction: s?.wheelFlickFriction ?? 0.92,
-				precision: s?.wheelFlickPrecision ?? false,
-				shield: s?.wheelShieldEnabled ?? true,
-			};
-		});
+		this.wheelAccelerator = new WheelAccelerator(
+			this.contentContainer,
+			() => {
+				const s = this.plugin?.settings;
+				return {
+					enabled: s?.wheelFlickEnabled ?? true,
+					strength: s?.wheelFlickStrength ?? 2,
+					friction: s?.wheelFlickFriction ?? 0.92,
+					precision: s?.wheelFlickPrecision ?? false,
+					shield: s?.wheelShieldEnabled ?? true,
+				};
+			},
+			() => this.absoluteManager?.isNativeScrollActive() ?? false,
+		);
 
 		const links = await getManifestLinks(this.app, file, manifestRaw);
 		const files = links
