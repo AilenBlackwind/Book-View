@@ -1,10 +1,14 @@
 import { Notice } from 'obsidian';
+import type { App } from 'obsidian';
 import type BookViewPlugin from '../main';
+
+export type HasSource = 'theme' | 'snippet' | 'plugin' | 'other';
 
 export interface HasFinding {
 	sheet: string;
 	selector: string;
 	severity: 'high' | 'medium';
+	source: HasSource;
 }
 
 /**
@@ -155,12 +159,44 @@ function sheetLabel(sheet: CSSStyleSheet): string {
 	return 'unknown';
 }
 
+/** Runtime shape of Obsidian's CustomCss instance (`app.customCss`). The d.ts
+ *  bundled with the obsidian npm package doesn't type it, and the documented
+ *  `getTheme()` / `getSnippets()` methods don't exist on the runtime class —
+ *  only these plain fields do. The theme CSS lives in the single `styleEl`;
+ *  every enabled snippet gets its own `<style>` element in `extraStyleEls`
+ *  (plugin `<style>` elements are siblings of these, inserted right before
+ *  `styleEl`, with no distinguishing class). */
+interface CustomCssRuntimeLike {
+	styleEl: HTMLStyleElement | null;
+	extraStyleEls: HTMLStyleElement[];
+}
+
+function customCssRuntimeOf(app: App): CustomCssRuntimeLike | null {
+	const css = (app as unknown as { customCss?: unknown }).customCss;
+	if (!css || typeof css !== 'object') return null;
+	const c = css as Partial<CustomCssRuntimeLike>;
+	if (!Array.isArray(c.extraStyleEls)) return null;
+	return c as CustomCssRuntimeLike;
+}
+
+/** Classify a stylesheet's owner as user theme, user snippet, plugin, or other. */
+function sheetSource(sheet: CSSStyleSheet, css: CustomCssRuntimeLike | null): HasSource {
+	const node = sheet.ownerNode;
+	if (css && node) {
+		if (node === css.styleEl) return 'theme';
+		if (node instanceof HTMLStyleElement && css.extraStyleEls.includes(node)) return 'snippet';
+	}
+	if (node instanceof HTMLElement) return node.tagName.toLowerCase() === 'style' ? 'plugin' : 'other';
+	return 'other';
+}
+
 /** Scan all readable stylesheets for expensive :has() selectors. */
-export function scanHasPerformance(): HasFinding[] {
+export function scanHasPerformance(app?: App): HasFinding[] {
 	const out: HasFinding[] = [];
 	const seen = new Set<string>();
+	const css = app ? customCssRuntimeOf(app) : null;
 
-	const processSelector = (selector: string, sheetName: string) => {
+	const processSelector = (selector: string, sheetName: string, source: HasSource) => {
 		for (const part of splitTopLevel(selector)) {
 			for (const call of findHasCalls(part)) {
 				const subject = subjectBefore(part, call.subjectStart);
@@ -170,19 +206,19 @@ export function scanHasPerformance(): HasFinding[] {
 				const key = `${sheetName}\u0000${part}`;
 				if (seen.has(key)) continue;
 				seen.add(key);
-				out.push({ sheet: sheetName, selector: part, severity });
+				out.push({ sheet: sheetName, selector: part, severity, source });
 			}
 		}
 	};
 
-	const walk = (ruleList: CSSRuleList, sheetName: string) => {
+	const walk = (ruleList: CSSRuleList, sheetName: string, source: HasSource) => {
 		for (const rule of Array.from(ruleList)) {
 			const st = (rule as unknown as { selectorText?: string }).selectorText;
 			if (typeof st === 'string' && st.includes(':has(')) {
-				processSelector(st, sheetName);
+				processSelector(st, sheetName, source);
 			}
 			const nested = (rule as unknown as { cssRules?: CSSRuleList }).cssRules;
-			if (nested) walk(nested, sheetName);
+			if (nested) walk(nested, sheetName, source);
 		}
 	};
 
@@ -195,7 +231,7 @@ export function scanHasPerformance(): HasFinding[] {
 			// no :has() in this app version anyway.
 			continue;
 		}
-		walk(rules, sheetLabel(sheet));
+		walk(rules, sheetLabel(sheet), sheetSource(sheet, css));
 	}
 
 	return out.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'high' ? -1 : 1));
@@ -209,7 +245,7 @@ export function logHasFindings(findings: HasFinding[], force = false): void {
 		return;
 	}
 	for (const f of findings) {
-		console.debug(`[Book View] ${f.severity} ${f.sheet} :: ${f.selector}`);
+		console.debug(`[Book View] ${f.severity} [${f.source}] ${f.sheet} :: ${f.selector}`);
 	}
 	console.warn(
 		`[Book View] ${findings.length} expensive :has() selector(s). These rules make Blink treat every matching element (and its ancestors) as a :has() dependent; when the book mounts a section, the whole ancestor chain gets a style recalc. Prefer sibling-scoped :has(+ x) / :has(~ x), or scope the subject to a non-broad class.`,
@@ -221,20 +257,24 @@ let warnedOnce = false;
 /**
  * One-time-per-session auto-warning shown on the first opened book. Gated by
  * the `cssHasWarningEnabled` setting. Reads nothing from the live layout.
+ *
+ * Only selectors from the user's own CSS snippets trigger the notice; theme
+ * and third-party plugin styles are still logged to the console so a theme can
+ * be identified as the culprit without spamming a warning the user can't fix.
  */
 export function maybeWarnHasSelectors(plugin: BookViewPlugin): void {
 	if (warnedOnce) return;
 	warnedOnce = true;
 	if (!plugin.settings.cssHasWarningEnabled) return;
-	const findings = scanHasPerformance();
-	const high = findings.filter((f) => f.severity === 'high').length;
+	const findings = scanHasPerformance(plugin.app);
 	if (findings.length > 0) logHasFindings(findings, false);
+	const snippetHigh = findings.filter((f) => f.source === 'snippet' && f.severity === 'high').length;
 	// Child-scoped :has(> x) is bounded and rarely a real problem; only warn
 	// automatically when a descendant-scoped rule (the freeze class) is found.
-	if (high === 0) return;
-	const example = findings.find((f) => f.severity === 'high')!.selector;
+	if (snippetHigh === 0) return;
+	const example = findings.find((f) => f.source === 'snippet' && f.severity === 'high')!.selector;
 	new Notice(
-		`Book View: ${high} expensive :has() selector${high > 1 ? 's' : ''} in your themes/snippets — they can cause style-recalc freezes on every section mount (details in console). Example: ${example}`,
+		`Book View: ${snippetHigh} expensive :has() selector${snippetHigh > 1 ? 's' : ''} in your CSS snippets — they can cause style-recalc freezes on every section mount (details in console). Example: ${example}`,
 		15000,
 	);
 }

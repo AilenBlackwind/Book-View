@@ -250,7 +250,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 
 		new Setting(el)
 			.setName('Warn about expensive CSS :has() selectors')
-			.setDesc('Scan themes and CSS snippets for :has() selectors that make Obsidian recalculate styles across the whole app on every section mount, and warn once per session when one is found. Sibling-scoped :has(+ X) selectors are safe and are not reported.')
+			.setDesc('Scan your enabled CSS snippets for :has() selectors that make Obsidian recalculate styles across the whole app on every section mount, and warn once per session when one is found. Sibling-scoped :has(+ X) selectors are safe and are not reported. Selectors from themes and other plugins are only logged to the console.')
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.cssHasWarningEnabled)

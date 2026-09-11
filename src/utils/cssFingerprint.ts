@@ -26,18 +26,19 @@ export interface CssFingerprint {
 
 /** The d.ts bundled with the obsidian npm package (1.12.3) does not type
  *  `app.customCss`; access goes through this local shape, matching the runtime
- *  method names, and degrades to an empty identity when the API is unavailable
- *  (then the fingerprint still carries the measured spacings). */
+ *  fields (the documented `getTheme()` / `getSnippets()` methods do not exist
+ *  on the runtime class), and degrades to an empty identity when the API is
+ *  unavailable (then the fingerprint still carries the measured spacings). */
 interface CustomCssLike {
-	getTheme(): string;
-	getSnippets(): string[];
+	theme: string;
+	enabledSnippets: Set<string>;
 }
 
 function customCssOf(app: App): CustomCssLike | null {
 	const css = (app as unknown as { customCss?: unknown }).customCss;
 	if (!css || typeof css !== 'object') return null;
 	const c = css as Partial<CustomCssLike>;
-	if (typeof c.getTheme !== 'function' || typeof c.getSnippets !== 'function') return null;
+	if (typeof c.theme !== 'string' || !(c.enabledSnippets instanceof Set)) return null;
 	return c as CustomCssLike;
 }
 
@@ -48,9 +49,8 @@ export function makeCssFingerprint(app: App, spacings: ThemeSpacings): CssFinger
 	let snippets: string[] = [];
 	if (css) {
 		try {
-			themeId = css.getTheme()?.trim() ?? '';
-			const sn = css.getSnippets();
-			if (Array.isArray(sn)) snippets = sn.filter((s): s is string => typeof s === 'string');
+			themeId = css.theme?.trim() ?? '';
+			snippets = Array.from(css.enabledSnippets).filter((s): s is string => typeof s === 'string');
 		} catch {
 			// customCss API read failed — fall back to spacings-only identity.
 		}
