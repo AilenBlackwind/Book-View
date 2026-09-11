@@ -206,6 +206,7 @@ window.clearTimeout(s.activePathTimer);
 		if (s.tocViewportHeight <= 0) return;
 
 		const mode = s.settings?.autoExpandMode ?? 'disabled';
+		const followMode = s.settings?.tocFollowMode ?? 'settle';
 
 		const highlightIndex = this.visibleAncestor(bestIndex, mode !== 'disabled');
 
@@ -224,12 +225,16 @@ window.clearTimeout(s.activePathTimer);
 		// scrollTop write only fires when the active row crosses the edge
 		// margin, not on every frame.
 
-		// Center the active item once the scroll settles. Centering inside the
-		// scroll frame both forced a layout read (li.offsetTop) and restarted a
-		// smooth scroll on the panel for every active-item change; a single
-		// trailing animation after the wheel rests is one write + no reads
-		// (virtual offsets instead of offsetTop).
-		if (s.lastCenterIndex !== highlightIndex) {
+		// Center the active item. 'live' keeps it centered every frame with an
+		// instant write (experimental); 'settle' centers once after the wheel
+		// rests. Centering inside the scroll frame both forced a layout read
+		// (li.offsetTop) and restarted a smooth scroll on the panel for every
+		// active-item change; a single trailing animation after the wheel rests
+		// is one write + no reads (virtual offsets instead of offsetTop). The
+		// live variant relies on the same virtual offsets, so both are readless.
+		if (followMode === 'live') {
+			this.centerActiveLive(highlightIndex);
+		} else if (s.lastCenterIndex !== highlightIndex) {
 			s.lastCenterIndex = highlightIndex;
 			this.scheduleCenterScroll(highlightIndex);
 		}
@@ -440,6 +445,29 @@ window.clearTimeout(s.activePathTimer);
 			s.containerEl.scrollTop = next;
 			s.panelScrollTop = next;
 		}
+	}
+
+	/** Live centering (experimental, selected via `tocFollowMode`): keep the
+	 *  active row centered in the panel while the book scrolls, using a single
+	 *  instant scrollTop write per frame — never `scrollTo` smooth (a smooth
+	 *  animation restarted every frame would cancel itself). Pure virtual-offset
+	 *  arithmetic (no layout reads) plus a small dead band so identical frames
+	 *  write nothing. The panel's own scroll handler re-caches panelScrollTop
+	 *  on the resulting scroll event, so the next frame compares against the
+	 *  real position. */
+	private centerActiveLive(index: number): void {
+		const s = this.state;
+		if (index < 0 || s.tocViewportHeight <= 0) return;
+		const item = s.entryToItem[index];
+		if (item === undefined || item < 0) return;
+		const top = s.virtualOffsets[item] ?? 0;
+		const viewport = s.tocViewportHeight;
+		const total = s.virtualOffsets[s.virtualOffsets.length - 1] ?? 0;
+		const max = Math.max(0, total - viewport);
+		const target = Math.max(0, Math.min(max, top - (viewport - s.rowHeight) / 2));
+		if (Math.abs(s.panelScrollTop - target) < 2) return;
+		s.containerEl.scrollTop = target;
+		s.panelScrollTop = target;
 	}
 
 	/** Write-only scroll centering, run once after the scroll settles. Computes

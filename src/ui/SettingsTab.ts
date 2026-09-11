@@ -192,6 +192,20 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		new Setting(el)
+			.setName('Follow toc while scrolling')
+			.setDesc('Experimental: how the toc follows the reading position. After stop centers the active row once the book stops scrolling (frame-budget safe); live keeps it centered on every scroll frame.')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption('settle', 'After stop')
+					.addOption('live', 'Live')
+					.setValue(this.plugin.settings.tocFollowMode)
+					.onChange(async (value: string) => {
+						this.plugin.settings.tocFollowMode = value as import('../settings').TocFollowMode;
+						await this.plugin.saveSettings();
+					}),
+			);
 	}
 
 	private renderGeneralSettings(el: HTMLElement): void {

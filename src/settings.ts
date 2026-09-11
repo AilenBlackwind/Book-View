@@ -30,6 +30,12 @@ export type EditorMode = 'popup' | 'native';
  *  overrides it with bookWidth px. */
 export type BookWidthMode = 'obsidian' | 'custom';
 
+/** How the ToC follows the reading position. 'settle' centers the active row
+ *  only after the book stops scrolling (the original frame-budget behavior);
+ *  'live' keeps it centered every scroll frame. Experimental: 'live' may be
+ *  removed if it costs more than it saves. */
+export type TocFollowMode = 'settle' | 'live';
+
 /** Sane limits for the custom book width (px). */
 export const BOOK_WIDTH_MIN = 400;
 export const BOOK_WIDTH_MAX = 1600;
@@ -60,6 +66,7 @@ export interface BookViewSettings {
 	cssHasWarningEnabled: boolean;
 	bookWidthMode: BookWidthMode;
 	bookWidth: number;
+	tocFollowMode: TocFollowMode;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -86,4 +93,5 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	cssHasWarningEnabled: true,
 	bookWidthMode: 'obsidian',
 	bookWidth: 750,
+	tocFollowMode: 'settle',
 };
