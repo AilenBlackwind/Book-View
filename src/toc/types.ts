@@ -25,6 +25,8 @@ export interface TocSettings {
 	tocCollapseRestLevel: number;
 	autoExpandMode: AutoExpandMode;
 	tocFollowMode: TocFollowMode;
+	/** Animate expand/collapse rebuilds (FLIP glide, row slink, heading pulse). */
+	tocExpandAnim: boolean;
 }
 
 /** Line-based fallback height for the heading-position estimate, used before

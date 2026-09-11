@@ -67,6 +67,7 @@ export interface BookViewSettings {
 	bookWidthMode: BookWidthMode;
 	bookWidth: number;
 	tocFollowMode: TocFollowMode;
+	tocExpandAnim: boolean;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -94,4 +95,5 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	bookWidthMode: 'obsidian',
 	bookWidth: 750,
 	tocFollowMode: 'settle',
+	tocExpandAnim: true,
 };

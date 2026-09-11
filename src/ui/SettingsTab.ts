@@ -194,6 +194,18 @@ export class BookViewSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(el)
+			.setName('Animate expand/collapse')
+			.setDesc('Smoothly glide and fade toc rows when a section opens or closes, and briefly highlight the toggled heading.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.tocExpandAnim)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.tocExpandAnim = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(el)
 			.setName('Follow toc while scrolling')
 			.setDesc('Experimental: how the toc follows the reading position. After stop centers the active row once the book stops scrolling (frame-budget safe); chase trails the row smoothly and rides the panel edge on fast scrolls; live keeps it exactly centered on every scroll frame.')
 			.addDropdown((dropdown) =>
