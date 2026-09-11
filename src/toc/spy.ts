@@ -19,7 +19,7 @@ const CENTER_SCROLL_SETTLE_MS = 50;
  *  per chase frame (0..1). <1 makes the panel trail the indicator instead of
  *  tracking it exactly, so on a fast flick the panel lags and the pill rides
  *  the edge-pin boundary until the scroll slows down. */
-const CHASE_LERP = 0.1;
+const CHASE_LERP = 0.2;
 
 /** Dead band around the active row's centered position (px): while the row is
  *  within CHASE_DEAD_BAND_PX of the panel center the panel does not move at
@@ -35,7 +35,7 @@ const CHASE_DEAD_BAND_PX = 12;
  *  every later row by tens/hundreds of px) into a single huge leap — the cap
  *  turns that into a glide while keeping the slow-near/fast-far response of
  *  dist * CHASE_LERP inside the band. */
-const CHASE_MAX_STEP_PX = 16;
+const CHASE_MAX_STEP_PX = 24;
 
 /** Watchdog bound for a stuck navigation guard: onScrollTick bails while
  *  isJumping is set, and a superseded navigation that loses the reset-timer
