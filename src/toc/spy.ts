@@ -21,6 +21,22 @@ const CENTER_SCROLL_SETTLE_MS = 50;
  *  the edge-pin boundary until the scroll slows down. */
 const CHASE_LERP = 0.25;
 
+/** Dead band around the active row's centered position (px): while the row is
+ *  within CHASE_DEAD_BAND_PX of the panel center the panel does not move at
+ *  all. Auto-expand/collapse shuffles the virtual offsets each time a section
+ *  opens or closes, so the "centered" target jitters by a few px under the
+ *  same active heading; without a band every such shift provokes a chase write
+ *  and the panel trembles on small sections that toggle frequently. It also
+ *  stops the settle-tail rAF loop once the row lands inside the band. */
+const CHASE_DEAD_BAND_PX = 12;
+
+/** Hard cap on how far the panel may chase per frame (px). The proportional
+ *  step alone makes a large structural hop (a section collapsing, shifting
+ *  every later row by tens/hundreds of px) into a single huge leap — the cap
+ *  turns that into a glide while keeping the slow-near/fast-far response of
+ *  dist * CHASE_LERP inside the band. */
+const CHASE_MAX_STEP_PX = 28;
+
 /** Watchdog bound for a stuck navigation guard: onScrollTick bails while
  *  isJumping is set, and a superseded navigation that loses the reset-timer
  *  race (its finally clears the winner's pending reset, then fails its own
@@ -474,14 +490,27 @@ window.clearTimeout(s.activePathTimer);
 		const viewport = s.tocViewportHeight;
 		const total = s.virtualOffsets[s.virtualOffsets.length - 1] ?? 0;
 		const max = Math.max(0, total - viewport);
-		const target = Math.max(0, Math.min(max, top - (viewport - s.rowHeight) / 2));
+		const centered = top - (viewport - s.rowHeight) / 2;
+		const target = Math.max(0, Math.min(max, centered));
 		const current = s.panelScrollTop;
-		const next = current + (target - current) * CHASE_LERP;
-		if (Math.abs(next - current) < 2) return;
+		const dist = target - current;
+		// Center dead band: leave the pill alone while it is within
+		// CHASE_DEAD_BAND_PX of centered, so structural shake (sections
+		// expanding/collapsing under the active row) cannot tremble the panel.
+		if (Math.abs(dist) < CHASE_DEAD_BAND_PX) return;
+		// Proportional step (slow near, fast far), capped so a large structural
+		// hop reads as a glide instead of a lunge.
+		const step =
+			dist > CHASE_MAX_STEP_PX
+				? CHASE_MAX_STEP_PX
+				: dist < -CHASE_MAX_STEP_PX
+					? -CHASE_MAX_STEP_PX
+					: dist * CHASE_LERP;
+		const next = current + step;
 		s.containerEl.scrollTop = next;
 		s.panelScrollTop = next;
 		// A chase frame may run after the book's last scroll event; keep the
-		// trail alive until the panel reaches the center.
+		// trail alive until the panel reaches the dead band.
 		s.positionSource?.requestFrame();
 	}
 
