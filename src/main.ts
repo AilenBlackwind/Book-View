@@ -1,4 +1,5 @@
-import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { MarkdownView, Notice, Plugin, TFolder, TFile, WorkspaceLeaf } from 'obsidian';
+import { createBookForFolder } from './components/CreateBook';
 import { ThemeSpacings, measureThemeSpacings } from './utils/theme';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
 import { BookTocView, VIEW_TYPE_BOOK_TOC } from './views/BookTocView';
@@ -258,6 +259,24 @@ export default class BookViewPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'create-book',
+			name: 'Create book in folder of current note',
+			callback: () => {
+				const activeFile = this.app.workspace.getActiveFile();
+				if (!activeFile) {
+					new Notice('Open a note first.');
+					return;
+				}
+				const folder = activeFile.parent;
+				if (!(folder instanceof TFolder)) {
+					new Notice('Could not determine the folder.');
+					return;
+				}
+				void this.createBookInFolder(folder);
+			},
+		});
+
+		this.addCommand({
 			id: 'search-book',
 			name: 'Find in book',
 			callback: () => {
@@ -403,6 +422,19 @@ export default class BookViewPlugin extends Plugin {
 			this.app.vault.on('rename', (file, oldPath) => {
 				if (!(file instanceof TFile) || file.extension !== 'md') return;
 				void updateManifestLinksOnRename(this.app, oldPath, file.path);
+			}),
+		);
+
+		// Build a book out of a folder via the file explorer's context menu
+		// (right-click a folder → "Create Book").
+		this.registerEvent(
+			this.app.workspace.on('file-menu', (menu, file) => {
+				if (!(file instanceof TFolder)) return;
+				menu.addItem((item) => {
+					item.setTitle('Create book');
+					item.setIcon('book-open');
+					item.onClick(() => void this.createBookInFolder(file));
+				});
 			}),
 		);
 
@@ -716,6 +748,21 @@ export default class BookViewPlugin extends Plugin {
 			await this.app.vault.create(`${name}.md`, manuscript);
 		}
 		new Notice(`Manuscript saved: ${name}.md`);
+	}
+
+	/** Create (or regenerate) a `<folder> Book.md` manifest that links every
+	 *  markdown note under `folder` in alphabetical order. Opens the resulting
+	 *  manifest in a new reader leaf so it renders as a book right away. */
+	private async createBookInFolder(folder: TFolder): Promise<void> {
+		const manifestPath = await createBookForFolder(this.app, folder);
+		if (!manifestPath) return;
+		const manifestFile = this.app.vault.getFileByPath(manifestPath);
+		if (manifestFile instanceof TFile) {
+			const leaf = this.app.workspace.getLeaf(true);
+			await leaf.openFile(manifestFile);
+		} else {
+			new Notice(`Created book manifest: ${manifestPath}`);
+		}
 	}
 
 	private async disableBookView(filePath: string, leaf: WorkspaceLeaf) {

@@ -5,5 +5,7 @@ export class App {}
 export class Component {}
 export class MarkdownRenderer {}
 export class TFile {}
+export class TFolder {}
+export class Notice {}
 
 export const Platform = { isMacOS: false };
