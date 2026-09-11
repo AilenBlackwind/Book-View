@@ -311,14 +311,13 @@ export class TocBuilder {
 		s.guideStyles = new Array<GuideStyle | null>(n).fill(null);
 		if (!s.settings?.tocGuides) return;
 
-		// Resolve each heading level's color once: since a theme can define
-		// --h1..h6 as black (or near-black) and the guide derives from that
-		// color, render the guide gray for those levels and keep the var
-		// reference for colored ones (so paint-time color changes still track
-		// the theme; only the black → gray classification is frozen per build).
-		const guideVar = new Map<number, string>();
+		// Resolve each heading level's color once, from the exact cascade a real
+		// row sees (.bv-toc-item[data-level=N] inside the shadow tree). The guide
+		// draws in that resolved color; if the row's text is (near-)black a line
+		// in it would vanish, so fall back to the neutral text-muted gray.
+		const guideColor = new Map<number, string>();
 		for (let level = 1; level <= 6; level++) {
-			guideVar.set(level, this.headingColorNearBlack(level) ? 'var(--text-muted)' : `var(--h${level}-color)`);
+			guideColor.set(level, this.headingGuideColor(level));
 		}
 
 		for (let i = 0; i < n; i++) {
@@ -343,7 +342,7 @@ export class TocBuilder {
 			for (const level of ancestorLevels) {
 				const pos = GUIDE_POSITIONS[level - 1] ?? 0;
 				gradients.push(
-					`linear-gradient(to right, color-mix(in srgb, ${guideVar.get(level)} 70%, transparent) 1px, transparent 1px)`,
+					`linear-gradient(to right, color-mix(in srgb, ${guideColor.get(level)} 70%, transparent) 1px, transparent 1px)`,
 				);
 				positions.push(`${pos}px 0`);
 				sizes.push('1px 100%');
@@ -356,22 +355,29 @@ export class TocBuilder {
 		}
 	}
 
-	/** True when --h{level}-color resolves to a (near-)black, so a guide drawn
-	 *  in it would be invisible. Probes an attached element so the theme's var
-	 *  chain resolves through the book scope classes. */
-	private headingColorNearBlack(level: number): boolean {
-		const host = this.state.containerEl;
-		const probe = host.ownerDocument.createElement('span');
-		probe.style.color = `var(--h${level}-color)`;
-		host.appendChild(probe);
-		const rgb = host.ownerDocument.defaultView?.getComputedStyle(probe).color ?? '';
+	/** Resolved color for the guide of `level`, measured from the cascade a real
+	 *  row sees (a `.bv-toc-item[data-level=N]` probe inside the shadow tree).
+	 *  Returns the heading's resolved color, or `var(--text-muted)` when that
+	 *  color is (near-)black and a line drawn in it would be invisible. Falls
+	 *  back to the raw `--h{level}-color` reference if the shadow isn't up. */
+	private headingGuideColor(level: number): string {
+		const s = this.state;
+		const shadow = s.shadowRoot ?? s.ensureShadow();
+		const probe = shadow.ownerDocument.createElement('div');
+		probe.className = 'bv-toc-item';
+		probe.setAttribute('data-level', String(level));
+		shadow.appendChild(probe);
+		const color = shadow.ownerDocument.defaultView?.getComputedStyle(probe).color ?? '';
 		probe.remove();
-		const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(rgb);
-		if (!m) return false;
-		const r = Number(m[1] ?? 0);
-		const g = Number(m[2] ?? 0);
-		const b = Number(m[3] ?? 0);
-		const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-		return luminance < 0.075;
+		if (!color) return `var(--h${level}-color)`;
+		const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(color);
+		if (m) {
+			const r = Number(m[1] ?? 0);
+			const g = Number(m[2] ?? 0);
+			const b = Number(m[3] ?? 0);
+			const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+			if (luminance < 0.075) return 'var(--text-muted)';
+		}
+		return color;
 	}
 }
