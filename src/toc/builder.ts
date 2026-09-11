@@ -301,12 +301,25 @@ export class TocBuilder {
 	}
 
 	/** Per-entry nesting-guide background (one CSS linear-gradient per visible
-	 *  ancestor), applied to the row when the window creates it. */
+	 *  ancestor), applied to the row when the window creates it. The guide takes
+	 *  the color of the ancestor heading — unless that heading is effectively
+	 *  black, where a heading-colored line would vanish, so it falls back to the
+	 *  neutral text-muted gray. */
 	private computeGuideStyles(): void {
 		const s = this.state;
 		const n = s.entries.length;
 		s.guideStyles = new Array<GuideStyle | null>(n).fill(null);
 		if (!s.settings?.tocGuides) return;
+
+		// Resolve each heading level's color once: since a theme can define
+		// --h1..h6 as black (or near-black) and the guide derives from that
+		// color, render the guide gray for those levels and keep the var
+		// reference for colored ones (so paint-time color changes still track
+		// the theme; only the black → gray classification is frozen per build).
+		const guideVar = new Map<number, string>();
+		for (let level = 1; level <= 6; level++) {
+			guideVar.set(level, this.headingColorNearBlack(level) ? 'var(--text-muted)' : `var(--h${level}-color)`);
+		}
 
 		for (let i = 0; i < n; i++) {
 			const entry = s.entries[i];
@@ -330,7 +343,7 @@ export class TocBuilder {
 			for (const level of ancestorLevels) {
 				const pos = GUIDE_POSITIONS[level - 1] ?? 0;
 				gradients.push(
-					`linear-gradient(to right, color-mix(in srgb, var(--text-muted) 70%, transparent) 1px, transparent 1px)`,
+					`linear-gradient(to right, color-mix(in srgb, ${guideVar.get(level)} 70%, transparent) 1px, transparent 1px)`,
 				);
 				positions.push(`${pos}px 0`);
 				sizes.push('1px 100%');
@@ -341,5 +354,24 @@ export class TocBuilder {
 				size: sizes.join(', '),
 			};
 		}
+	}
+
+	/** True when --h{level}-color resolves to a (near-)black, so a guide drawn
+	 *  in it would be invisible. Probes an attached element so the theme's var
+	 *  chain resolves through the book scope classes. */
+	private headingColorNearBlack(level: number): boolean {
+		const host = this.state.containerEl;
+		const probe = host.ownerDocument.createElement('span');
+		probe.style.color = `var(--h${level}-color)`;
+		host.appendChild(probe);
+		const rgb = host.ownerDocument.defaultView?.getComputedStyle(probe).color ?? '';
+		probe.remove();
+		const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(rgb);
+		if (!m) return false;
+		const r = Number(m[1] ?? 0);
+		const g = Number(m[2] ?? 0);
+		const b = Number(m[3] ?? 0);
+		const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+		return luminance < 0.075;
 	}
 }
