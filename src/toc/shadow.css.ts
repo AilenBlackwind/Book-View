@@ -148,6 +148,19 @@ export const TOC_SHADOW_CSS = `
 	color: var(--bv-toc-active-color, var(--text-accent));
 }
 
+.bv-toc-heading.bv-pulse {
+	animation: bv-pulse-row 300ms ease-out;
+}
+
+@keyframes bv-pulse-row {
+	0% {
+		background-color: var(--background-modifier-hover);
+	}
+	100% {
+		background-color: transparent;
+	}
+}
+
 .bv-toc-highlight {
 	position: absolute;
 	top: 0;

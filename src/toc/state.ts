@@ -89,6 +89,11 @@ export class TocState {
 	userExpandedSet: Set<number> = new Set();
 	/** Force-expanded by scroll tracking (recomputed every tick) */
 	activePathSet: Set<number> = new Set();
+	/** Entry indices whose expanded state changed in the most recent
+	 *  applyVisibility rebuild — the window pulses those heading rows so the
+	 *  section that just opened/closed is visible. Cleared once the window
+	 *  consumes it on the next structural render. */
+	lastToggledEntries: number[] = [];
 	/** Sections that were ever on the active path (i.e. the user scrolled to /
 	 *  navigated into them). Grows monotonically across the session. Drives the
 	 *  mode differences: 'only-expand' keeps these expanded forever; 
@@ -318,6 +323,12 @@ export class TocState {
 	 *  `anchorEntry` keeps that entry's row visually pinned (scroll anchoring)
 	 *  by compensating the panel scrollTop for the height delta above it. */
 	applyVisibility(anchorEntry?: number): void {
+		// Snapshot which entries were expanded so the rebuild below can diff and
+		// let the window pulse the section that opened/closed this pass.
+		const before = new Set<number>();
+		for (let i = 0; i < this.entries.length; i++) {
+			if (this.isEntryExpanded(i)) before.add(i);
+		}
 		let delta = 0;
 		if (anchorEntry !== undefined && anchorEntry >= 0) {
 			const item = this.entryToItem[anchorEntry];
@@ -340,6 +351,14 @@ export class TocState {
 		// change does not force a style recalc mid-tick.
 		this.containerEl.scrollTop = Math.max(0, Math.min(this.panelScrollTop + delta, max));
 		this.panelScrollTop = this.containerEl.scrollTop;
+
+		// Diff the expanded set against the snapshot taken above: the rows the
+		// rebuild just revealed (opened) or hid (closed).
+		const toggled: number[] = [];
+		for (let i = 0; i < this.entries.length; i++) {
+			if (before.has(i) !== this.isEntryExpanded(i)) toggled.push(i);
+		}
+		this.lastToggledEntries = toggled;
 
 		this.window?.render();
 	}
