@@ -311,10 +311,10 @@ export class TocBuilder {
 		s.guideStyles = new Array<GuideStyle | null>(n).fill(null);
 		if (!s.settings?.tocGuides) return;
 
-		// Resolve each heading level's color once, from the exact cascade a real
-		// row sees (.bv-toc-item[data-level=N] inside the shadow tree). The guide
-		// draws in that resolved color; if the row's text is (near-)black a line
-		// in it would vanish, so fall back to the neutral text-muted gray.
+		// Classify each heading level once against the exact cascade a real row
+		// sees (.bv-toc-item[data-level=N] inside the shadow tree): a level whose
+		// text resolves (near-)black must not draw its line in that color, or the
+		// guide would vanish.
 		const guideColor = new Map<number, string>();
 		for (let level = 1; level <= 6; level++) {
 			guideColor.set(level, this.headingGuideColor(level));
@@ -355,29 +355,63 @@ export class TocBuilder {
 		}
 	}
 
-	/** Resolved color for the guide of `level`, measured from the cascade a real
-	 *  row sees (a `.bv-toc-item[data-level=N]` probe inside the shadow tree).
-	 *  Returns the heading's resolved color, or `var(--text-muted)` when that
-	 *  color is (near-)black and a line drawn in it would be invisible. Falls
-	 *  back to the raw `--h{level}-color` reference if the shadow isn't up. */
+	/** Recompute the nesting-guide classifications and re-apply them to the
+	 *  currently rendered rows without rebuilding the list or touching the
+	 *  entries. Called after a css identity change (theme / snippet toggle) so
+	 *  the black↔heading-color decision catches up without a book restart; the
+	 *  guide colors themselves stay var-based and keep tracking the theme at
+	 *  paint time. */
+	refreshGuides(): void {
+		const s = this.state;
+		this.computeGuideStyles();
+		if (!s.shadowRoot) return;
+		s.shadowRoot.querySelectorAll<HTMLElement>('li.bv-toc-heading').forEach((li) => {
+			const idx = li.dataset.index ? Number(li.dataset.index) : -1;
+			const guide = idx >= 0 ? s.guideStyles[idx] : null;
+			li.style.backgroundImage = guide ? guide.image : '';
+			li.style.backgroundPosition = guide ? guide.position : '';
+			li.style.backgroundSize = guide ? guide.size : '';
+		});
+	}
+
+	/** Color reference for the guide of `level`, decided against the cascade a
+	 *  real row sees (a `.bv-toc-item[data-level=N]` probe inside the shadow
+	 *  tree). When the theme declares `--h{level}-color`, the var reference is
+	 *  kept so theme/color changes re-tint the line immediately at paint;
+	 *  when the row's text would resolve (near-)black, the guide falls back to
+	 *  the neutral text-muted gray; themes that never declare the var (coloring
+	 *  headings by element selectors instead) fall back to the probe's resolved
+	 *  color so the line still matches the rendered text. */
 	private headingGuideColor(level: number): string {
 		const s = this.state;
 		const shadow = s.shadowRoot ?? s.ensureShadow();
+		const view = shadow.ownerDocument.defaultView;
+		const declared = view
+			?.getComputedStyle(s.containerEl)
+			.getPropertyValue(`--h${level}-color`)
+			.trim();
 		const probe = shadow.ownerDocument.createElement('div');
 		probe.className = 'bv-toc-item';
 		probe.setAttribute('data-level', String(level));
 		shadow.appendChild(probe);
-		const color = shadow.ownerDocument.defaultView?.getComputedStyle(probe).color ?? '';
+		const color = view?.getComputedStyle(probe).color ?? '';
 		probe.remove();
 		if (!color) return `var(--h${level}-color)`;
+		const luminance = this.resolvedLuminance(color);
+		if (luminance !== null && luminance < 0.075) return 'var(--text-muted)';
+		if (!declared) return color;
+		return `var(--h${level}-color)`;
+	}
+
+	/** Relative luminance (0..1) of a computed `rgb()`/`rgba()` color, or null
+	 *  when the string uses a non-rgb color space (then it is never near-black
+	 *  for our purposes). */
+	private resolvedLuminance(color: string): number | null {
 		const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(color);
-		if (m) {
-			const r = Number(m[1] ?? 0);
-			const g = Number(m[2] ?? 0);
-			const b = Number(m[3] ?? 0);
-			const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-			if (luminance < 0.075) return 'var(--text-muted)';
-		}
-		return color;
+		if (!m) return null;
+		const r = Number(m[1] ?? 0);
+		const g = Number(m[2] ?? 0);
+		const b = Number(m[3] ?? 0);
+		return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 	}
 }

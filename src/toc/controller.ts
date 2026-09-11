@@ -49,6 +49,11 @@ export class TocController {
 		return this.state.entries;
 	}
 
+	/** Recompute nesting-guide colors (css identity change). */
+	refreshGuides(): void {
+		this.builder.refreshGuides();
+	}
+
 	build(): void {
 		this.destroy();
 		this.builder.build();

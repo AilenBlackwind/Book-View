@@ -53,6 +53,11 @@ export class BookTocView extends ItemView {
 		this.tocController?.rebuild();
 	}
 
+	/** Recompute nesting-guide colors (theme/snippet css change) in place. */
+	refreshGuides(): void {
+		this.tocController?.refreshGuides();
+	}
+
 	async onOpen(): Promise<void> {
 		this.contentEl.addClass('bv-toc-view-root');
 	}

@@ -188,6 +188,13 @@ export class TocCoordinator {
 		this.getTocView()?.rebuild();
 	}
 
+	/** Recompute the bound ToC's nesting-guide colors after the css identity
+	 *  changed (theme/snippet toggle) so gray↔heading-color classification
+	 *  catches up without rebuilding the panel or restarting the book. */
+	refreshGuides(): void {
+		this.getTocView()?.refreshGuides();
+	}
+
 	/** Debounced, coalesced heading-change refresh. Every caller (each edited
 	 *  book file) lands here; a single 500ms timer turns a mass edit into one
 	 *  ToC rebuild instead of N full panel rebuilds. */

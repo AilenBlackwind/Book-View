@@ -549,7 +549,9 @@ export default class BookViewPlugin extends Plugin {
 		this.adoptCssFingerprint();
 		void this.saveNow();
 		// The store was invalidated so sections re-measure under the new css;
-		// the re-measure is automatic and needs no notice.
+		// the re-measure is automatic and needs no notice. ToC nesting guides
+		// recolor (gray ↔ heading color) from the same change, in place.
+		this.tocCoordinator?.refreshGuides();
 		DebugLog.startup(
 			'css fingerprint changed',
 			`theme=${current.themeId || '(none)'} snippets=${current.snippets.length}`,
