@@ -60,6 +60,7 @@ export interface BookViewSettings {
 	cssHasWarningEnabled: boolean;
 	bookWidthMode: BookWidthMode;
 	bookWidth: number;
+	tocExpandAnim: boolean;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -86,4 +87,5 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	cssHasWarningEnabled: true,
 	bookWidthMode: 'obsidian',
 	bookWidth: 750,
+	tocExpandAnim: true,
 };

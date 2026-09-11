@@ -192,6 +192,18 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		new Setting(el)
+			.setName('Animate expand/collapse')
+			.setDesc('Smoothly glide and fade toc rows when a section opens or closes, and briefly highlight the toggled heading.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.tocExpandAnim)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.tocExpandAnim = value;
+						await this.plugin.saveSettings();
+					}),
+			);
 	}
 
 	private renderGeneralSettings(el: HTMLElement): void {

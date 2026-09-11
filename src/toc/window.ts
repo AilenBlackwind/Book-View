@@ -189,7 +189,8 @@ export class TocWindow {
 		// past the scroll edge, so those never animate. The opening build
 		// (fresh panel mount, `renderedItems === null`) is not animated either.
 		const structural = this.renderedItems !== items;
-		const animate = structural && this.renderedItems !== null;
+		const animate =
+			structural && this.renderedItems !== null && (s.settings?.tocExpandAnim ?? true);
 
 		let start = firstItemAt(offsets, scrollTop, n);
 		let end = firstItemAfter(offsets, scrollTop + viewport, n);
@@ -474,6 +475,10 @@ export class TocWindow {
 	private pulseToggled(): void {
 		const s = this.state;
 		if (s.lastToggledEntries.length === 0) return;
+		if (!(s.settings?.tocExpandAnim ?? true)) {
+			s.lastToggledEntries = [];
+			return;
+		}
 		const toggled = s.lastToggledEntries;
 		s.lastToggledEntries = [];
 		if (this.reducedMotion()) return;
