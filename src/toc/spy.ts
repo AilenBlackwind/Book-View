@@ -19,7 +19,7 @@ const CENTER_SCROLL_SETTLE_MS = 50;
  *  per chase frame (0..1). <1 makes the panel trail the indicator instead of
  *  tracking it exactly, so on a fast flick the panel lags and the pill rides
  *  the edge-pin boundary until the scroll slows down. */
-const CHASE_LERP = 0.25;
+const CHASE_LERP = 0.1;
 
 /** Dead band around the active row's centered position (px): while the row is
  *  within CHASE_DEAD_BAND_PX of the panel center the panel does not move at
@@ -35,7 +35,7 @@ const CHASE_DEAD_BAND_PX = 12;
  *  every later row by tens/hundreds of px) into a single huge leap — the cap
  *  turns that into a glide while keeping the slow-near/fast-far response of
  *  dist * CHASE_LERP inside the band. */
-const CHASE_MAX_STEP_PX = 28;
+const CHASE_MAX_STEP_PX = 16;
 
 /** Watchdog bound for a stuck navigation guard: onScrollTick bails while
  *  isJumping is set, and a superseded navigation that loses the reset-timer
@@ -473,17 +473,29 @@ window.clearTimeout(s.activePathTimer);
 	}
 
 	/** Damped-follow centering (experimental, selected via `tocFollowMode`):
-	 *  move the panel toward the active row's center, closing only CHASE_LERP
-	 *  of the remaining gap per frame — never an instant jump, never a smooth
-	 *  scrollTo (restarted every frame it would cancel itself). Fast flicks
-	 *  outrun the chase speed, so the pill drifts to the panel edge, where
-	 *  keepActiveInView (which runs after this method in the tick) pins it.
-	 *  Because the step shrinks exponentially, the panel keeps requesting
-	 *  frames until the dead band is met, so the trailing settle finishes even
-	 *  after the book stops. Pure virtual-offset arithmetic, no layout reads. */
+	 *  runs ONLY while the book is idle: while a scroll gesture is active, the
+	 *  panel is left to keepActiveInView (edge-pin = nearest semantics, the
+	 *  de-facto live-ToC behavior), so auto-expand/collapse swapping rows under
+	 *  a fast-moving highlight can't turn a re-target into a jump. Once the
+	 *  wheel rests for CENTER_SCROLL_SETTLE_MS the chase glides the active row
+	 *  into the panel center — closing only CHASE_LERP of the remaining gap per
+	 *  frame, never an instant jump, never a smooth scrollTo (restarted every
+	 *  frame it would cancel itself). Because the step shrinks exponentially,
+	 *  the panel keeps requesting frames until the dead band is met, so the
+	 *  trailing settle finishes after the book stops. Pure virtual-offset
+	 *  arithmetic, no layout reads. */
 	private centerActiveChase(index: number): void {
 		const s = this.state;
 		if (index < 0 || s.tocViewportHeight <= 0) return;
+		// Nearest-during-motion: skip the glide while the user is actively
+		// scrolling, so structural shake cannot fight the centering target.
+		// Keep the frame loop alive so the glide STARTS exactly when the
+		// gesture window lapses — otherwise the last scroll frame returns
+		// here, requests nothing, and the panel never settles.
+		if (s.positionSource?.isGestureActive(CENTER_SCROLL_SETTLE_MS) ?? false) {
+			s.positionSource?.requestFrame();
+			return;
+		}
 		const item = s.entryToItem[index];
 		if (item === undefined || item < 0) return;
 		const top = s.virtualOffsets[item] ?? 0;
