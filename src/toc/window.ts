@@ -435,31 +435,69 @@ export class TocWindow {
 	 *  row's layout `top` is already the new offset; translateY inverts it so
 	 *  the first painted frame is the old position, then the animation eases it
 	 *  to 0. Transform + opacity only, so the whole thing runs on the compositor
-	 *  (the panel is `contain: layout`, rows stay paint/transform-isolated). */
+	 *  (the panel is `contain: layout`, rows stay paint/transform-isolated).
+	 *
+	 *  Nesting-guide backgrounds are stripped for the glide and restored on
+	 *  finish: each row paints its own `1px` segment of the ancestor guide
+	 *  lines, and while a block slides past the expanding gap its displaced
+	 *  segments would cross the fade-in rows and zigzag every outer guide. */
 	private glideRow(el: HTMLElement, translatePx: number): void {
 		if (this.reducedMotion() || typeof el.animate !== 'function') return;
+		const idx = el.dataset.index ? Number(el.dataset.index) : -1;
+		const hadGuides = el.style.backgroundImage !== '';
+		if (hadGuides) {
+			el.style.removeProperty('background-image');
+			el.style.removeProperty('background-position');
+			el.style.removeProperty('background-size');
+		}
 		try {
-			el.animate(
+			const anim = el.animate(
 				[
 					{ transform: `translateY(${translatePx.toFixed(1)}px)` },
 					{ transform: 'translateY(0px)' },
 				],
 				{ duration: ROW_ANIM_MS, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' },
 			);
+			if (hadGuides) {
+				// Restore only if the row still belongs to the same entry (a
+				// recycled row re-applies its own guides in updateHeadingRow).
+				anim.addEventListener('finish', () => {
+					if (idx >= 0 && el.dataset.index === String(idx)) this.restoreGuides(el, idx);
+				});
+			}
 		} catch {
+			if (hadGuides) this.restoreGuides(el, idx);
 			/* animation API missing — instant render is fine */
 		}
 	}
 
-	/** Slink a freshly-created row in (a section just unfolded): fade + a 5px
-	 *  rise, so the expanded children land visibly instead of popping. */
+	/** Re-apply the nesting-guide background for `entryIndex`, or clear it when
+	 *  the entry carries no guides (mirrors builder.updateHeadingRow). */
+	private restoreGuides(el: HTMLElement, entryIndex: number): void {
+		const s = this.state;
+		const guide = s.guideStyles[entryIndex];
+		if (guide) {
+			el.style.backgroundImage = guide.image;
+			el.style.backgroundPosition = guide.position;
+			el.style.backgroundSize = guide.size;
+		} else {
+			el.style.removeProperty('background-image');
+			el.style.removeProperty('background-position');
+			el.style.removeProperty('background-size');
+		}
+	}
+
+	/** Slink a freshly-created row in (a section just unfolded): a pure opacity
+	 *  fade, so the expanded children land visibly without popping. No
+	 *  translate — any per-row offset during the fade would misalign its guide
+	 *  segment against the static rows and break outer guide lines. */
 	private fadeInRow(el: HTMLElement): void {
 		if (this.reducedMotion() || typeof el.animate !== 'function') return;
 		try {
 			el.animate(
 				[
-					{ opacity: 0, transform: 'translateY(5px)' },
-					{ opacity: 1, transform: 'translateY(0px)' },
+					{ opacity: 0 },
+					{ opacity: 1 },
 				],
 				{ duration: ROW_ANIM_MS, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' },
 			);
