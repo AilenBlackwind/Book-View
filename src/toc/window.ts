@@ -362,13 +362,9 @@ export class TocWindow {
 /** Create (or patch-and-reuse) the row for one virtual item, returning the
  *  <li> to place, or null when the item references a missing file. Rows are
  *  absolutely positioned at their virtual offset so no sibling shifts when a
- *  row is added/removed. On a structural (visibility-change) render, fresh
- *  rows fade in at their exact final offset; surviving rows snap to their new
- *  offset. Rows are never translated during the animation: the nesting-guide
- *  lines are painted as per-row 1px background segments, and displacing
- *  neighbouring rows by different amounts mid-flight would zigzag the outer
- *  guide lines — asking rows to stay on their final geometry keeps those lines
- *  continuous at every frame. */
+ *  row is added/removed. On a structural (visibility-change) render, surviving
+ *  rows FLIP-glide from their previous offset and fresh rows slink in, so an
+ *  expand/collapse reads as a flow instead of a snap. */
 	private buildRow(
 		listEl: HTMLElement,
 		item: VirtualItem,
@@ -382,9 +378,12 @@ export class TocWindow {
 			if (!file) return null;
 			const reused = this.take(byKey, `file:${item.index}`);
 			if (reused) {
-				this.cancelRowAnimations(reused);
+				const prevTop = parseFloat(reused.style.top);
 				this.builder.updateFileRow(reused, item.index, file);
 				reused.style.top = `${top}px`;
+				if (animate && isFinite(prevTop) && Math.abs(prevTop - top) > 0.5) {
+					this.glideRow(reused, prevTop - top);
+				}
 				return reused;
 			}
 			const created = this.builder.createFileRow(listEl, item.index, file);
@@ -396,11 +395,14 @@ export class TocWindow {
 		if (!entry) return null;
 		const reused = this.take(byKey, `heading:${item.index}`);
 		if (reused) {
-			this.cancelRowAnimations(reused);
+			const prevTop = parseFloat(reused.style.top);
 			const a = this.builder.updateHeadingRow(reused, item.index, entry);
 			s.rowByEntry.set(item.index, reused);
 			s.rowAnchorByEntry.set(item.index, a);
 			reused.style.top = `${top}px`;
+			if (animate && isFinite(prevTop) && Math.abs(prevTop - top) > 0.5) {
+				this.glideRow(reused, prevTop - top);
+			}
 			return reused;
 		}
 		const row = this.builder.createHeadingRow(listEl, item.index, entry);
@@ -409,18 +411,6 @@ export class TocWindow {
 		row.li.style.top = `${top}px`;
 		if (animate) this.fadeInRow(row.li);
 		return row.li;
-	}
-
-	/** Cancel any in-flight animation on a reused row so a stale FLIP transform
-	 *  (from a cancelled/recycled animation) can never offset it after a
-	 *  rebuild or scroll-window move. */
-	private cancelRowAnimations(el: HTMLElement): void {
-		if (typeof el.getAnimations !== 'function') return;
-		try {
-			for (const a of el.getAnimations()) a.cancel();
-		} catch {
-			/* animation API missing — nothing to cancel */
-		}
 	}
 
 	/** Remove rows in the reuse map that were not reused (collapsed/folded rows
@@ -445,69 +435,31 @@ export class TocWindow {
 	 *  row's layout `top` is already the new offset; translateY inverts it so
 	 *  the first painted frame is the old position, then the animation eases it
 	 *  to 0. Transform + opacity only, so the whole thing runs on the compositor
-	 *  (the panel is `contain: layout`, rows stay paint/transform-isolated).
-	 *
-	 *  Nesting-guide backgrounds are stripped for the glide and restored on
-	 *  finish: each row paints its own `1px` segment of the ancestor guide
-	 *  lines, and while a block slides past the expanding gap its displaced
-	 *  segments would cross the fade-in rows and zigzag every outer guide. */
+	 *  (the panel is `contain: layout`, rows stay paint/transform-isolated). */
 	private glideRow(el: HTMLElement, translatePx: number): void {
 		if (this.reducedMotion() || typeof el.animate !== 'function') return;
-		const idx = el.dataset.index ? Number(el.dataset.index) : -1;
-		const hadGuides = el.style.backgroundImage !== '';
-		if (hadGuides) {
-			el.style.removeProperty('background-image');
-			el.style.removeProperty('background-position');
-			el.style.removeProperty('background-size');
-		}
 		try {
-			const anim = el.animate(
+			el.animate(
 				[
 					{ transform: `translateY(${translatePx.toFixed(1)}px)` },
 					{ transform: 'translateY(0px)' },
 				],
 				{ duration: ROW_ANIM_MS, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' },
 			);
-			if (hadGuides) {
-				// Restore only if the row still belongs to the same entry (a
-				// recycled row re-applies its own guides in updateHeadingRow).
-				anim.addEventListener('finish', () => {
-					if (idx >= 0 && el.dataset.index === String(idx)) this.restoreGuides(el, idx);
-				});
-			}
 		} catch {
-			if (hadGuides) this.restoreGuides(el, idx);
 			/* animation API missing — instant render is fine */
 		}
 	}
 
-	/** Re-apply the nesting-guide background for `entryIndex`, or clear it when
-	 *  the entry carries no guides (mirrors builder.updateHeadingRow). */
-	private restoreGuides(el: HTMLElement, entryIndex: number): void {
-		const s = this.state;
-		const guide = s.guideStyles[entryIndex];
-		if (guide) {
-			el.style.backgroundImage = guide.image;
-			el.style.backgroundPosition = guide.position;
-			el.style.backgroundSize = guide.size;
-		} else {
-			el.style.removeProperty('background-image');
-			el.style.removeProperty('background-position');
-			el.style.removeProperty('background-size');
-		}
-	}
-
-	/** Slink a freshly-created row in (a section just unfolded): a pure opacity
-	 *  fade, so the expanded children land visibly without popping. No
-	 *  translate — any per-row offset during the fade would misalign its guide
-	 *  segment against the static rows and break outer guide lines. */
+	/** Slink a freshly-created row in (a section just unfolded): fade + a 5px
+	 *  rise, so the expanded children land visibly instead of popping. */
 	private fadeInRow(el: HTMLElement): void {
 		if (this.reducedMotion() || typeof el.animate !== 'function') return;
 		try {
 			el.animate(
 				[
-					{ opacity: 0 },
-					{ opacity: 1 },
+					{ opacity: 0, transform: 'translateY(5px)' },
+					{ opacity: 1, transform: 'translateY(0px)' },
 				],
 				{ duration: ROW_ANIM_MS, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' },
 			);
