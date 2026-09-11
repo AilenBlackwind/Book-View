@@ -18,6 +18,14 @@ const INCREMENTAL_THRESHOLD = 24;
  *  sub-frame of work that does not dominate the 16ms budget. */
 const INCREMENTAL_BATCH = 16;
 
+/** Duration of the row position/opacity animation on expand/collapse rebuilds
+ *  (ms). Fast but readable: a fold/unfold reads as rows flowing into place
+ *  (FLIP glide on survivors, slink + fade on fresh rows) instead of snapping. */
+const ROW_ANIM_MS = 140;
+
+/** How long the just-opened/just-closed section heading pulses (ms). */
+const PULSE_MS = 300;
+
 /**
  * Virtualized row window for the ToC panel. The panel is a plain scrollable
  * container holding a spacer (sets the total scroll height) and one absolutely
@@ -48,6 +56,7 @@ export class TocWindow {
 	private incrementalItems: VirtualItem[] | null = null;
 	private incrementalEnd = 0;
 	private incrementalByKey: Map<string, HTMLElement> | null = null;
+	private incrementalAnimate = false;
 	private incrementalRaf = 0;
 	private scrollHandler: (() => void) | null = null;
 	private clickHandler: ((evt: MouseEvent) => void) | null = null;
@@ -174,6 +183,14 @@ export class TocWindow {
 			return;
 		}
 
+		// A structural render is one where the virtual item set changed (a
+		// visibility rebuild): reused rows move to new offsets and fresh rows
+		// appear. Scroll-window moves keep the same items and only append rows
+		// past the scroll edge, so those never animate. The opening build
+		// (fresh panel mount, `renderedItems === null`) is not animated either.
+		const structural = this.renderedItems !== items;
+		const animate = structural && this.renderedItems !== null;
+
 		let start = firstItemAt(offsets, scrollTop, n);
 		let end = firstItemAfter(offsets, scrollTop + viewport, n);
 		start = Math.max(0, start - OVERSCAN);
@@ -231,11 +248,12 @@ export class TocWindow {
 		}
 
 		if (newRows >= INCREMENTAL_THRESHOLD) {
-			this.startIncrementalFill(start, end, items, byKey);
+			this.startIncrementalFill(start, end, items, byKey, animate);
 			return;
 		}
 
-		this.renderWindowRange(start, end, byKey);
+		this.renderWindowRange(start, end, byKey, animate);
+		this.pulseToggled();
 		this.onRowsRendered?.();
 	}
 
@@ -244,13 +262,18 @@ export class TocWindow {
 	 *  irrelevant to layout; reused rows keep their node (patched), new rows
 	 *  append, and unused rows are removed at the end. Used for scroll-window
 	 *  moves and small rebuilds; large fills go through startIncrementalFill. */
-	private renderWindowRange(start: number, end: number, byKey: Map<string, HTMLElement>): void {
+	private renderWindowRange(
+		start: number,
+		end: number,
+		byKey: Map<string, HTMLElement>,
+		animate: boolean,
+	): void {
 		const s = this.state;
 		const listEl = this.listEl!;
 		for (let i = start; i < end; i++) {
 			const item = s.virtualItems[i];
 			if (!item) continue;
-			this.buildRow(listEl, item, byKey, s.virtualOffsets[i] ?? 0);
+			this.buildRow(listEl, item, byKey, s.virtualOffsets[i] ?? 0, animate);
 		}
 		this.removeUnused(byKey);
 	}
@@ -264,11 +287,13 @@ export class TocWindow {
 		end: number,
 		items: VirtualItem[],
 		byKey: Map<string, HTMLElement>,
+		animate: boolean,
 	): void {
 		this.incrementalFrom = start;
 		this.incrementalEnd = end;
 		this.incrementalItems = items;
 		this.incrementalByKey = byKey;
+		this.incrementalAnimate = animate;
 		this.fillWindowBatch();
 	}
 
@@ -293,7 +318,7 @@ export class TocWindow {
 		for (let i = from; i < to; i++) {
 			const item = items[i];
 			if (!item) continue;
-			this.buildRow(listEl, item, byKey, offsets[i] ?? 0);
+			this.buildRow(listEl, item, byKey, offsets[i] ?? 0, this.incrementalAnimate);
 		}
 		this.incrementalFrom = to;
 
@@ -303,6 +328,7 @@ export class TocWindow {
 			this.incrementalItems = null;
 			this.incrementalByKey = null;
 			this.incrementalRaf = 0;
+			this.pulseToggled();
 			this.onRowsRendered?.();
 			return;
 		}
@@ -335,12 +361,15 @@ export class TocWindow {
 /** Create (or patch-and-reuse) the row for one virtual item, returning the
  *  <li> to place, or null when the item references a missing file. Rows are
  *  absolutely positioned at their virtual offset so no sibling shifts when a
- *  row is added/removed. */
+ *  row is added/removed. On a structural (visibility-change) render, surviving
+ *  rows FLIP-glide from their previous offset and fresh rows slink in, so an
+ *  expand/collapse reads as a flow instead of a snap. */
 	private buildRow(
 		listEl: HTMLElement,
 		item: VirtualItem,
 		byKey: Map<string, HTMLElement>,
 		top: number,
+		animate: boolean,
 	): HTMLElement | null {
 		const s = this.state;
 		if (item.type === 'file') {
@@ -348,28 +377,38 @@ export class TocWindow {
 			if (!file) return null;
 			const reused = this.take(byKey, `file:${item.index}`);
 			if (reused) {
+				const prevTop = parseFloat(reused.style.top);
 				this.builder.updateFileRow(reused, item.index, file);
 				reused.style.top = `${top}px`;
+				if (animate && isFinite(prevTop) && Math.abs(prevTop - top) > 0.5) {
+					this.glideRow(reused, prevTop - top);
+				}
 				return reused;
 			}
 			const created = this.builder.createFileRow(listEl, item.index, file);
 			created.style.top = `${top}px`;
+			if (animate) this.fadeInRow(created);
 			return created;
 		}
 		const entry = s.entries[item.index];
 		if (!entry) return null;
 		const reused = this.take(byKey, `heading:${item.index}`);
 		if (reused) {
+			const prevTop = parseFloat(reused.style.top);
 			const a = this.builder.updateHeadingRow(reused, item.index, entry);
 			s.rowByEntry.set(item.index, reused);
 			s.rowAnchorByEntry.set(item.index, a);
 			reused.style.top = `${top}px`;
+			if (animate && isFinite(prevTop) && Math.abs(prevTop - top) > 0.5) {
+				this.glideRow(reused, prevTop - top);
+			}
 			return reused;
 		}
 		const row = this.builder.createHeadingRow(listEl, item.index, entry);
 		s.rowByEntry.set(item.index, row.li);
 		s.rowAnchorByEntry.set(item.index, row.a);
 		row.li.style.top = `${top}px`;
+		if (animate) this.fadeInRow(row.li);
 		return row.li;
 	}
 
@@ -389,6 +428,69 @@ export class TocWindow {
 		const el = byKey.get(key);
 		if (el) byKey.delete(key);
 		return el ?? null;
+	}
+
+	/** FLIP-glide a surviving row from its previous top to the new one. The
+	 *  row's layout `top` is already the new offset; translateY inverts it so
+	 *  the first painted frame is the old position, then the animation eases it
+	 *  to 0. Transform + opacity only, so the whole thing runs on the compositor
+	 *  (the panel is `contain: layout`, rows stay paint/transform-isolated). */
+	private glideRow(el: HTMLElement, translatePx: number): void {
+		if (this.reducedMotion() || typeof el.animate !== 'function') return;
+		try {
+			el.animate(
+				[
+					{ transform: `translateY(${translatePx.toFixed(1)}px)` },
+					{ transform: 'translateY(0px)' },
+				],
+				{ duration: ROW_ANIM_MS, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' },
+			);
+		} catch {
+			/* animation API missing — instant render is fine */
+		}
+	}
+
+	/** Slink a freshly-created row in (a section just unfolded): fade + a 5px
+	 *  rise, so the expanded children land visibly instead of popping. */
+	private fadeInRow(el: HTMLElement): void {
+		if (this.reducedMotion() || typeof el.animate !== 'function') return;
+		try {
+			el.animate(
+				[
+					{ opacity: 0, transform: 'translateY(5px)' },
+					{ opacity: 1, transform: 'translateY(0px)' },
+				],
+				{ duration: ROW_ANIM_MS, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' },
+			);
+		} catch {
+			/* animation API missing — instant render is fine */
+		}
+	}
+
+	/** Brief highlight on the heading rows that just opened/closed, so a fast
+	 *  auto-expand crossing through small sections stays legible. Consumed once
+	 *  per structural render; timeout touches a detached node benignly if the
+	 *  row is recycled within PULSE_MS. */
+	private pulseToggled(): void {
+		const s = this.state;
+		if (s.lastToggledEntries.length === 0) return;
+		const toggled = s.lastToggledEntries;
+		s.lastToggledEntries = [];
+		if (this.reducedMotion()) return;
+		for (const idx of toggled) {
+			const rowEl = s.rowByEntry.get(idx);
+			if (!rowEl) continue;
+			rowEl.addClass('bv-pulse');
+			window.setTimeout(() => rowEl.removeClass('bv-pulse'), PULSE_MS + 60);
+		}
+	}
+
+	private reducedMotion(): boolean {
+		return !!(
+			this.state.containerEl.ownerDocument.defaultView?.matchMedia?.(
+				'(prefers-reduced-motion: reduce)',
+			).matches ?? false
+		);
 	}
 
 	/** Debug: intercept every programmatic scrollTop/scrollTo/scrollBy write on
