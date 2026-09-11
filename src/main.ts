@@ -38,10 +38,6 @@ export default class BookViewPlugin extends Plugin {
 	 *  the first read (data.json shape migration) — then a baseline is adopted
 	 *  without invalidating. */
 	cssFingerprint: CssFingerprint | null = null;
-	/** One-shot-per-session guard for the "theme changed" Notice, so a burst
-	 *  of css-change events (theme + snippet + dark/light) doesn't stack
-	 *  Notices; the store is invalidated every time regardless. */
-	private cssFingerprintNoticeShown = false;
 	tocCoordinator: TocCoordinator | null = null;
 	private saveHeightsTimer = 0;
 	private saveScrollTimer = 0;
@@ -548,23 +544,17 @@ export default class BookViewPlugin extends Plugin {
 		}
 		const current = makeCssFingerprint(this.app, this.themeSpacings);
 		if (cssFingerprintsMatch(this.cssFingerprint, current)) return;
-		const hadStore = Object.keys(this.heightStore).length > 0 || Object.keys(this.scrollPositions).length > 0;
 		this.heightStore = {};
 		this.scrollPositions = {};
 		this.adoptCssFingerprint();
 		void this.saveNow();
+		// The store was invalidated so sections re-measure under the new css;
+		// the re-measure is automatic and needs no notice.
 		DebugLog.startup(
 			'css fingerprint changed',
 			`theme=${current.themeId || '(none)'} snippets=${current.snippets.length}`,
 			`gaps=${current.spacings.h1TopGap}/${current.spacings.h2TopGap}/${current.spacings.headerToHeaderGap}/${current.spacings.textGap}`,
 		);
-		if (hadStore && !this.cssFingerprintNoticeShown) {
-			this.cssFingerprintNoticeShown = true;
-			new Notice(
-				'Book view: theme/snippets changed — heights will be re-measured once.',
-				6000,
-			);
-		}
 	}
 
 	/** Drop every persisted height and scroll position so all sections re-measure
@@ -572,15 +562,10 @@ export default class BookViewPlugin extends Plugin {
 	 *  corrections on trusted heights signals an in-place theme/snippet edit the
 	 *  fingerprint layer missed). Notice is one-shot per session. */
 	invalidateHeightStore(): void {
-		const hadStore = Object.keys(this.heightStore).length > 0 || Object.keys(this.scrollPositions).length > 0;
 		this.heightStore = {};
 		this.scrollPositions = {};
 		void this.saveNow();
 		DebugLog.startup('height store invalidated (stale-cache backstop)');
-		if (hadStore && !this.cssFingerprintNoticeShown) {
-			this.cssFingerprintNoticeShown = true;
-			new Notice('Book view: appearance changed — heights will be re-measured once.', 6000);
-		}
 	}
 
 	refreshAllTocs() {
