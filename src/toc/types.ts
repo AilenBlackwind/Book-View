@@ -12,7 +12,7 @@ export type AutoExpandMode = 'expand-collapse-default' | 'only-expand' | 'expand
 
 /** Which ToC follow behavior to use — see BookViewSettings' TocFollowMode. Kept
  *  as a literal union here so the portable ToC seam never imports host types. */
-export type TocFollowMode = 'settle' | 'live';
+export type TocFollowMode = 'settle' | 'live' | 'chase';
 
 /** The ToC settings this module reads. A narrow subset of the host plugin's
  *  settings; any object with these fields (e.g. the full BookViewSettings)

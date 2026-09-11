@@ -195,10 +195,11 @@ export class BookViewSettingTab extends PluginSettingTab {
 
 		new Setting(el)
 			.setName('Follow toc while scrolling')
-			.setDesc('Experimental: how the toc follows the reading position. After stop centers the active row once the book stops scrolling (frame-budget safe); live keeps it centered on every scroll frame.')
+			.setDesc('Experimental: how the toc follows the reading position. After stop centers the active row once the book stops scrolling (frame-budget safe); chase trails the row smoothly and rides the panel edge on fast scrolls; live keeps it exactly centered on every scroll frame.')
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOption('settle', 'After stop')
+					.addOption('chase', 'Smooth chase')
 					.addOption('live', 'Live')
 					.setValue(this.plugin.settings.tocFollowMode)
 					.onChange(async (value: string) => {

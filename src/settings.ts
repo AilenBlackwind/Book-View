@@ -34,7 +34,7 @@ export type BookWidthMode = 'obsidian' | 'custom';
  *  only after the book stops scrolling (the original frame-budget behavior);
  *  'live' keeps it centered every scroll frame. Experimental: 'live' may be
  *  removed if it costs more than it saves. */
-export type TocFollowMode = 'settle' | 'live';
+export type TocFollowMode = 'settle' | 'live' | 'chase';
 
 /** Sane limits for the custom book width (px). */
 export const BOOK_WIDTH_MIN = 400;

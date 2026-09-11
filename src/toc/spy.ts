@@ -15,6 +15,12 @@ const ACTIVE_EDGE_MARGIN = 52;
  *  gesture truly rests — not after the whole gesture-defer window (700ms). */
 const CENTER_SCROLL_SETTLE_MS = 50;
 
+/** Fraction of the remaining gap to the active row's center the panel closes
+ *  per chase frame (0..1). <1 makes the panel trail the indicator instead of
+ *  tracking it exactly, so on a fast flick the panel lags and the pill rides
+ *  the edge-pin boundary until the scroll slows down. */
+const CHASE_LERP = 0.25;
+
 /** Watchdog bound for a stuck navigation guard: onScrollTick bails while
  *  isJumping is set, and a superseded navigation that loses the reset-timer
  *  race (its finally clears the winner's pending reset, then fails its own
@@ -219,22 +225,25 @@ window.clearTimeout(s.activePathTimer);
 			this._prevSpyIndex = bestIndex;
 		}
 
-		this.updateHighlight(highlightIndex);
-
 		// keepActiveInView (panel edge pin) runs inside updateHighlight: its
 		// scrollTop write only fires when the active row crosses the edge
-		// margin, not on every frame.
+		// margin, not on every frame. It is intentionally the LAST word in
+		// 'chase' mode (below), so a fast scroll that outruns the chase speed
+		// rides the edge instead of letting the indicator slide out of view.
 
-		// Center the active item. 'live' keeps it centered every frame with an
-		// instant write (experimental); 'settle' centers once after the wheel
-		// rests. Centering inside the scroll frame both forced a layout read
-		// (li.offsetTop) and restarted a smooth scroll on the panel for every
-		// active-item change; a single trailing animation after the wheel rests
-		// is one write + no reads (virtual offsets instead of offsetTop). The
-		// live variant relies on the same virtual offsets, so both are readless.
+		// Center the active item. 'chase' trails the row with a damped step
+		// (run BEFORE updateHighlight so the edge-pin above stays authoritative);
+		// 'live' keeps it exactly centered every frame with an instant write
+		// (experimental); 'settle' centers once after the wheel rests. Both the
+		// chase and live variants rely on virtual offsets, so they are readless
+		// — the original cost driver (li.offsetTop) is gone.
+		if (followMode === 'chase') {
+			this.centerActiveChase(highlightIndex);
+		}
+		this.updateHighlight(highlightIndex);
 		if (followMode === 'live') {
 			this.centerActiveLive(highlightIndex);
-		} else if (s.lastCenterIndex !== highlightIndex) {
+		} else if (followMode !== 'chase' && s.lastCenterIndex !== highlightIndex) {
 			s.lastCenterIndex = highlightIndex;
 			this.scheduleCenterScroll(highlightIndex);
 		}
@@ -445,6 +454,35 @@ window.clearTimeout(s.activePathTimer);
 			s.containerEl.scrollTop = next;
 			s.panelScrollTop = next;
 		}
+	}
+
+	/** Damped-follow centering (experimental, selected via `tocFollowMode`):
+	 *  move the panel toward the active row's center, closing only CHASE_LERP
+	 *  of the remaining gap per frame — never an instant jump, never a smooth
+	 *  scrollTo (restarted every frame it would cancel itself). Fast flicks
+	 *  outrun the chase speed, so the pill drifts to the panel edge, where
+	 *  keepActiveInView (which runs after this method in the tick) pins it.
+	 *  Because the step shrinks exponentially, the panel keeps requesting
+	 *  frames until the dead band is met, so the trailing settle finishes even
+	 *  after the book stops. Pure virtual-offset arithmetic, no layout reads. */
+	private centerActiveChase(index: number): void {
+		const s = this.state;
+		if (index < 0 || s.tocViewportHeight <= 0) return;
+		const item = s.entryToItem[index];
+		if (item === undefined || item < 0) return;
+		const top = s.virtualOffsets[item] ?? 0;
+		const viewport = s.tocViewportHeight;
+		const total = s.virtualOffsets[s.virtualOffsets.length - 1] ?? 0;
+		const max = Math.max(0, total - viewport);
+		const target = Math.max(0, Math.min(max, top - (viewport - s.rowHeight) / 2));
+		const current = s.panelScrollTop;
+		const next = current + (target - current) * CHASE_LERP;
+		if (Math.abs(next - current) < 2) return;
+		s.containerEl.scrollTop = next;
+		s.panelScrollTop = next;
+		// A chase frame may run after the book's last scroll event; keep the
+		// trail alive until the panel reaches the center.
+		s.positionSource?.requestFrame();
 	}
 
 	/** Live centering (experimental, selected via `tocFollowMode`): keep the
