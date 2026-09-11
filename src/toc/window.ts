@@ -362,9 +362,13 @@ export class TocWindow {
 /** Create (or patch-and-reuse) the row for one virtual item, returning the
  *  <li> to place, or null when the item references a missing file. Rows are
  *  absolutely positioned at their virtual offset so no sibling shifts when a
- *  row is added/removed. On a structural (visibility-change) render, surviving
- *  rows FLIP-glide from their previous offset and fresh rows slink in, so an
- *  expand/collapse reads as a flow instead of a snap. */
+ *  row is added/removed. On a structural (visibility-change) render, fresh
+ *  rows fade in at their exact final offset; surviving rows snap to their new
+ *  offset. Rows are never translated during the animation: the nesting-guide
+ *  lines are painted as per-row 1px background segments, and displacing
+ *  neighbouring rows by different amounts mid-flight would zigzag the outer
+ *  guide lines — asking rows to stay on their final geometry keeps those lines
+ *  continuous at every frame. */
 	private buildRow(
 		listEl: HTMLElement,
 		item: VirtualItem,
@@ -378,12 +382,9 @@ export class TocWindow {
 			if (!file) return null;
 			const reused = this.take(byKey, `file:${item.index}`);
 			if (reused) {
-				const prevTop = parseFloat(reused.style.top);
+				this.cancelRowAnimations(reused);
 				this.builder.updateFileRow(reused, item.index, file);
 				reused.style.top = `${top}px`;
-				if (animate && isFinite(prevTop) && Math.abs(prevTop - top) > 0.5) {
-					this.glideRow(reused, prevTop - top);
-				}
 				return reused;
 			}
 			const created = this.builder.createFileRow(listEl, item.index, file);
@@ -395,14 +396,11 @@ export class TocWindow {
 		if (!entry) return null;
 		const reused = this.take(byKey, `heading:${item.index}`);
 		if (reused) {
-			const prevTop = parseFloat(reused.style.top);
+			this.cancelRowAnimations(reused);
 			const a = this.builder.updateHeadingRow(reused, item.index, entry);
 			s.rowByEntry.set(item.index, reused);
 			s.rowAnchorByEntry.set(item.index, a);
 			reused.style.top = `${top}px`;
-			if (animate && isFinite(prevTop) && Math.abs(prevTop - top) > 0.5) {
-				this.glideRow(reused, prevTop - top);
-			}
 			return reused;
 		}
 		const row = this.builder.createHeadingRow(listEl, item.index, entry);
@@ -411,6 +409,18 @@ export class TocWindow {
 		row.li.style.top = `${top}px`;
 		if (animate) this.fadeInRow(row.li);
 		return row.li;
+	}
+
+	/** Cancel any in-flight animation on a reused row so a stale FLIP transform
+	 *  (from a cancelled/recycled animation) can never offset it after a
+	 *  rebuild or scroll-window move. */
+	private cancelRowAnimations(el: HTMLElement): void {
+		if (typeof el.getAnimations !== 'function') return;
+		try {
+			for (const a of el.getAnimations()) a.cancel();
+		} catch {
+			/* animation API missing — nothing to cancel */
+		}
 	}
 
 	/** Remove rows in the reuse map that were not reused (collapsed/folded rows
