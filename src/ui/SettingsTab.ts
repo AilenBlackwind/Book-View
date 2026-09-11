@@ -276,9 +276,24 @@ export class BookViewSettingTab extends PluginSettingTab {
 			.setName('Wheel flick')
 			.setHeading();
 
+		let precisionSetting: Setting;
 		new Setting(el)
+			.setName('Wheel flick acceleration')
+			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks. Off uses native scrolling (precision mode does not apply).')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.wheelFlickEnabled)
+					.onChange(async (value: boolean) => {
+						this.plugin.settings.wheelFlickEnabled = value;
+						await this.plugin.saveSettings();
+						precisionSetting.setDisabled(!value);
+					}),
+			);
+
+		precisionSetting = new Setting(el)
 			.setName('Wheel flick precision mode')
-			.setDesc('Disable combo stacking: every notch travels exactly the same distance regardless of timing. Best for precise short scrolls.')
+			.setDesc('Disable combo stacking: every notch travels exactly the same distance regardless of timing. Best for precise short scrolls. Applies only when wheel flick acceleration is on.')
+			.setDisabled(!this.plugin.settings.wheelFlickEnabled)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.wheelFlickPrecision)
@@ -296,18 +311,6 @@ export class BookViewSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.wheelShieldEnabled)
 					.onChange(async (value: boolean) => {
 						this.plugin.settings.wheelShieldEnabled = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Wheel flick acceleration')
-			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.wheelFlickEnabled)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.wheelFlickEnabled = value;
 						await this.plugin.saveSettings();
 					}),
 			);
