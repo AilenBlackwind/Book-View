@@ -265,14 +265,20 @@ window.clearTimeout(s.activePathTimer);
 			}
 		}
 
-		// Fade highlight indicator after idle
-		if (s.highlightEl) {
-			s.highlightEl.classList.remove('fading');
+		// Fade highlight indicator after idle. Only frames while the book is
+		// actually moving (a user gesture) revive the pill. Post-settle frames
+		// — lazy section height compensations, path rebuilds, the panel's own
+		// center scroll — leave the fade running, so a nearly-done fade-out is
+		// not cancelled and restarted, which read as a blink.
+		if (s.positionSource?.isGestureActive() ?? false) {
+			if (s.highlightEl) {
+				s.highlightEl.classList.remove('fading');
+			}
+			window.clearTimeout(s.fadeTimer);
+			s.fadeTimer = window.setTimeout(() => {
+				s.highlightEl?.classList.add('fading');
+			}, 400);
 		}
-		window.clearTimeout(s.fadeTimer);
-		s.fadeTimer = window.setTimeout(() => {
-			s.highlightEl?.classList.add('fading');
-		}, 400);
 	}
 
 	/** The entry to highlight for `index`: itself when its row is in the
