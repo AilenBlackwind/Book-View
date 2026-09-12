@@ -23,6 +23,13 @@ const PRERENDER_PARK_DELAY = 80;
 const COLD_START_DELAY = 200;
 const IDLE_UNLOAD_DELAY = 500;
 const FAR_UNLOAD_MARGIN = 2000;
+// How far beyond the load-window edge an IO exit must go before unloading.
+// The window edges move with every notch/flick; without the margin a giant
+// section's end (or start) sits within flick range of the edge for a long
+// stretch of adjacent notes, and every crossing unloaded + reloaded the
+// multi-thousand-element DOM (a forced recalc each cycle). The idle far
+// unloader still bounds the mounted set.
+const IO_UNLOAD_HYSTERESIS_PX = 600;
 // How far past the load window pre-render may measure heights. Sections beyond
 // it get parked/unloaded immediately (parkIfOutOfZone), so measuring them early
 // just churns the renderer: mount + measure + full recalc + unload for nothing.
@@ -427,6 +434,9 @@ export class SectionPool {
 	private ioScrollTop: number | null = null;
 	private liveScrollTop: number | null = null;
 	private liveScrollAt = 0;
+	/** Coalesced mount-style flush state (see flushMountStyle). */
+	private mountStyleDirty = false;
+	private mountStyleFlushTimer = 0;
 	private observer: IntersectionObserver;
 	private sectionResizeObserver: ResizeObserver;
 	private renderQueue: string[] = [];
@@ -940,9 +950,14 @@ export class SectionPool {
 		// fresh offsets, and unloads that live in IO exits (they coalesce late
 		// during fast glides) or on the idle-settle timer let the live DOM grow
 		// to span the whole scrubbed band, torn down in one late burst after
-		// the gesture. Prune mounted sections outside the same load window now,
-		// but only while the book actually moved, so idle cleanup stays with
-		// unloadFarSections and the prerender margin is untouched.
+		// the gesture. Prune mounted sections outside the load window now,
+		// widened by IO_UNLOAD_HYSTERESIS_PX on each edge: the window edges
+		// move with every notch/flick, and without the margin a giant
+		// neighbor's end sits within flick range of the edge for a long
+		// stretch of adjacent notes — every crossing unloaded + reloaded its
+		// multi-thousand-element DOM (a forced recalc each cycle). Idle
+		// cleanup still runs through unloadFarSections with its much wider
+		// FAR_UNLOAD_MARGIN, and the prerender margin is untouched.
 		if (moved) {
 			// Rate-limited: pruning is about bounding the set, not fixed
 			// cadence, and each unload itself pays a style recalc of the whole
@@ -953,15 +968,25 @@ export class SectionPool {
 			const now = performance.now();
 			if (now - this.lastPruneAt >= 150) {
 				this.lastPruneAt = now;
-				this.pruneFarSections(scrollTop, clientHeight);
+				this.pruneFarSections(
+					scrollTop,
+					clientHeight,
+					OVERSCAN_TOP + IO_UNLOAD_HYSTERESIS_PX,
+					this.host.loadMargin + IO_UNLOAD_HYSTERESIS_PX,
+				);
 			}
 		}
 	}
 
-	private pruneFarSections(scrollTop: number, clientHeight: number): void {
+	private pruneFarSections(
+		scrollTop: number,
+		clientHeight: number,
+		overscanTop: number,
+		loadMargin: number,
+	): void {
 		for (const [path, data] of this.host.sections) {
 			if (!data.component) continue;
-			if (isSectionInWindow(data.offset, data.height, scrollTop, clientHeight, OVERSCAN_TOP, this.host.loadMargin)) {
+			if (isSectionInWindow(data.offset, data.height, scrollTop, clientHeight, overscanTop, loadMargin)) {
 				continue;
 			}
 			this.unloadSection(path);
@@ -1003,6 +1028,8 @@ export class SectionPool {
 		window.clearTimeout(this.ioWorkTimer);
 		window.clearTimeout(this.deferredDrainTimer);
 		window.clearTimeout(this.upgradePumpTimer);
+		window.clearTimeout(this.mountStyleFlushTimer);
+		this.mountStyleDirty = false;
 		this.dropStaleStormAt = 0;
 		this.dropStaleCount = 0;
 		this.dropStaleLastSummaryAt = 0;
@@ -1219,10 +1246,27 @@ export class SectionPool {
 	 * The read is deliberately cheap-scoped parents-only (scrollTop), the same
 	 * primitive the codebase already reads in the idle-safe parkIfOutOfZone —
 	 * not getBoundingClientRect, which would demand the full book's layout.
+	 *
+	 * The flush is coalesced: during a fast scrub the drain chains 10+
+	 * mount tasks back-to-back inside one frame, and the intermediate
+	 * flushes were pure waste — each forced the whole-set recalc only for
+	 * the next mount to re-dirty the tree (a burst paid 10 recalcs where
+	 * the last one before the frame is all that matters). The dirty flag +
+	 * trailing setTimeout(0) caps the burst at one recalc; every pending
+	 * setTimeout(0) task still executes before the next rAF, so the glide
+	 * frame's write keeps landing on a clean tree.
 	 */
 	private flushMountStyle(): void {
 		if (this.host.isDestroyed()) return;
-		void this.host.scrollContainer.scrollTop;
+		this.mountStyleDirty = true;
+		if (this.mountStyleFlushTimer) return;
+		this.mountStyleFlushTimer = window.setTimeout(() => {
+			this.mountStyleFlushTimer = 0;
+			if (this.host.isDestroyed()) return;
+			if (!this.mountStyleDirty) return;
+			this.mountStyleDirty = false;
+			void this.host.scrollContainer.scrollTop;
+		}, 0);
 	}
 
 	/** Current scroll position, read live at most once per LIVE_READ_TTL.
@@ -1604,9 +1648,16 @@ export class SectionPool {
 			// re-mounting two frames later as the neighbor's scroll-back
 			// crosses the same boundary re-runs the whole markdown build just
 			// for that oscillation. Geometrically it belongs to the section
-			// still being read off-screen.
+			// still being read off-screen. The margin also absorbs genuine
+			// boundary crossings: a section whose extent has just left the
+			// window by less than IO_UNLOAD_HYSTERESIS_PX stays mounted,
+			// because the next notch/flick typically pulls the edge back over
+			// it and the re-load would re-attach its whole DOM for nothing.
 			const data = this.host.sections.get(item.path);
-			if (data?.component && data.offset + data.height >= winTop && data.offset <= winBottom) continue;
+			if (data?.component) {
+				const end = data.offset + data.height;
+				if (end >= winTop - IO_UNLOAD_HYSTERESIS_PX && data.offset <= winBottom + IO_UNLOAD_HYSTERESIS_PX) continue;
+			}
 			this.unloadSection(item.path);
 		}
 		this.dbgQueueMs += performance.now() - t0;
@@ -1681,7 +1732,12 @@ export class SectionPool {
 		const scrollTop = this.host.scrollContainer.scrollTop;
 		const viewport = this.host.scrollContainer.clientHeight;
 		const end = data.offset + data.height;
-		const inZone = end > scrollTop - OVERSCAN_TOP && data.offset < scrollTop + viewport + this.host.loadMargin;
+		// Same IO_UNLOAD_HYSTERESIS_PX margin as the per-frame prune: without
+		// it this idle pass would tear down the sections the prune keeps
+		// mounted just past the window edge, and the next notch would reload
+		// them (the forced-recalc churn the margin exists to prevent).
+		const inZone = end > scrollTop - OVERSCAN_TOP - IO_UNLOAD_HYSTERESIS_PX
+			&& data.offset < scrollTop + viewport + this.host.loadMargin + IO_UNLOAD_HYSTERESIS_PX;
 		// Park the measured DOM in the cache so memory stays bounded.
 		if (!inZone) this.unloadSection(path);
 	}
