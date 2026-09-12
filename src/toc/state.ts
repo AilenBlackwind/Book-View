@@ -7,6 +7,12 @@ import { computeActivePath, computeHiddenState } from '../utils/toc';
 import { buildVirtualItems, computeVirtualOffsets } from './virtual';
 import { TOC_SHADOW_CSS } from './shadow.css';
 
+/** Exponential-decay time constant for the sampled book scroll speed.
+ *  After a fast scroll rests, the animation gate relaxes back to animating
+ *  within a few hundred milliseconds — a manual expand clicked right after a
+ *  flick still glides instead of snapping. */
+const SCROLL_SPEED_DECAY_MS = 250;
+
 /** One deferred heading-rect measurement queued by tagHeadings. */
 export interface PendingTagHeading {
 	el: HTMLElement;
@@ -121,6 +127,16 @@ export class TocState {
 	positionsDirty = true;
 	scrollHandler: (() => void) | null = null;
 	tickScheduled = false;
+	/** Rolling estimate of the book's scroll speed (px/second), sampled by the
+	 *  spy on every frame it runs while the user scrolls. 0 when never sampled
+	 *  or after the gesture rests (see scrollTooFastForAnimation). */
+	scrollSpeedPxPerSec = 0;
+	/** performance.now() of the last speed sample; the animation gate decays
+	 *  the estimate toward 0 from here, so a stale fast reading cannot keep
+	 *  glides suppressed after the scroll stopped. */
+	scrollSpeedSampleAt = -1;
+	private lastScrollSampleTop = 0;
+	private lastScrollSampleAt = -1;
 	/** Sections queued for deferred heading-offset measurement (see
 	 *  tagHeadings). */
 	pendingTagHeadings: PendingTagSection[] = [];
@@ -399,5 +415,37 @@ export class TocState {
 		this.entryToItem = entryToItem;
 		this.virtualOffsets = computeVirtualOffsets(items, this.rowHeight, this.fileRowHeight);
 		this.allRowsHidden = !items.some((item) => item.type === 'heading');
+	}
+
+	/** Sample the book's scroll speed from an increment (px) over the wall-clock
+	 *  elapsed since the previous call, blended into a rolling estimate
+	 *  (px/sec). Called by the spy on every frame it runs during user scroll;
+	 *  0 on the very first sample. */
+	sampleScrollSpeed(scrollTop: number, now: number): void {
+		if (this.lastScrollSampleAt >= 0) {
+			const dt = now - this.lastScrollSampleAt;
+			const dx = Math.abs(scrollTop - this.lastScrollSampleTop);
+			if (dt > 1 && dx > 0) {
+				const instant = (dx / dt) * 1000;
+				this.scrollSpeedPxPerSec = this.scrollSpeedPxPerSec * 0.6 + instant * 0.4;
+				this.scrollSpeedSampleAt = now;
+			}
+		}
+		this.lastScrollSampleTop = scrollTop;
+		this.lastScrollSampleAt = now;
+	}
+
+	/** True while the book is scrolling faster than the gate limit, so the row
+	 *  window should snap instead of gliding (a rebuild mid-fast-flick would
+	 *  otherwise animate rows that are still moving, reading as chaos). The
+	 *  estimate decays with SCROLL_SPEED_DECAY_MS once the spy stops sampling
+	 *  (scroll rested), so a manual expand after a flick still animates. */
+	scrollTooFastForAnimation(): boolean {
+		const limit = this.settings?.tocExpandAnimSpeedLimit ?? 0;
+		if (limit <= 0) return false;
+		if (this.scrollSpeedPxPerSec <= 0) return false;
+		const age = Math.max(0, performance.now() - this.scrollSpeedSampleAt);
+		const decayed = this.scrollSpeedPxPerSec * Math.exp(-age / SCROLL_SPEED_DECAY_MS);
+		return decayed >= limit;
 	}
 }

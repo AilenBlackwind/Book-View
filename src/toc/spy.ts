@@ -166,6 +166,7 @@ export class TocSpy {
 		this.updatePositionsIfDirty();
 
 		const scrollTop = s.positionSource?.getScrollTop() ?? s.scrollContainer.scrollTop;
+		s.sampleScrollSpeed(scrollTop, performance.now());
 		const viewportHeight = s.viewportHeight;
 		const bestIndex = pickActiveIndex(s.headingPositions, scrollTop, viewportHeight, this._prevSpyIndex);
 

@@ -190,9 +190,15 @@ export class TocWindow {
 		// appear. Scroll-window moves keep the same items and only append rows
 		// past the scroll edge, so those never animate. The opening build
 		// (fresh panel mount, `renderedItems === null`) is not animated either.
+		// While the book is scrolling faster than tocExpandAnimSpeedLimit the
+		// rebuilds snap instead of gliding — a fast flick would otherwise
+		// overlap the 140ms glides into a blur (see scrollTooFastForAnimation).
 		const structural = this.renderedItems !== items;
 		const animate =
-			structural && this.renderedItems !== null && (s.settings?.tocExpandAnim ?? true);
+			structural &&
+			this.renderedItems !== null &&
+			(s.settings?.tocExpandAnim ?? true) &&
+			!s.scrollTooFastForAnimation();
 
 		let start = firstItemAt(offsets, scrollTop, n);
 		let end = firstItemAfter(offsets, scrollTop + viewport, n);
@@ -496,7 +502,7 @@ export class TocWindow {
 	private pulseToggled(): void {
 		const s = this.state;
 		if (s.lastToggledEntries.length === 0) return;
-		if (!(s.settings?.tocExpandAnim ?? true)) {
+		if (!(s.settings?.tocExpandAnim ?? true) || s.scrollTooFastForAnimation()) {
 			s.lastToggledEntries = [];
 			return;
 		}

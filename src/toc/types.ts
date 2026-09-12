@@ -22,6 +22,10 @@ export interface TocSettings {
 	autoExpandMode: AutoExpandMode;
 	/** Animate expand/collapse rebuilds (FLIP glide, row slink, heading pulse). */
 	tocExpandAnim: boolean;
+	/** Book scroll speed (px/s) above which the row-window glides are skipped
+	 *  and visibility rebuilds snap instead — fast flicks overlap the 140ms
+	 *  glides into a blur. 0 disables the gate (always animate). */
+	tocExpandAnimSpeedLimit: number;
 }
 
 /** Line-based fallback height for the heading-position estimate, used before

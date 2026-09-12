@@ -204,6 +204,20 @@ export class BookViewSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		new Setting(el)
+			.setName('Disable animation above scroll speed')
+			.setDesc('Above this book scroll speed, row glides are skipped and sections snap instead. Fast flicks stay clean; at low speeds the animation is kept. Set to 0 to always animate.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0, 10000, 100)
+					.setValue(this.plugin.settings.tocExpandAnimSpeedLimit)
+					.setDynamicTooltip()
+					.onChange(async (value: number) => {
+						this.plugin.settings.tocExpandAnimSpeedLimit = value;
+						await this.plugin.saveSettings();
+					}),
+			);
 	}
 
 	private renderGeneralSettings(el: HTMLElement): void {

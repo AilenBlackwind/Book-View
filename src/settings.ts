@@ -61,6 +61,7 @@ export interface BookViewSettings {
 	bookWidthMode: BookWidthMode;
 	bookWidth: number;
 	tocExpandAnim: boolean;
+	tocExpandAnimSpeedLimit: number;
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
@@ -88,4 +89,7 @@ export const DEFAULT_SETTINGS: BookViewSettings = {
 	bookWidthMode: 'obsidian',
 	bookWidth: 750,
 	tocExpandAnim: true,
+	// 2500 px/s ≈ a fast flick. Casual wheel/threshold gestures stay below it
+	// (glides remain), aggressive flicks snap instead of blurring.
+	tocExpandAnimSpeedLimit: 2500,
 };
