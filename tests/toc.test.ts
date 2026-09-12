@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { pickActiveIndex, computeActivePath, computeHiddenState } from '../src/utils/toc';
 import { computeHeadingFoldState } from '../src/utils/fold';
+import { entryTag } from '../src/toc/builder';
 
 describe('pickActiveIndex', () => {
 	it('returns the last entry above the trigger line', () => {
@@ -164,5 +165,45 @@ describe('computeHeadingFoldState', () => {
 
 	it('handles an empty heading list', () => {
 		expect(computeHeadingFoldState([], () => false)).toEqual([]);
+	});
+});
+
+describe('entryTag', () => {
+	const entry = (path: string, line: number, text: string) => ({
+		file: { path },
+		line,
+		text,
+		level: 1,
+		fileHeadingIndex: 0,
+	});
+
+	it('identifies an entry by path, line and text', () => {
+		expect(entryTag(entry('a.md', 12, 'Intro'))).toBe('a.md#12:Intro');
+	});
+
+	it('changes when the heading text is renamed', () => {
+		const before = entryTag(entry('a.md', 7, 'Old title'));
+		const after = entryTag(entry('a.md', 7, 'New title'));
+		expect(after).not.toBe(before);
+	});
+
+	it('changes when the heading shifts to another line', () => {
+		const before = entryTag(entry('a.md', 7, 'Intro'));
+		const after = entryTag(entry('a.md', 9, 'Intro'));
+		expect(after).not.toBe(before);
+	});
+
+	it('distinguishes equal text at the same line across files', () => {
+		const a = entryTag(entry('a.md', 3, 'Intro'));
+		const b = entryTag(entry('b.md', 3, 'Intro'));
+		expect(a).not.toBe(b);
+	});
+
+	it('reflects a line shift when a paragraph is inserted above the heading', () => {
+		// A paragraph inserted above the heading shifts its line; the tag must
+		// reflect that the heading is a different one, never silently equal.
+		const before = entryTag(entry('a.md', 10, 'Stable'));
+		const after = entryTag(entry('a.md', 14, 'Stable'));
+		expect(after).not.toBe(before);
 	});
 });

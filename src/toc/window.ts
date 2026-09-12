@@ -92,8 +92,10 @@ export class TocWindow {
 		// With containment the browser scopes the reflow to this subtree.
 		s.containerEl.addClass('bv-contain-layout');
 		const shadow = s.ensureShadow();
-		// Idempotent cleanup for rebuild(): drop rows/highlight from the
-		// previous mount, keep the (already injected) <style>.
+		// mount() is only reached from a fresh view bind (destroy already
+		// emptied the shadow), so a defensive drop of leftover rows/highlight is
+		// safe and keeps the already-injected <style>. The incremental rebuild
+		// (TocController.rebuild) never reaches here — it renders in place.
 		shadow.replaceChildren();
 		const style = s.containerEl.ownerDocument.createElement('style');
 		style.textContent = TOC_SHADOW_CSS;
@@ -608,12 +610,13 @@ export class TocWindow {
 		this.startIndex = 0;
 		this.endIndex = 0;
 		this.renderedItems = null;
-		// Remove the DOM this window created (skeleton + highlight). The view
-		// also empties the panel on full teardown, but the incremental rebuild
-		// (TocController.rebuild) re-runs mount without a view-level wipe, so
-		// the old skeleton must not leak into the panel. The shadow root stays
-		// attached (a second attachShadow on the same host would throw); mount
-		// clears and re-seeds its children each time.
+		// Remove the DOM this window created (skeleton + highlight). The shadow
+		// root stays attached (a second attachShadow on the same host would
+		// throw); mount clears and re-seeds its children each time. Note the
+		// incremental rebuild (TocController.rebuild) does NOT call destroy any
+		// more — it rebuilds data in place and re-renders the visible rows, so
+		// only a full teardown (TocView/Dom teardown) reaches this path and
+		// wipes the panel.
 		const shadow = this.state.shadowRoot;
 		if (shadow) {
 			shadow.replaceChildren();

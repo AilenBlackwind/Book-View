@@ -8,6 +8,16 @@ import type { TocNavigator } from './navigation';
 /** Fixed x-offset of the nesting guide for each ancestor level. */
 const GUIDE_POSITIONS = [8, 20, 32, 44, 56, 68];
 
+/** Identity tag for an entry, stored on the row so updateHeadingRow can
+ *  tell "same entry, nothing changed" from "same spot, different heading"
+ *  (a rename or a shift after an edit above) without touching the label
+ *  DOM. Path + line uniquely identify a heading; appending the text makes
+ *  the in-place incremental rebuild (TocController.rebuild, which reuses
+ *  rows by data-index) refresh the label when a heading is renamed. */
+export function entryTag(entry: { file: { path: string }; line: number; text: string }): string {
+	return `${entry.file.path}#${entry.line}:${entry.text}`;
+}
+
 /**
  * Builds the ToC *data* (flattened entries, virtual list, row heights, per-entry
  * leaf/guide info) and provides the row factories the virtual window uses to
@@ -63,6 +73,7 @@ export class TocBuilder {
 		li.style.paddingLeft = `${(entry.level - 1) * 12}px`;
 		li.dataset.level = String(entry.level);
 		li.dataset.index = String(entryIndex);
+		li.dataset.tag = entryTag(entry);
 
 		const inner = li.createSpan({ cls: 'bv-toc-heading-inner' });
 
@@ -138,13 +149,20 @@ export class TocBuilder {
 		const collNow = !leafNow && !s.isEntryExpanded(entryIndex);
 		const hasLeaf = li.classList.contains('bv-toc-leaf');
 		const hasColl = li.classList.contains('bv-toc-collapsed');
-		if (li.dataset.index === String(entryIndex) && li.dataset.level === String(entry.level) && hasLeaf === leafNow && hasColl === collNow) {
+		if (
+			li.dataset.index === String(entryIndex) &&
+			li.dataset.level === String(entry.level) &&
+			li.dataset.tag === entryTag(entry) &&
+			hasLeaf === leafNow &&
+			hasColl === collNow
+		) {
 			return li.querySelector<HTMLElement>('a.bv-toc-item')!;
 		}
 
 		li.style.paddingLeft = `${(entry.level - 1) * 12}px`;
 		li.dataset.level = String(entry.level);
 		li.dataset.index = String(entryIndex);
+		li.dataset.tag = entryTag(entry);
 		li.addClass('bv-toc-heading');
 
 		let inner = li.querySelector<HTMLElement>('.bv-toc-heading-inner');

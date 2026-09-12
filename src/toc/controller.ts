@@ -65,21 +65,44 @@ export class TocController {
 		this.spy.setup();
 	}
 
-	/** Rebuild the entries and rows from the current metadata cache without
-	 *  destroying the controller or wiping the panel DOM. Used when a book
-	 *  file's headings changed (markDirty re-renders the section itself). A
-	 *  full bind/unbind wipe-and-rebuild is the ToC flicker source during mass
-	 *  edits; this keeps the panel mounted and only swaps the data + rows. */
+	/** Rebuild the entries and rows after a book file's headings changed
+	 *  (markDirty re-renders the section itself).
+	 *
+	 *  Originally this destroyed and re-mounted the row window — a full
+	 *  tear-down of the shadow DOM + an incremental refill (16 rows/rAF), which
+	 *  on a big ToC read as "the ToC just disappeared" on every heading edit.
+	 *  Now the window stays mounted: only the data layer and the tracking /
+	 *  measurement subscriptions (which reference old entries and positions)
+	 *  are rebuilt, then the existing row window is re-rendered in place, with
+	 *  rows patched by data-index through the builder's in-place update paths. */
 	rebuild(): void {
-		this.window.destroy();
 		this.measurer.destroy();
 		this.spy.destroy();
 		this.state.resetForBuild();
 		this.builder.build();
-		this.window.mount();
-		this.window.setup();
+
+		// The panel kept its scrollTop through the data rebuild. If the edit
+		// added/removed headings above the current view, the total height
+		// changed and the cached position can sit past the new end; clamp it
+		// (and the container) before the window re-renders, mirroring
+		// applyVisibility, so render() never computes an out-of-range window.
+		const s = this.state;
+		const viewport = s.tocViewportHeight > 0 ? s.tocViewportHeight : s.containerEl.clientHeight;
+		const total = s.virtualOffsets[s.virtualOffsets.length - 1] ?? 0;
+		const max = Math.max(0, total - viewport);
+		if (s.panelScrollTop > max) {
+			s.panelScrollTop = max;
+			s.containerEl.scrollTop = max;
+		}
+
+		// NOTE: window.setup() is intentionally NOT called here. The window
+		// was never destroyed, so its scroll/click handlers and debug probe
+		// are still installed; calling setup() again would double-bind the
+		// panel scroll listener. render() re-renders the visible window and
+		// re-uses existing rows by data-index.
+		this.window.render();
 		this.spy.calculatePositions();
-		if (this.state.entries.length === 0) return;
+		if (s.entries.length === 0) return;
 		this.measurer.setup();
 		this.spy.setup();
 	}
