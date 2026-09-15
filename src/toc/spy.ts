@@ -136,16 +136,81 @@ export class TocSpy {
 		if (s.headingPositions.length !== n) {
 			s.headingPositions = new Array<number>(n);
 		}
-		// Per-entry getOffset avoids allocating a Map for every frame of scroll;
-		// the array is reused to avoid GC churn. Prefer the measured within-
-		// section offset (set by tagHeadings when the section is mounted) over
-		// the line-based estimate.
-		for (let i = 0; i < n; i++) {
-			const entry = s.entries[i];
-			if (!entry) continue;
-			const within = s.headingOffsets.get(i);
-			s.headingPositions[i] = (s.positionSource.getOffset(entry.file.path) ?? 0)
-				+ (within ?? entry.line * HEIGHT_PER_LINE);
+		// All-or-nothing per same-file run. The per-entry mix below was
+		// `measured_px ?? line_estimate` per entry — and a mixed array is the
+		// one corruption class: a fast scrub past a section unloads it before
+		// the rect-budget trickles through the whole heading list, so some
+		// entries carry measured px while their neighbours stay on the line-
+		// based estimate; a measured px and an adjacent entry's estimate are
+		// the same order of magnitude, and the accidental collision comes out
+		// as an equal pair (the broken-positions anomaly, x1 at=52 in "Черты
+		// — DoOrf" — the file has no duplicate headings, user-verified). The
+		// bisect on that non-increasing step skips the band around the
+		// collision — the felt "pill did not move through the trait list"
+		// (~20 headings). Pure-measured and pure-estimate runs are both
+		// strictly monotonic (consecutive cache headings in a file have
+		// strictly increasing lines), so demoting a run with ANY unmeasured
+		// entry to the line-based estimate for the whole run removes the
+		// mixed array entirely. Cost: one pre-pass over entries (O(n), the
+		// pass below is already O(n)); precision loss is bounded — the
+		// estimate is exact enough for picks, and the run re-upgrades to
+		// measured as soon as every heading's rect has landed (tagHeadings
+		// re-measures on the section's next mount; invalidatePath clears the
+		// run on edits). Slow visits measure the whole list and keep the
+		// measured precision — the "morning reproduces not" asymmetry.
+		let runStart = 0;
+		while (runStart < n) {
+			const runFile = s.entries[runStart]?.file.path;
+			let runEnd = runStart + 1;
+			while (runEnd < n && s.entries[runEnd]?.file.path === runFile) runEnd++;
+			let allMeasured = true;
+			for (let i = runStart; i < runEnd; i++) {
+				if (!s.headingOffsets.has(i)) {
+					allMeasured = false;
+					break;
+				}
+			}
+			for (let i = runStart; i < runEnd; i++) {
+				const entry = s.entries[i];
+				if (!entry) continue;
+				const within = allMeasured ? s.headingOffsets.get(i) : undefined;
+				s.headingPositions[i] = (s.positionSource.getOffset(entry.file.path) ?? 0)
+					+ (within ?? entry.line * HEIGHT_PER_LINE);
+			}
+			runStart = runEnd;
+		}
+
+		// Broken-position validation: pickActiveIndex is a bisect on a
+		// monotonic array, so a same-file group of equal positions acts as one
+		// heading (result jumps to the group's last index — a ~20-heading band
+		// flash-skipped in scroll), and a decreasing step makes the bisect skip
+		// bands entirely. Line-based fallbacks are strictly increasing within a
+		// file, so a non-increasing same-file pair means a bad measured within-
+		// offset class (measured before lazy media laid out, then cached until
+		// invalidatePath). Event-driven (runs on positions recompute, never per
+		// frame) and O(n) — the pass already runs. One-liner anomaly with the
+		// file and the first broken pair's heading texts: the exact range
+		// evidence ("from X to Y") the next occurrence needs.
+		const broken: { i: number; file: string; first: string; second: string }[] = [];
+		for (let i = 1; i < n; i++) {
+			const cur = s.entries[i];
+			const prev = s.entries[i - 1];
+			if (!cur || !prev || cur.file.path !== prev.file.path) continue;
+			const pos = s.headingPositions[i];
+			const posPrev = s.headingPositions[i - 1];
+			if (pos === undefined || posPrev === undefined) continue;
+			if (pos > posPrev) continue;
+			if (broken.length < 3) {
+				broken.push({ i, file: cur.file.basename, first: prev.text, second: cur.text });
+			}
+		}
+		if (broken.length > 0) {
+			const b = broken[0];
+			if (b) {
+				DebugLog.anomaly(
+					`broken-positions ${b.file} x${broken.length} first=[${b.first}] second=[${b.second}] at=${b.i}`,
+				);
+			}
 		}
 	}
 
@@ -156,6 +221,11 @@ export class TocSpy {
 			if (s.isJumpingSince && performance.now() - s.isJumpingSince > IS_JUMPING_WATCHDOG_MS) {
 				// Lost navigation reset (see IS_JUMPING_WATCHDOG_MS): recover
 				// instead of tracking nothing until a rebind.
+				// Always-on anomaly: the recovery works silently, so without
+				// this line the lost reset has no evidence in the dump.
+				DebugLog.anomaly(
+					`watchdog isJumping stuck ${Math.round(performance.now() - s.isJumpingSince)}ms active=${s.activeEntryIndex}`,
+				);
 				s.isJumping = false;
 				s.navigating = false;
 			} else {
@@ -182,6 +252,11 @@ export class TocSpy {
 			const MAX_GRACE_MS = 1000;
 			const elapsed = performance.now() - s.lastNavigationTime;
 			if (scrollDelta < SCROLL_RELEASE_PX && elapsed < MAX_GRACE_MS) return;
+			// Debug: one-liner when the post-navigation grace releases and
+			// tracking resumes — the next dump shows exactly when the spy
+			// woke up after a jump and on which entry (the "pill stuck 20
+			// headings away after the jump" class has no evidence otherwise).
+			DebugLog.log('TOCGRACE', '', `released px=${Math.round(scrollDelta)}`, `elapsed=${Math.round(elapsed)}ms`, `active=${s.activeEntryIndex}`);
 			s.lastNavigationTime = 0;
 		}
 

@@ -1,6 +1,7 @@
 import { TocState } from './state';
 import { TocSpy } from './spy';
 import { HEIGHT_PER_LINE } from './types';
+import { DebugLog } from '../utils/debug';
 import { guardedScrollWrite } from '../components/ScrollGuard';
 
 /** Click-navigation to a ToC entry: jump the book to the heading, settle the
@@ -169,6 +170,12 @@ export class TocNavigator {
 				(headingRect.top - containerRect.top) -
 				20;
 			if (Math.abs(s.scrollContainer.scrollTop - target) < 1) break;
+			// Debug: the line-based estimate write (scrollToHeading's scrollTo)
+			// is only the first write; this exact settle is what lands the
+			// book on the heading. Without this one-liner the next dump ends
+			// at the eased estimate jump and the landing correctness (the felt
+			// "clicked X, book is at Y" class) has no evidence.
+			DebugLog.log('TOCSETTLE', '', `attempt=${attempt}`, `target=${Math.round(target)}`, `at=${Math.round(s.scrollContainer.scrollTop)}`);
 			guardedScrollWrite(s.scrollContainer, () => {
 				s.scrollContainer.scrollTo({
 					top: Math.max(0, target),

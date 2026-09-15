@@ -6,6 +6,7 @@ import { TocWindow } from './window';
 import { TocSpy } from './spy';
 import { TocMeasurer } from './measure';
 import { TocNavigator } from './navigation';
+import { DebugLog } from '../utils/debug';
 import type { TocEntry } from './entries';
 
 export type { TocEntry } from './entries';
@@ -43,6 +44,42 @@ export class TocController {
 		// A window render re-creates the row elements; re-apply the highlight so
 		// the pill is re-hosted into the active row instead of a detached one.
 		this.window.onRowsRendered = () => this.spy.reapplyHighlight();
+		// Per-note ToC snapshot for the debug dump (the --- ToC --- section):
+		// ToC bugs that reproduce only in one note have no per-note context in
+		// a chronological log otherwise. The last open book wins — mirrors the
+		// single active ToC panel.
+		DebugLog.registerTocProvider(() => this.tocDebugSnapshot());
+	}
+
+	/** Per-note context for the debug dump. Keys for the classes of ToC bugs
+	 *  found so far: index/position count mismatches (the spy silently reading
+	 *  stale positions), a stuck isJumping flag (the freeze-to-reopen bug),
+	 *  and malformed heading structure — repeated consecutive heading texts
+	 *  and a non-heading file start — for one-note-repro bugs (usually an
+	 *  edit swapped ~100 headings in). Deliberately a single joined string:
+	 *  the dump section is one paste. */
+	private tocDebugSnapshot(): string {
+		const s = this.state;
+		const lines: string[] = [];
+		const book = s.files[0] ?? null;
+		const posAge = s.positionsStableSince > 0 ? Math.round(performance.now() - s.positionsStableSince) : -1;
+		lines.push(
+			`book=${book ? book.basename : '?'} files=${s.files.length} entries=${s.entries.length} positions=${s.headingPositions.length} posAge=${posAge}ms`,
+		);
+		const jumpAge = s.isJumpingSince > 0 ? Math.round(performance.now() - s.isJumpingSince) : 0;
+		lines.push(`active=${s.activeEntryIndex} isJumping=${s.isJumping} jumpAge=${jumpAge}ms`);
+		let repeated = 0;
+		for (let i = 1; i < s.entries.length; i++) {
+			const cur = s.entries[i];
+			const prev = s.entries[i - 1];
+			if (cur && prev && cur.text === prev.text) repeated++;
+		}
+		const first = s.entries[0];
+		const last = s.entries[s.entries.length - 1];
+		lines.push(
+			`first=[${first ? first.file.basename + ':' + first.line + ' ' + first.text : '?'}] last=[${last ? last.file.basename + ':' + last.line + ' ' + last.text : '?'}] repeated-text=${repeated}`,
+		);
+		return lines.join('\n');
 	}
 
 	getEntries(): TocEntry[] {
@@ -121,6 +158,7 @@ export class TocController {
 	}
 
 	destroy(): void {
+		DebugLog.registerTocProvider(null);
 		this.window.destroy();
 		this.measurer.destroy();
 		this.spy.destroy();

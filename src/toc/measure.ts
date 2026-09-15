@@ -56,6 +56,18 @@ export class TocMeasurer {
 
 		const headingEls = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
 
+		// Debug: the cheap mapping below (headingEls[i] ↔ cache.headings[i])
+		// assumes the rendered heading elements match the metadata cache in
+		// order and count. Inline HTML headings (<h3> in rendered markdown),
+		// embedded note content, and Dataview blocks hydrate extra <h1..h6>
+		// elements the cache never lists — every cache.heading after them maps
+		// to a shifted el and measures the wrong rect. Event-driven one-liner
+		// per section mount (debug-gated): the count pair pins the class
+		// without a per-heading probe.
+		if (headingEls.length !== cache.headings.length) {
+			DebugLog.log('TOC heading-count', path, `dom=${headingEls.length}`, `cache=${cache.headings.length}`);
+		}
+
 		// Cheap part, kept synchronous: tag each heading with its ToC entry so
 		// context menus can map a heading back to an entry. No layout reads.
 		const toMeasure: PendingTagHeading[] = [];
@@ -148,7 +160,24 @@ export class TocMeasurer {
 				if (item.el.offsetParent === null) continue;
 				if (!sectionRect) sectionRect = sectionEl.getBoundingClientRect();
 				const headingRect = item.el.getBoundingClientRect();
-				s.headingOffsets.set(item.tocIndex, headingRect.top - sectionRect.top);
+				const landed = headingRect.top - sectionRect.top;
+				s.headingOffsets.set(item.tocIndex, landed);
+				// Debug: the broken-positions anomaly pins a same-file pair whose
+				// positions came out equal/non-increasing. This one-liner prints
+				// the pair's cache lines at the moment the rects actually land —
+				// the lines point to the exact markdown, distinguishing a duplicate
+				// heading in the file (an AI bold→heading swap artifact) from any
+				// other shifted-mapping cause. Debug-gated, fires only when a
+				// measured within-offset lands within 2px of its same-file
+				// predecessor's.
+				const entry = s.entries[item.tocIndex];
+				const prevEntry = s.entries[item.tocIndex - 1];
+				if (entry && prevEntry && entry.file.path === prevEntry.file.path) {
+					const prevOff = s.headingOffsets.get(item.tocIndex - 1);
+					if (prevOff !== undefined && Math.abs(landed - prevOff) < 2) {
+						DebugLog.log('TOC head-dup', entry.file.path, `lines=${prevEntry.line}+${entry.line}`, `within=${Math.round(landed)}`);
+					}
+				}
 				s.positionsDirty = true;
 				this.dirtyOffsets.delete(item.tocIndex);
 				rects++;

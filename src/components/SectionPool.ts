@@ -1066,8 +1066,28 @@ export class SectionPool {
 		window.requestAnimationFrame(tick);
 	}
 
+	/** Debug: load ping-pong detector. Same section enqueued for a load ≥3
+	 *  times within 5s — the oscillation pattern (window edge sits within
+	 *  notch/flick range of the section boundary; each crossing tears down +
+	 *  re-mounts the multi-thousand-element DOM, one forced recalc per
+	 *  cycle). Event-driven and cheap (one timestamp per load), never on
+	 *  per-frame paths. Always-on: the oscillation usually "morning does not
+	 *  reproduce" — this is its only evidence. */
+	private loadPingAt = new Map<string, number[]>();
+	private detectLoadPingPong(path: string): void {
+		const now = performance.now();
+		const at = this.loadPingAt.get(path) ?? [];
+		at.push(now);
+		while (at.length > 0 && now - (at[0] ?? now) > 5000) at.shift();
+		this.loadPingAt.set(path, at);
+		if (at.length < 3) return;
+		DebugLog.anomaly(`load-pingpong ${path.split('/').pop()} x${at.length} in 5s`);
+		at.length = 0;
+	}
+
 	private async loadSection(path: string): Promise<void> {
 		this.dbgLoads++;
+		this.detectLoadPingPong(path);
 		const data = this.host.sections.get(path);
 		if (!data || data.component) return;
 
