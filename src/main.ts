@@ -377,10 +377,25 @@ export default class BookViewPlugin extends Plugin {
 				const w = window as unknown as { __bvLog?: string[] };
 				const startup = DebugLog.getStartupLog();
 				const debug = w.__bvLog ?? [];
+				const toc = DebugLog.runTocProvider();
+				const anomalies = DebugLog.getAnomalies();
+				const longFrames = DebugLog.getLongFrames();
 				const parts: string[] = [];
 				if (startup.length) {
 					parts.push('--- Startup ---');
 					parts.push(...startup);
+				}
+				if (toc) {
+					parts.push('--- ToC ---');
+					parts.push(toc);
+				}
+				if (anomalies.length) {
+					parts.push('--- Anomalies ---');
+					parts.push(...anomalies);
+				}
+				if (longFrames.length) {
+					parts.push('--- Long frames ---');
+					parts.push(...longFrames);
 				}
 				if (debug.length) {
 					parts.push('--- Debug ---');
@@ -388,7 +403,9 @@ export default class BookViewPlugin extends Plugin {
 				}
 				const text = parts.join('\n');
 				await navigator.clipboard.writeText(text);
-				new Notice(`Book View: ${startup.length} startup + ${debug.length} debug lines copied`);
+				new Notice(
+					`Book View: ${debug.length} debug + ${longFrames.length} long-frame + ${anomalies.length} anomaly lines copied`,
+				);
 			},
 		});
 		DebugLog.onChange((enabled) => {

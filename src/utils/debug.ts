@@ -10,6 +10,28 @@ export class DebugLog {
 
 	private static readonly MAX = 2000;
 
+	/** Always-on anomaly one-liners (the flight-recorder class). Event-driven
+	 *  and cheap (watchdog clears, ping-pong counters, forced reflows), so
+	 *  they are captured even with debug logging off — the "froze in the
+	 *  evening, clean in the morning" pattern loses its only evidence
+	 *  otherwise. Deduped by the first token within the session so a
+	 *  ping-pong anomaly reports once instead of once per occurrence. */
+	private static anomalies: string[] = [];
+
+	/** Long-frame attributions fed by the LoAF probe (debug-gated; the probe
+	 *  only starts with debug logging on). Capped so a freeze burst reports
+	 *  its first 20 frames, not all 400. */
+	private static longFrames: string[] = [];
+
+	/** Registered by the TocController while a book is open; the dump runs it
+	 *  to append the per-note ToC snapshot (current book, heading index,
+	 *  spy state) — ToC bugs that reproduce only in one note otherwise have
+	 *  no per-note context in the log. */
+	private static tocProvider: (() => string | null) | null = null;
+
+	private static readonly MAX_ANOMALIES = 12;
+	private static readonly MAX_LONG_FRAMES = 20;
+
 	/** One-shot subscribers notified on the next enable/disable flip (used to
 	 *  start the global frame probe on first enable). */
 	private static listeners: ((enabled: boolean) => void)[] = [];
@@ -52,6 +74,7 @@ export class DebugLog {
 		if (v) {
 			const w = window as unknown as { __bvLog?: string[] };
 			w.__bvLog = [];
+			DebugLog.longFrames.length = 0;
 			DebugLog.log('DEBUG', 'enabled');
 		}
 		const listeners = DebugLog.listeners;
@@ -114,5 +137,56 @@ export class DebugLog {
 		if (d !== undefined) line += ` ${d}`;
 		log.push(line);
 		if (log.length > DebugLog.MAX) log.splice(0, log.length - DebugLog.MAX);
+	}
+
+	/** Capture an always-on anomaly one-liner (see the field comment). Cheap
+	 *  and event-driven: safe on watchdog clears and event counters, never on
+	 *  per-frame paths. Visible via the "Copy debug log" dump even with
+	 *  debug logging off. */
+	static anomaly(msg: string): void {
+		const key = msg.split(' ')[0] ?? msg;
+		for (const line of DebugLog.anomalies) {
+			if (line.startsWith(key)) return;
+		}
+		DebugLog.anomalies.push(msg);
+		if (DebugLog.anomalies.length > DebugLog.MAX_ANOMALIES) {
+			DebugLog.anomalies.splice(0, DebugLog.anomalies.length - DebugLog.MAX_ANOMALIES);
+		}
+		DebugLog.log('ANOM', '', msg, '');
+	}
+
+	/** Capture a long-frame attribution from the LoAF probe (debug-gated). */
+	static longFrame(line: string): void {
+		if (!DebugLog._enabled) return;
+		DebugLog.longFrames.push(line);
+		if (DebugLog.longFrames.length > DebugLog.MAX_LONG_FRAMES) {
+			DebugLog.longFrames.splice(0, DebugLog.longFrames.length - DebugLog.MAX_LONG_FRAMES);
+		}
+		DebugLog.log('LOAF', '', line, '');
+	}
+
+	/** Register/unregister the per-note ToC snapshot provider. The last open
+	 *  book wins (mirrors the single active ToC panel). */
+	static registerTocProvider(fn: (() => string | null) | null): void {
+		DebugLog.tocProvider = fn;
+	}
+
+	/** Run the registered ToC snapshot (null while no book is open). */
+	static runTocProvider(): string | null {
+		const fn = DebugLog.tocProvider;
+		if (!fn) return null;
+		try {
+			return fn();
+		} catch {
+			return null;
+		}
+	}
+
+	static getAnomalies(): string[] {
+		return DebugLog.anomalies;
+	}
+
+	static getLongFrames(): string[] {
+		return DebugLog.longFrames;
 	}
 }

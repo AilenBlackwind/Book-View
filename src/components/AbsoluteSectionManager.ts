@@ -41,20 +41,52 @@ const GESTURE_ANCHOR_PX = 8;
 // DebugLog is enabled; the loop stops itself on disable (an idle rAF callback
 // would otherwise wake the main thread ~60×/s doing nothing).
 let dbgGlobalFrames = 0;
+/** Frame-gap class counters (the felt micro-lag class). The felt "scroll
+ *  micro-lag with a clean flame chart" lives at 17-50ms frame gaps — one or
+ *  two dropped 60fps frames — exactly the class invisible to the LoAF
+ *  detector (>50ms threshold) and smoothed away by the per-second fps
+ *  average (61fps with 2 dropped frames still rounds to 61). Counters count
+ *  per-rAF deltas across the whole app (the self-scheduling loop forces
+ *  continuous rendering, so any main-thread jank shows as a gap), drain
+ *  into the manager's DBG line, and reset per DBG window. On 144Hz displays
+ *  a 17ms+ gap means 2-3 missed refreshes — same semantics. */
+let dbgG17 = 0;
+let dbgG33 = 0;
+let dbgG50 = 0;
 let dbgGlobalProbeRunning = false;
+/** Long-frame attribution observer (Chromium 123+; WebKit/mobile has no
+ *  long-animation-frame entryType — the observer is a guarded no-op there). */
+let dbgLoafObserver: PerformanceObserver | null = null;
 export function ensureGlobalFrameProbe(): void {
 	if (dbgGlobalProbeRunning) return;
 	if (!DebugLog.enabled) return;
 	dbgGlobalProbeRunning = true;
+	startLoafProbe();
 	let last = performance.now();
 	let frames = 0;
+	let prevFrame = last;
 	const loop = (now: number): void => {
 		if (!DebugLog.enabled) {
 			dbgGlobalProbeRunning = false;
+			dbgGlobalFrames = 0;
+			dbgG17 = 0;
+			dbgG33 = 0;
+			dbgG50 = 0;
+			if (dbgLoafObserver) {
+				dbgLoafObserver.disconnect();
+				dbgLoafObserver = null;
+			}
 			return;
 		}
 		frames++;
 		dbgGlobalFrames++;
+		const gap = now - prevFrame;
+		prevFrame = now;
+		if (gap >= 17) {
+			if (gap < 33) dbgG17++;
+			else if (gap < 50) dbgG33++;
+			else dbgG50++;
+		}
 		const elapsed = now - last;
 		if (elapsed >= 1000) {
 			const fps = Math.round((frames * 1000) / elapsed);
@@ -67,6 +99,52 @@ export function ensureGlobalFrameProbe(): void {
 		window.requestAnimationFrame(loop);
 	};
 	window.requestAnimationFrame(loop);
+}
+
+/** Start the LoAF flight recorder: every main-thread frame longer than ~50ms
+ *  is attributed (style/layout/script durations + forced reflow + the top
+ *  script's invoker) into DebugLog's long-frame section. This is the
+ *  always-attributed evidence for "cascades of small recalcs" — the forced
+ *  reflow duration per script is exactly what DevTools' per-event trace
+ *  shows, but captured post-hoc so a freeze that "morning reproduces not"
+ *  still lands in the dump. Frames with >1ms forced reflow additionally
+ *  feed DebugLog.anomaly (the anomaly class is the cascade, not the frame
+ *  length: 10 × 4ms back-to-back beats one 50ms frame). The observer
+ *  self-stops on disable; re-enabling restarts it (main.ts calls this
+ *  function on every enable flip). */
+function startLoafProbe(): void {
+	if (dbgLoafObserver) return;
+	try {
+		const types = (PerformanceObserver as unknown as { supportedEntryTypes?: string[] }).supportedEntryTypes ?? [];
+		if (!types.includes('long-animation-frame')) return;
+		dbgLoafObserver = new PerformanceObserver((list) => {
+			for (const raw of list.getEntries()) {
+				const e = raw as PerformanceEntry & {
+					styleDuration?: number;
+					layoutDuration?: number;
+					forcedStyleAndLayoutDuration?: number;
+					scripts?: { duration?: number; invoker?: string; forcedStyleAndLayoutDuration?: number }[];
+				};
+				if (e.duration < 50) continue;
+				const scripts = e.scripts ?? [];
+				let top = '';
+				let topForced = 0;
+				for (const s of scripts) {
+					const forced = s.forcedStyleAndLayoutDuration ?? 0;
+					if (forced > topForced || (forced === 0 && top === '')) {
+						topForced = forced;
+						top = (s.invoker ?? '?').slice(0, 60);
+					}
+				}
+				const line = `${Math.round(e.duration)}ms style=${Math.round(e.styleDuration ?? 0)} layout=${Math.round(e.layoutDuration ?? 0)} forced=${Math.round(e.forcedStyleAndLayoutDuration ?? 0)} scripts=${scripts.length} top=${top}`;
+				DebugLog.longFrame(line);
+				if ((e.forcedStyleAndLayoutDuration ?? 0) > 1) DebugLog.anomaly(`forced-reflow ${line}`);
+			}
+		});
+		dbgLoafObserver.observe({ type: 'long-animation-frame', buffered: false });
+	} catch {
+		dbgLoafObserver = null;
+	}
 }
 
 export class AbsoluteSectionManager {
@@ -201,6 +279,12 @@ export class AbsoluteSectionManager {
 	dbgTagMs = 0;
 	/** Debug: frames rendered by the whole main thread in the last DBG window. */
 	dbgFps = 0;
+	/** Debug: frame-gap class counters for the last DBG window (the felt
+	 *  micro-lag class; see the module comment on dbgG17). g17 = one dropped
+	 *  60fps frame (17-33ms), g33 = 2-3 (33-50ms), g50 = LoAF-class. */
+	dbgG17 = 0;
+	dbgG33 = 0;
+	dbgG50 = 0;
 	/** Debug: number of actual getBoundingClientRect heading measurements done by
 	 *  tagHeadings in the last DBG window (fed by TocController). Distinguishes
 	 *  "each measurement got more expensive" (dirty-layout reflow) from "more
@@ -806,7 +890,7 @@ export class AbsoluteSectionManager {
 			`frames=${this.dbgFs} upd=${this.dbgUs} h=${this.dbgHs} spy=${this.dbgSps} sev=${this.dbgSev} sevB=${this.dbgSevB} st=${this.dbgST} to=${this.dbgScrollToCalls} blk=${this.dbgBlk} w=${this.dbgWheel}`,
 			`io=${io} ld=${loads} ul=${unloads} pr=${prerenders} rm=${Math.round(renderMs)}ms ab=${aborts} ph=${placeholders} up=${upgrades} mounts=${mounts} mh=${Math.round(mountH)}`,
 			`top=${Math.round(scrollTop)} spam=${spam}${writers ? ` writers=${writers}` : ''}`,
-			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${this.dbgTagMs.toFixed(1)}ms rects=${this.dbgTagRects} fps=${this.dbgFps} dc=${this.dbgDeferComp} ac=${this.dbgAnchorDuringGesture}`,
+			`fr=${this.dbgFrameMs.toFixed(1)}ms q=${queueMs.toFixed(1)}ms upd=${this.dbgUpdMs.toFixed(1)}ms[an=${this.dbgAnchorMs.toFixed(1)} ap=${this.dbgApplyMs.toFixed(1)} rc=${this.dbgRecalcMs.toFixed(1)} rs=${this.dbgRestoreMs.toFixed(1)}] cb=${this.dbgCbMs.toFixed(1)}ms tag=${this.dbgTagMs.toFixed(1)}ms rects=${this.dbgTagRects} fps=${this.dbgFps} g17=${this.dbgG17} g33=${this.dbgG33} g50=${this.dbgG50} dc=${this.dbgDeferComp} ac=${this.dbgAnchorDuringGesture}`,
 		);
 		this.dbgT0 = now;
 		this.dbgFs = 0;
@@ -829,10 +913,16 @@ export class AbsoluteSectionManager {
 		this.dbgWheel = 0;
 		this.dbgSpam.clear();
 		this.dbgFps = dbgGlobalFrames;
+		this.dbgG17 = dbgG17;
+		this.dbgG33 = dbgG33;
+		this.dbgG50 = dbgG50;
 		this.dbgTagRects = 0;
 		this.dbgDeferComp = 0;
 		this.dbgAnchorDuringGesture = 0;
 		dbgGlobalFrames = 0;
+		dbgG17 = 0;
+		dbgG33 = 0;
+		dbgG50 = 0;
 	}
 
 	private processUpdates(scrollTop: number): void {
