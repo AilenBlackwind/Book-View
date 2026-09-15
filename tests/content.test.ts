@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateHeight, guessFirstType, startsWithHeading, stripYamlFrontmatter } from '../src/utils/content';
+import { estimateHeight, guessFirstType, startsWithHeading, stripYamlFrontmatter, normalizeListTabs } from '../src/utils/content';
 
 describe('estimateHeight', () => {
 	it('estimates a short text note with the trailing-margin baseline, damped', () => {
@@ -127,5 +127,56 @@ describe('stripYamlFrontmatter', () => {
 
 	it('returns the text unchanged for an unterminated leading fence', () => {
 		expect(stripYamlFrontmatter('---\nне закрытый')).toBe('---\nне закрытый');
+	});
+});
+
+describe('normalizeListTabs', () => {
+	it('lifts a tab continuation that falls short of a 3-digit marker', () => {
+		// The "item 100" repro: `\t` stops at column 4, content column of
+		// `100. ` is 5 — strict render dropped the line to an indented code
+		// block while Obsidian's own parser showed a bullet.
+		expect(normalizeListTabs('100. Пёсий заговор.\n\t* `Пилюля`')).toBe('100. Пёсий заговор.\n     * `Пилюля`');
+	});
+
+	it('leaves 1- and 2-digit continuations untouched (tab already reaches)', () => {
+		expect(normalizeListTabs('1. Раз\n\t* `Пилюля`')).toBe('1. Раз\n\t* `Пилюля`');
+		expect(normalizeListTabs('99. Почти\n\t* `Пилюля`')).toBe('99. Почти\n\t* `Пилюля`');
+	});
+
+	it('lifts chained continuation bullets to the same anchor column', () => {
+		expect(normalizeListTabs('100. Текст\n\t* первая\n\t* вторая')).toBe(
+			'100. Текст\n     * первая\n     * вторая',
+		);
+	});
+
+	it('does not move lines whose tab stop already reaches the content column', () => {
+		// Nested list under `- ` (content column 2): tab stop 4 ≥ 2.
+		expect(normalizeListTabs('- родитель\n\t* ребёнок')).toBe('- родитель\n\t* ребёнок');
+	});
+
+	it('skips tab bullets inside fenced code blocks', () => {
+		const text = '```md\n\t* литеральный код\n```\n100. Текст\n\t* поднятая';
+		expect(normalizeListTabs(text)).toBe('```md\n\t* литеральный код\n```\n100. Текст\n     * поднятая');
+	});
+
+	it('does not rewrite an indented code run after a paragraph', () => {
+		// Non-marker lines indented 4+ columns abort the anchor scan.
+		const text = '1. пункт\n\n    код строка\n\tпродолжение кода';
+		expect(normalizeListTabs(text)).toBe(text);
+	});
+
+	it('leaves tab bullets alone when no anchor marker exists above', () => {
+		expect(normalizeListTabs('обычный абзац\n\n\t* `код-блок`')).toBe('обычный абзац\n\n\t* `код-блок`');
+	});
+
+	it('aborts the lift at a heading between the anchor and the line', () => {
+		expect(normalizeListTabs('1. пункт\n# Заголовок\n\t* после заголовка')).toBe(
+			'1. пункт\n# Заголовок\n\t* после заголовка',
+		);
+	});
+
+	it('skips paragraph text between the anchor and the continuation', () => {
+		const text = '100. Длинный пункт.\nпродолжение абзаца без отступа.\n\t* `Пилюля`';
+		expect(normalizeListTabs(text)).toBe('100. Длинный пункт.\nпродолжение абзаца без отступа.\n     * `Пилюля`');
 	});
 });

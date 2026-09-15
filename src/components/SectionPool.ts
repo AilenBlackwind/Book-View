@@ -1,7 +1,7 @@
 import { App, Component, MarkdownRenderer, setIcon, TFile } from 'obsidian';
 import { ManifestLink } from './ManifestParser';
 import type { FoldMode } from '../utils/fold';
-import { estimateHeight, startsWithHeading, endsWithHeading, guessFirstType, guessLastType, stripYamlFrontmatter } from '../utils/content';
+import { estimateHeight, startsWithHeading, endsWithHeading, guessFirstType, guessLastType, stripYamlFrontmatter, ensureTrailingBlankLine, normalizeListTabs } from '../utils/content';
 import { getFirstContentElement, getLastContentElement, getHeaderLevel } from '../utils/dom';
 import { DebugLog } from '../utils/debug';
 
@@ -1141,7 +1141,11 @@ export class SectionPool {
 		// a note with frontmatter renders like a plain one (no stray <pre>, no
 		// extra top space). Kept out of rawContent: the raw text stays for the
 		// link/rename logic and is only stripped for the visible render.
-		const renderContent = stripYamlFrontmatter(content);
+		// normalizeListTabs lifts tab continuations that fall short of wide
+		// markers (Obsidian's parser shows them as bullets; the strict render
+		// dropped them to indented code blocks — the "item 100" class).
+		// ensureTrailingBlankLine is generic EOF hardening — see content.ts.
+		const renderContent = ensureTrailingBlankLine(normalizeListTabs(stripYamlFrontmatter(content)));
 
 		// Render into a detached container: partial output is never visible
 		// and unloadSection cannot cache half-rendered DOM mid-flight.
@@ -1345,7 +1349,7 @@ export class SectionPool {
 		const t0 = performance.now();
 		let renderError: unknown = null;
 		try {
-			await MarkdownRenderer.render(this.host.app, buildPlaceholderContent(stripYamlFrontmatter(content)), renderContainer, path, component);
+			await MarkdownRenderer.render(this.host.app, ensureTrailingBlankLine(buildPlaceholderContent(normalizeListTabs(stripYamlFrontmatter(content)))), renderContainer, path, component);
 		} catch (err) {
 			renderError = err;
 		}

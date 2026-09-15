@@ -167,6 +167,106 @@ export function stripYamlFrontmatter(text: string): string {
 	return text;
 }
 
+/** Terminate block-level render content with a blank line. Generic hardening
+ *  against the EOF-boundary quirk class of MarkdownRenderer.render (the last
+ *  block losing its context when the content does not end with an empty
+ *  line); the appended blank line itself renders nothing. */
+export function ensureTrailingBlankLine(text: string): string {
+	return text.replace(/\n*$/, '\n\n');
+}
+
+/** Expand leading tabs of list-continuation lines that fall short of their
+ *  parent marker's content column. A tab expands to the next multiple-of-4
+ *  column, so under a wide marker (`100. ` = 5 columns) a tab-indented
+ *  continuation stops one column short: it drops out of the list and, with
+ *  4+ columns of indent, becomes an indented code block (literal `*` and
+ *  backticks on screen). Obsidian's own parser is lenient here and renders
+ *  the line as a continuation — the reading view shows a bullet while the
+ *  plugin's MarkdownRenderer.render shows raw text. The lift rewrites the
+ *  line's leading whitespace to exactly the anchor marker's content column,
+ *  which is the interpretation the user already sees while editing.
+ *
+ *  Deliberately narrow — everything else is untouched by design:
+ *  - lines whose tab-stop column already reaches the content column (valid
+ *    continuations, nested lists, code blocks inside items) are not moved —
+ *    their indent selects nesting/code level and must not change;
+ *  - fenced code (``` / ~~~) is skipped whole — leading tabs there are
+ *    literal content;
+ *  - the anchor is the nearest indent-0 list marker within the last 10
+ *    non-blank lines; the scan aborts at headings and at code-context lines
+ *    (non-marker lines indented 4+ columns), so standalone indented code
+ *    blocks and tab-led code after a paragraph stay raw;
+ *  - only lines that themselves start with a list marker after their tab
+ *    indent are candidates (the observed continuation-bullet shape);
+ *  - unordered anchors are accepted but their content column (2) is below
+ *    any tab stop, so those continuations pass through unchanged. */
+export function normalizeListTabs(text: string): string {
+	const lines = text.split('\n');
+	let fenceChar = '';
+	let fenceLen = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] ?? '';
+		const trimmed = line.trim();
+		const fenceMatch = /^(`{3,}|~{3,})/.exec(trimmed);
+		if (fenceChar !== '') {
+			// Inside a fence: only a matching closing fence ends the skip.
+			if (fenceMatch && fenceMatch[0]?.[0] === fenceChar && (fenceMatch[0]?.length ?? 0) >= fenceLen && trimmed === fenceMatch[0]) {
+				fenceChar = '';
+				fenceLen = 0;
+			}
+			continue;
+		}
+		if (fenceMatch) {
+			fenceChar = fenceMatch[0]?.[0] ?? '';
+			fenceLen = fenceMatch[0]?.length ?? 0;
+			continue;
+		}
+		const leadMatch = /^([ \t]+)(\S.*)$/.exec(line);
+		if (!leadMatch) continue;
+		const lead = leadMatch[1] ?? '';
+		if (!lead.includes('\t')) continue;
+		const rest = leadMatch[2] ?? '';
+		// Candidates are continuation bullets/ordered items only.
+		if (!/^([-*+]|\d{1,9}[.)])[ \t]/.test(rest)) continue;
+		// Tab-stop column of the line's leading whitespace.
+		let col = 0;
+		for (const ch of lead) col = ch === '\t' ? (Math.floor(col / 4) + 1) * 4 : col + 1;
+		// Anchor: nearest indent-0 list marker within the last 10 non-blank
+		// lines. Bullets and paragraph text between the anchor and this line
+		// are skipped; headings and code-context lines abort the lift.
+		let anchorCol = -1;
+		let nonBlank = 0;
+		for (let j = i - 1; j >= 0 && nonBlank < 10 && anchorCol < 0; j--) {
+			const prev = lines[j] ?? '';
+			if (prev.trim().length === 0) continue;
+			nonBlank++;
+			let prevCol = 0;
+			for (const ch of /^([ \t]*)/.exec(prev)?.[1] ?? '') {
+				prevCol = ch === '\t' ? (Math.floor(prevCol / 4) + 1) * 4 : prevCol + 1;
+			}
+			const ordered = /^[ \t]*(\d{1,9}[.)])([ \t]+)/.exec(prev);
+			const unordered = ordered ? null : /^[ \t]*([-*+])([ \t]+)/.exec(prev);
+			if (ordered && prevCol === 0) {
+				anchorCol = (ordered[1]?.length ?? 0) + (ordered[2]?.length ?? 1);
+				break;
+			}
+			if (unordered && prevCol === 0) {
+				anchorCol = (unordered?.[1]?.length ?? 1) + (unordered?.[2]?.length ?? 1);
+				break;
+			}
+			// Indented list bullets (including already-lifted continuations)
+			// stay in list context — keep scanning for the anchor above them.
+			if (ordered || unordered) continue;
+			if (prevCol >= 4) break; // indented code run — not list context
+			if (/^#{1,6}[ \t]/.test(prev.trim())) break; // heading breaks the list
+			// paragraph text — keep scanning
+		}
+		if (anchorCol < 0 || anchorCol <= col) continue;
+		lines[i] = `${' '.repeat(anchorCol)}${rest}`;
+	}
+	return lines.join('\n');
+}
+
 /** First non-empty line's type: 'h1'..'h6' or 'text'. */
 export function guessFirstType(text: string): string {
 	for (const line of contentLinesAfterFrontmatter(text)) {
