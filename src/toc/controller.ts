@@ -99,7 +99,10 @@ export class TocController {
 		// was never destroyed, so its scroll/click handlers and debug probe
 		// are still installed; calling setup() again would double-bind the
 		// panel scroll listener. render() re-renders the visible window and
-		// re-uses existing rows by data-index.
+		// re-uses existing rows by data-index. The spy teardown above nulled
+		// the highlight host/pill, so re-point them before the render fires
+		// onRowsRendered → reapplyHighlight → movePill again.
+		this.window.restoreHighlightHost();
 		this.window.render();
 		this.spy.calculatePositions();
 		if (s.entries.length === 0) return;

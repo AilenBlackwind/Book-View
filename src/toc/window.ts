@@ -121,6 +121,19 @@ export class TocWindow {
 		this.render();
 	}
 
+	/** Re-point the highlight pill host after a data-only rebuild. The
+	 *  incremental rebuild (TocController.rebuild) never destroys/re-mounts the
+	 *  window, but the spy teardown nulls highlightHost/highlightEl; restore
+	 *  them against the still-mounted skeleton and drop any frozen pill so the
+	 *  next highlight application lazily re-creates it on the live host. */
+	restoreHighlightHost(): void {
+		const s = this.state;
+		s.highlightHost = this.listEl?.parentElement ?? null;
+		s.highlightEl?.remove();
+		s.highlightEl = null;
+		s.activeHeading = null;
+	}
+
 	/** Re-render the row window for the current panel scroll position. No-op
 	 *  when the visible range did not change. */
 	render(): void {
