@@ -1,7 +1,10 @@
-import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
+import { App, PluginSettingTab, setIcon } from 'obsidian';
 import type BookViewPlugin from '../main';
-import type { ModifierConfig, MenuProfile, EditorMode, BookWidthMode } from '../settings';
-import { BOOK_WIDTH_MIN, BOOK_WIDTH_MAX } from '../settings';
+import type { ModifierConfig, MenuProfile } from '../settings';
+import { generalSettingDefinitions } from './generalSettingDefinitions';
+import { tocSettingDefinitions } from './tocSettingDefinitions';
+import { renderSettingDefinitions } from './settingDefinitions';
+import type { BookSettingDefinition, BookSettingGroup } from './settingDefinitions';
 import { CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
 
 type SettingsSection = 'toc' | 'menus' | 'general';
@@ -33,6 +36,40 @@ export class BookViewSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	getSettingDefinitions(): (BookSettingDefinition | BookSettingGroup)[] {
+		return [
+			...this.getGeneralDefinitions(),
+			{ type: 'group', heading: 'Table of contents', items: tocSettingDefinitions(this.plugin) },
+			{ type: 'group', heading: 'Context menus', items: [{
+				name: 'Menu profiles',
+				desc: 'Configure modifier shortcuts and commands for each context menu.',
+				render: (setting) => {
+					const container = setting.settingEl.createDiv({ cls: 'bv-menu-settings' });
+					setting.settingEl.addClass('bv-menu-setting-row');
+					this.renderMenuProfiles(container);
+				},
+			}] },
+		];
+	}
+
+	private getGeneralDefinitions(): BookSettingDefinition[] {
+		return [
+			...generalSettingDefinitions(this.plugin, () => this.refreshSettings()),
+			{
+				name: 'Editor shortcut modifiers',
+				desc: 'Modifier keys required to open the editor on double-click.',
+				render: (setting) => this.renderSingleModifier(setting.controlEl),
+			},
+		];
+	}
+
+	private refreshSettings(): void {
+		// Older versions use display(); 1.13+ must rebuild definitions via update().
+		const tab = this as unknown as { update?: () => void };
+		if (typeof tab.update === 'function') tab.update();
+		else this.display();
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
@@ -57,9 +94,9 @@ export class BookViewSettingTab extends PluginSettingTab {
 			tab.addEventListener('click', () => this.showSection(section.id, tabBar, sectionEls));
 		}
 
-		this.renderTocSettings(sectionEls.toc);
+		renderSettingDefinitions(sectionEls.toc, tocSettingDefinitions(this.plugin));
 		this.renderMenuSettings(sectionEls.menus);
-		this.renderGeneralSettings(sectionEls.general);
+		renderSettingDefinitions(sectionEls.general, this.getGeneralDefinitions());
 
 		this.showSection(this.activeSection, tabBar, sectionEls);
 	}
@@ -78,333 +115,12 @@ export class BookViewSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderTocSettings(el: HTMLElement): void {
-		new Setting(el)
-			.setName('Auto-open for books')
-			.setDesc('Show the table of contents in the right sidebar automatically whenever a book is open. When disabled, the toc opens only via the "toggle book toc in right sidebar" command.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.tocAutoOpen)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.tocAutoOpen = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Focus toc when opening a book')
-			.setDesc('Make the toc panel the active view when switching to a book. When disabled, the panel opens but the book stays active.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.tocFocusOnBook)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.tocFocusOnBook = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Show file names')
-			.setDesc('Display file names as section headers in the table of contents.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.tocShowFileNames)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.tocShowFileNames = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Nesting guides')
-			.setDesc('Display vertical guide lines from headings to show nesting depth.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.tocGuides)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.tocGuides = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Render Markdown')
-			.setDesc('Render bold, italic, code and other inline Markdown in headings instead of showing raw syntax.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.tocRenderMarkdown)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.tocRenderMarkdown = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Default collapsed level')
-			.setDesc('Headings at this level and deeper are collapsed when opening a book. Set to off to disable.')
-			.addDropdown((dd) =>
-				dd
-					.addOption('0', 'Off')
-					.addOption('1', 'H1')
-					.addOption('2', 'H2')
-					.addOption('3', 'H3')
-					.addOption('4', 'H4')
-					.addOption('5', 'H5')
-					.addOption('6', 'H6')
-					.setValue(String(this.plugin.settings.tocCollapsedLevel))
-					.onChange(async (value: string) => {
-						this.plugin.settings.tocCollapsedLevel = parseInt(value, 10);
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Collapse rest to level')
-			.setDesc('The level the rest of the ToC collapses to while reading, when using "Expand and collapse rest to setting level". Headings at this level and deeper are collapsed.')
-			.addDropdown((dd) =>
-				dd
-					.addOption('0', 'Off')
-					.addOption('1', 'H1')
-					.addOption('2', 'H2')
-					.addOption('3', 'H3')
-					.addOption('4', 'H4')
-					.addOption('5', 'H5')
-					.addOption('6', 'H6')
-					.setValue(String(this.plugin.settings.tocCollapseRestLevel))
-					.onChange(async (value: string) => {
-						this.plugin.settings.tocCollapseRestLevel = parseInt(value, 10);
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Auto expand')
-			.setDesc('Auto expand and collapse headings when scrolling and cursor position change.')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('expand-collapse-default', 'Expand and collapse rest to default')
-					.addOption('only-expand', 'Only expand')
-					.addOption('expand-collapse-level', 'Expand and collapse rest to setting level')
-					.addOption('disabled', 'Disabled')
-					.setValue(this.plugin.settings.autoExpandMode)
-					.onChange(async (value: string) => {
-						this.plugin.settings.autoExpandMode = value as import('../settings').AutoExpandMode;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Animate expand/collapse')
-			.setDesc('Smoothly glide and fade toc rows when a section opens or closes, and briefly highlight the toggled heading.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.tocExpandAnim)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.tocExpandAnim = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Disable animation above scroll speed')
-			.setDesc('Above this book scroll speed, row glides are skipped and sections snap instead. Fast flicks stay clean; at low speeds the animation is kept. Set to 0 to always animate.')
-			.addSlider((slider) =>
-				slider
-					.setLimits(0, 10000, 100)
-					.setValue(this.plugin.settings.tocExpandAnimSpeedLimit)
-					.setDynamicTooltip()
-					.onChange(async (value: number) => {
-						this.plugin.settings.tocExpandAnimSpeedLimit = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-	}
-
-	private renderGeneralSettings(el: HTMLElement): void {
-		new Setting(el)
-			.setName('Reading')
-			.setHeading();
-
-		new Setting(el)
-			.setName('Book width')
-			.setDesc('Container width for book content. Match notes follows the vault readable line length setting, the same width regular notes use.')
-			.addDropdown((drop) =>
-				drop
-					.addOption('obsidian', 'Match notes')
-					.addOption('custom', 'Custom')
-					.setValue(this.plugin.settings.bookWidthMode)
-					.onChange(async (value: string) => {
-						this.plugin.settings.bookWidthMode = value as BookWidthMode;
-						await this.plugin.saveSettings();
-						this.plugin.applyBookWidthSetting();
-						// Re-render so the custom-width slider only appears in
-						// custom mode.
-						this.display();
-					}),
-			);
-
-		if (this.plugin.settings.bookWidthMode === 'custom') {
-			new Setting(el)
-				.setName('Custom book width')
-				.setDesc('Book container width in pixels.')
-				.addSlider((slider) =>
-					slider
-						.setLimits(BOOK_WIDTH_MIN, BOOK_WIDTH_MAX, 10)
-						.setValue(this.plugin.settings.bookWidth)
-						.setDynamicTooltip()
-						.onChange(async (value: number) => {
-							this.plugin.settings.bookWidth = value;
-							await this.plugin.saveSettings();
-							this.plugin.applyBookWidthSetting();
-						}),
-				);
-		}
-
-		new Setting(el)
-			.setName('Lazy load margin')
-			.setDesc('How many pixels above and below the viewport to pre-load sections. Increase for slower devices, decrease for faster ones.')
-			.addSlider((slider) =>
-				slider
-					.setLimits(0, 3000, 50)
-					.setValue(this.plugin.settings.loadMargin)
-					.setDynamicTooltip()
-					.onChange(async (value: number) => {
-						this.plugin.settings.loadMargin = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Warn about expensive CSS :has() selectors')
-			.setDesc('Scan your enabled CSS snippets for :has() selectors that make Obsidian recalculate styles across the whole app on every section mount, and warn once per session when one is found. Sibling-scoped :has(+ X) selectors are safe and are not reported. Selectors from themes and other plugins are only logged to the console.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.cssHasWarningEnabled)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.cssHasWarningEnabled = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Wheel flick')
-			.setHeading();
-
-		let precisionSetting: Setting;
-		new Setting(el)
-			.setName('Wheel flick acceleration')
-			.setDesc('Inside book view, turn mouse wheel notches into smooth accelerated flicks. Off uses native scrolling (precision mode does not apply).')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.wheelFlickEnabled)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.wheelFlickEnabled = value;
-						await this.plugin.saveSettings();
-						precisionSetting.setDisabled(!value);
-					}),
-			);
-
-		precisionSetting = new Setting(el)
-			.setName('Wheel flick precision mode')
-			.setDesc('Disable combo stacking: every notch travels exactly the same distance regardless of timing. Best for precise short scrolls. Applies only when wheel flick acceleration is on.')
-			.setDisabled(!this.plugin.settings.wheelFlickEnabled)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.wheelFlickPrecision)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.wheelFlickPrecision = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Shield wheel from other plugins')
-			.setDesc('Hide wheel events over the book from other plugins (smooth-scroll tools) that animate scrolling and break it. Keep this on while such plugins are installed: their writes are blocked inside the book anyway, so without the shield they would cancel native scrolling and freeze it instead.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.wheelShieldEnabled)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.wheelShieldEnabled = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Wheel flick strength')
-			.setDesc('Total scroll distance per notch, as a multiple of the native amount.')
-			.addSlider((slider) =>
-				slider
-					.setLimits(1, 5, 0.25)
-					.setValue(this.plugin.settings.wheelFlickStrength)
-					.setDynamicTooltip()
-					.onChange(async (value: number) => {
-						this.plugin.settings.wheelFlickStrength = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Wheel flick smoothness')
-			.setDesc('How long the flick glides. Higher values glide longer.')
-			.addSlider((slider) =>
-				slider
-					.setLimits(0.85, 0.97, 0.01)
-					.setValue(this.plugin.settings.wheelFlickFriction)
-					.setDynamicTooltip()
-					.onChange(async (value: number) => {
-						this.plugin.settings.wheelFlickFriction = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Editor')
-			.setHeading();
-
-		new Setting(el)
-			.setName('Editor used on double-click')
-			.setDesc('Open a section note in the in-window popup editor, or in the native editor in a separate popout window. The native editor in a popout window is available in case of unexpected issues.')
-			.addDropdown((dd) =>
-				dd
-					.addOption('popup', 'Popup editor (in-window)')
-					.addOption('native', 'Native editor (popout)')
-					.setValue(this.plugin.settings.editorMode)
-					.onChange(async (value: string) => {
-						this.plugin.settings.editorMode = value as EditorMode;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(el)
-			.setName('Hide frontmatter in popup editor')
-			.setDesc('Hide the YAML frontmatter block while editing in the popup editor, so notes start from the first heading.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.popupHideFrontmatter)
-					.onChange(async (value: boolean) => {
-						this.plugin.settings.popupHideFrontmatter = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		this.renderSingleModifier(el, 'Popout editor shortcut', 'Modifier keys required to open the editor on double-click.', 'editorModifiers');
-	}
-
 	private renderMenuSettings(el: HTMLElement): void {
 		this.renderMenuProfiles(el);
 	}
 
-	private renderSingleModifier(containerEl: HTMLElement, heading: string, description: string, key: 'editorModifiers'): void {
-		new Setting(containerEl)
-			.setName(heading)
-			.setHeading();
-
-		containerEl.createEl('p', {
-			text: description,
-			cls: 'setting-item-description',
-		});
-
-		const mod = this.plugin.settings[key];
+	private renderSingleModifier(containerEl: HTMLElement): void {
+		const mod = this.plugin.settings.editorModifiers;
 		const row = containerEl.createDiv({ cls: 'bv-mod-row' });
 
 		const renderCheckbox = (label: string, modKey: keyof ModifierConfig) => {

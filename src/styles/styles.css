@@ -1246,3 +1246,11 @@ mark.book-search-all {
 	scroll-padding-block: 35% !important;
 }
 
+.bv-menu-setting-row {
+	flex-wrap: wrap;
+}
+
+.bv-menu-settings {
+	width: 100%;
+}
+

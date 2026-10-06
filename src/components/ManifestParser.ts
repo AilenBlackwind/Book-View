@@ -1,6 +1,6 @@
 import { App, TFile } from 'obsidian';
 import {
-	parseCodeBlockLinks,
+	parseBookViewBlocks,
 	resolveCodeBlockLinks,
 } from './CodeBlockParser';
 
@@ -118,7 +118,7 @@ export async function getManifestLinks(
 
 	// ── Pass 2: ```book-view fenced code blocks ───────────────────────
 	try {
-		const rawLinks = parseCodeBlockLinks(raw);
+		const rawLinks = parseBookViewBlocks(raw.slice(fmEnd));
 		if (rawLinks.length > 0) {
 			links.push(
 				...resolveCodeBlockLinks(app, masterFile, rawLinks, seen),

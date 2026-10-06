@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { TFile, TFolder } from 'obsidian';
+import { describe, it, expect, vi } from 'vitest';
+import { App, TFile, TFolder } from 'obsidian';
 import {
 	collectMarkdownFiles,
 	buildManifestContent,
 	manifestFilename,
+	createBookForFolder,
 } from '../src/components/CreateBook';
 
 const md = (path: string): TFile => {
@@ -85,5 +86,28 @@ describe('buildManifestContent', () => {
 describe('manifestFilename', () => {
 	it('is "<folder name> Book.md"', () => {
 		expect(manifestFilename(folder('Проект'))).toBe('Проект Book.md');
+	});
+});
+
+describe('createBookForFolder', () => {
+	it('preserves an existing book and creates a numbered manifest without linking other books', async () => {
+		const root = Object.assign(folder('Root'), { path: 'Root' });
+		const existing = md('Root/Root Book.md');
+		root.children = [existing, md('Root/A.md')];
+		const create = vi.fn((path: string, content: string) => Promise.resolve(Object.assign(md(path), { content })));
+		const modify = vi.fn();
+		const app = {
+			vault: {
+				getAbstractFileByPath: (path: string) =>
+					['Root/Root Book.md', 'Root/Root Book (2).md'].includes(path) ? existing : null,
+				create, modify,
+			},
+			metadataCache: { getFileCache: (file: TFile) =>
+				({ frontmatter: { 'book-view': file === existing } }) },
+		} as unknown as App;
+		expect(await createBookForFolder(app, root)).toBe('Root/Root Book (3).md');
+		expect(create).toHaveBeenCalledWith('Root/Root Book (3).md', expect.stringContaining('[[Root/A]]'));
+		expect(create.mock.calls[0]?.[1]).not.toContain('[[Root/Root Book]]');
+		expect(modify).not.toHaveBeenCalled();
 	});
 });

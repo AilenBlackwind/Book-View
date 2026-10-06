@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { cssClassesFromFrontmatter, frontmatterEndOffset } from '../src/components/ManifestParser';
 import { updateLinksInContent } from '../src/components/LinkUpdater';
-import { parseCodeBlockLinks } from '../src/components/CodeBlockParser';
+import { parseBookViewBlocks, parseCodeBlockLinks } from '../src/components/CodeBlockParser';
 
 describe('parseCodeBlockLinks scoping', () => {
 	it('ignores links outside book-view fences in full-file content (frontmatter + body)', () => {
@@ -15,7 +15,7 @@ Intro [[BodyLink]]
 [[InBlock]]
 \`\`\`
 `;
-		const targets = parseCodeBlockLinks(content).map((l) => l.target);
+		const targets = parseBookViewBlocks(content).map((l) => l.target);
 		expect(targets).toEqual(['InBlock']);
 		expect(targets).not.toContain('FrontmatterOnly');
 		expect(targets).not.toContain('BodyLink');
@@ -29,7 +29,7 @@ Intro [[BodyLink]]
 
 	it('handles CRLF fences', () => {
 		const content = '```book-view\r\n[[A]]\r\n[[B]]\r\n```';
-		expect(parseCodeBlockLinks(content).map((l) => l.target)).toEqual(['A', 'B']);
+		expect(parseBookViewBlocks(content).map((l) => l.target)).toEqual(['A', 'B']);
 	});
 
 	it('records the source offset of each link for click-to-edit line mapping', () => {
@@ -62,6 +62,18 @@ describe('frontmatterEndOffset', () => {
 
 describe('updateLinksInContent', () => {
 	const manifest = 'Books/Manifest.md';
+
+	it.each([
+		['[[Folder/Note.md]]', '[[Folder/New.md]]'],
+		['[[Folder/Note.md|Alias]]', '[[Folder/New.md|Alias]]'],
+		['[[Folder/Note]]', '[[Folder/New]]'],
+		['[Note](/Folder/Note.md)', '[Note](/Folder/New.md)'],
+		['[Note](../Folder/Note.md)', '[Note](./../Folder/New.md)'],
+	])('handles actual rename event paths for %s', (before, after) => {
+		const content = `\`\`\`book-view\n${before}\n\`\`\``;
+		expect(updateLinksInContent(content, 'Folder/Note.md', 'Folder/New.md', manifest))
+			.toBe(`\`\`\`book-view\n${after}\n\`\`\``);
+	});
 
 	it('rewrites a wikilink pointing at the renamed file', () => {
 		const content = '```book-view\n[[Folder/Note]]\n```\n';

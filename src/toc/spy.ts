@@ -584,6 +584,15 @@ window.clearTimeout(s.activePathTimer);
 		s.viewportResizeObserver = null;
 		s.tocResizeObserver?.disconnect();
 		s.tocResizeObserver = null;
+		// Remove the span, not just the reference: the incremental rebuild
+		// (TocController.rebuild) tears the spy down while the window stays
+		// mounted, and restoreHighlightHost re-points the host against the
+		// still-mounted skeleton. Nulling without removing left the frozen
+		// pill attached to the live host — the next movePill lazily created a
+		// second one and the panel showed two highlights (the old one frozen
+		// at its pre-edit row forever). The reference is also dropped because
+		// the host itself may be replaced.
+		s.highlightEl?.remove();
 		s.highlightEl = null;
 		s.highlightHost = null;
 		s.activeHeading = null;

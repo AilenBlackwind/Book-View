@@ -36,6 +36,10 @@ Book View renders a sequence of linked notes as a single, continuous long-form d
 * Scripting API that allows reading and modifying atomized text.
 * Customizable dropdown menu for running script commands.
 
+**Create book** saves a new manifest and excludes existing book manifests from its chapter list. If the filename is taken, it adds a numbered suffix such as `(2)`; existing files are preserved. **Collect manuscript from linked notes** saves a new export alongside the source book and uses the same naming rule.
+
+**Apply buffer changes** keeps the buffer when any section conflicts or is missing. Successfully applied sections can be retried safely; the buffer is moved to trash only after all mapped sections have been applied.
+
 ### Book-Specific CSS Snippets
 
 A Book can carry its own CSS styling, separate from the rest of the vault:

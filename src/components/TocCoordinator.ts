@@ -64,32 +64,16 @@ export class TocCoordinator {
 	private async doOpen(focus: boolean): Promise<void> {
 		let leaf = this.getLeaf();
 		if (!leaf) {
-			// 1) Try getRightLeaf(false) — works when the sidebar is visible.
+			// getRightLeaf creates a new sidebar tab. Never reuse arbitrary
+			// existing tabs: they may belong to core features or other plugins.
 			leaf = this.plugin.app.workspace.getRightLeaf(false);
-
-			if (!leaf) {
-				// 2) Sidebar is collapsed or empty. Iterate all leaves to find
-				//    one whose container sits inside the right split.
-			this.plugin.app.workspace.iterateAllLeaves((l) => {
-				if (!leaf && l.view.containerEl.closest('.mod-right-split')) {
-					leaf = l;
-				}
-			});
-			}
-
-			if (leaf) {
-				// Found an existing leaf (may be hidden) — reveal the sidebar.
-				await this.plugin.app.workspace.revealLeaf(leaf);
-			} else {
-				// 3) Right sidebar is completely empty — create the first leaf.
-				//    getRightLeaf(true) both creates and reveals.
-				leaf = this.plugin.app.workspace.getRightLeaf(true);
-			}
+			if (!leaf) leaf = this.plugin.app.workspace.getRightLeaf(true);
 			if (!leaf) return;
 		}
 		if (leaf.getViewState().type !== VIEW_TYPE_BOOK_TOC) {
 			await leaf.setViewState({ type: VIEW_TYPE_BOOK_TOC });
 		}
+		await this.plugin.app.workspace.revealLeaf(leaf);
 		if (focus) {
 			this.plugin.app.workspace.setActiveLeaf(leaf, { focus: true });
 		}

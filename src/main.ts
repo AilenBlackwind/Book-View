@@ -1,10 +1,11 @@
 import { MarkdownView, Notice, Plugin, TFolder, TFile, WorkspaceLeaf } from 'obsidian';
 import { createBookForFolder } from './components/CreateBook';
+import { collectManuscript } from './components/CollectManuscript';
 import { ThemeSpacings, measureThemeSpacings } from './utils/theme';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
 import { BookTocView, VIEW_TYPE_BOOK_TOC } from './views/BookTocView';
 import { TocCoordinator } from './components/TocCoordinator';
-import { getManifestFiles, isBookManifest } from './components/ManifestParser';
+import { isBookManifest } from './components/ManifestParser';
 import { registerBookViewCodeBlock } from './components/CodeBlockProcessor';
 import { WheelAccelerator } from './components/WheelAccelerator';
 import { BookViewSettings, DEFAULT_SETTINGS, BOOK_WIDTH_MIN, BOOK_WIDTH_MAX } from './settings';
@@ -743,31 +744,10 @@ export default class BookViewPlugin extends Plugin {
 		const manifestFile = this.app.vault.getFileByPath(bv.filePath);
 		if (!(manifestFile instanceof TFile)) return;
 
-		const files = await getManifestFiles(this.app, manifestFile);
-		if (files.length === 0) {
-			new Notice('No linked notes found in this book.');
-			return;
-		}
-
-		const parts: string[] = [];
-		for (const file of files) {
-			const content = await this.app.vault.cachedRead(file);
-			const stripped = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n\r?\n?/, '');
-			parts.push(stripped.trimEnd());
-		}
-
-		const manuscript = parts.join('\n\n');
-		const name = `${manifestFile.basename} — Manuscript`;
-		const existing = this.app.vault.getAbstractFileByPath(`${name}.md`);
-		if (existing instanceof TFile) {
-			await this.app.vault.modify(existing, manuscript);
-		} else {
-			await this.app.vault.create(`${name}.md`, manuscript);
-		}
-		new Notice(`Manuscript saved: ${name}.md`);
+		await collectManuscript(this.app, manifestFile);
 	}
 
-	/** Create (or regenerate) a `<folder> Book.md` manifest that links every
+	/** Create a new `<folder> Book.md` manifest that links every
 	 *  markdown note under `folder` in alphabetical order. Opens the resulting
 	 *  manifest in a new reader leaf so it renders as a book right away. */
 	private async createBookInFolder(folder: TFolder): Promise<void> {

@@ -133,21 +133,15 @@ export class BufferManager {
 		let notFound = 0;
 
 		for (const [path, savedHash] of Object.entries(parsed.atoms)) {
-			if (typeof savedHash !== 'string') continue;
+			if (typeof savedHash !== 'string') {
+				skipped++;
+				continue;
+			}
 
 			const atomFile = this.app.vault.getFileByPath(path);
 			if (!(atomFile instanceof TFile)) {
 				new Notice(`Atom not found: ${path}`);
 				notFound++;
-				continue;
-			}
-
-			const currentContent = await this.app.vault.cachedRead(atomFile);
-			const currentHash = fnv1a(currentContent);
-
-			if (currentHash !== savedHash) {
-				new Notice(`Atom changed, skipping: ${atomFile.basename}`);
-				skipped++;
 				continue;
 			}
 
@@ -158,11 +152,27 @@ export class BufferManager {
 				continue;
 			}
 
-			await this.app.vault.modify(atomFile, newContent);
+			let conflict = false;
+			// Check and update atomically. Already-applied sections are safe to
+			// retry when a previous run retained the buffer after a partial apply.
+			await this.app.vault.process(atomFile, (currentContent) => {
+				if (currentContent === newContent) return currentContent;
+				if (fnv1a(currentContent) !== savedHash) {
+					conflict = true;
+					return currentContent;
+				}
+				return newContent;
+			});
+			if (conflict) {
+				new Notice(`Atom changed, skipping: ${atomFile.basename}`);
+				skipped++;
+				continue;
+			}
 			appliedPaths.push(path);
 		}
 
-		await this.app.fileManager.trashFile(file);
+		const complete = appliedPaths.length > 0 && skipped === 0 && notFound === 0;
+		if (complete) await this.app.fileManager.trashFile(file);
 
 		onApplied?.(appliedPaths);
 
@@ -170,6 +180,7 @@ export class BufferManager {
 		if (appliedPaths.length > 0) parts.push(`Applied: ${appliedPaths.length}`);
 		if (skipped > 0) parts.push(`Skipped: ${skipped}`);
 		if (notFound > 0) parts.push(`Not found: ${notFound}`);
+		if (!complete) parts.push('Buffer kept for unresolved changes');
 		new Notice(parts.join(', ') || 'Done');
 	}
 

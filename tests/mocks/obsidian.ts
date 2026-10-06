@@ -4,8 +4,12 @@
 export class App {}
 export class Component {}
 export class MarkdownRenderer {}
+export class MarkdownView {}
 export class TFile {}
 export class TFolder {}
 export class Notice {}
+export class FuzzySuggestModal<T> {
+	getItems(): T[] { return []; }
+}
 
 export const Platform = { isMacOS: false };

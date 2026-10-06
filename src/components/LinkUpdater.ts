@@ -84,7 +84,8 @@ export function updateLinksInContent(
 
 					modified = true;
 					const hadMd = rawTarget.endsWith('.md');
-					const newTargetMd = hadMd ? newPath + '.md' : newPath.replace(/\.md$/, '');
+					const newBase = newPath.replace(/\.md$/, '');
+					const newTargetMd = hadMd ? newBase + '.md' : newBase;
 
 					// Wikilinks are vault-absolute → just swap in newPath.
 					if (wikilinkInner !== undefined) {

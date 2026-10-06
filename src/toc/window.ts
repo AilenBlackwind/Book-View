@@ -125,11 +125,15 @@ export class TocWindow {
 	 *  incremental rebuild (TocController.rebuild) never destroys/re-mounts the
 	 *  window, but the spy teardown nulls highlightHost/highlightEl; restore
 	 *  them against the still-mounted skeleton and drop any frozen pill so the
-	 *  next highlight application lazily re-creates it on the live host. */
+	 *  next highlight application lazily re-creates it on the live host. The
+	 *  selector sweep is belt-and-suspenders: the spy teardown now removes the
+	 *  span itself, but any other path that loses the reference without
+	 *  removing the node would otherwise resurrect the two-pills class. */
 	restoreHighlightHost(): void {
 		const s = this.state;
 		s.highlightHost = this.listEl?.parentElement ?? null;
 		s.highlightEl?.remove();
+		s.highlightHost?.querySelector('.bv-toc-highlight')?.remove();
 		s.highlightEl = null;
 		s.activeHeading = null;
 	}

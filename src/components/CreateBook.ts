@@ -1,4 +1,6 @@
 import { App, Notice, TFile, TFolder } from 'obsidian';
+import { isBookManifest } from './ManifestParser';
+import { uniqueMarkdownPath } from '../utils/uniquePath';
 
 /** Collect every markdown note recursively under `folder` (files in nested
  *  folders included). Used to build a book manifest from a folder tree. */
@@ -40,30 +42,25 @@ export function manifestFilename(folder: TFolder): string {
 	return `${base}.md`;
 }
 
-/** Create (or overwrite) the `<folder> Book.md` manifest inside `folder`,
+/** Create a new `<folder> Book.md` manifest inside `folder`,
  *  linking every markdown note below it in alphabetical order. Returns the
  *  manifest path, or null (with a Notice) when the folder has no notes. */
 export async function createBookForFolder(app: App, folder: TFolder): Promise<string | null> {
-	const files = collectMarkdownFiles(folder);
+	const files = collectMarkdownFiles(folder).filter((file) => !isBookManifest(app, file));
 	if (files.length === 0) {
 		new Notice('No Markdown notes found in this folder.');
 		return null;
 	}
 
 	const name = manifestFilename(folder);
-	const manifestPath = folder.path ? `${folder.path}/${name}` : name;
+	const manifestPath = uniqueMarkdownPath(app.vault, folder.path ? `${folder.path}/${name}` : name);
 	const content = buildManifestContent(
 		folder.name ? folder.name : 'Book',
 		files,
 		manifestPath,
 	);
 
-	const existing = app.vault.getAbstractFileByPath(manifestPath);
-	if (existing instanceof TFile) {
-		await app.vault.modify(existing, content);
-	} else {
-		await app.vault.create(manifestPath, content);
-	}
+	await app.vault.create(manifestPath, content);
 
 	return manifestPath;
 }

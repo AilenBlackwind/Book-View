@@ -13,13 +13,9 @@ export interface RawCodeBlockLink {
 }
 
 /**
- * Parse ```book-view fenced code blocks and extract links from their content.
- *
- * When `source` is the full file text, only material inside ```book-view
- * fences is scanned — links elsewhere (frontmatter `chapters:` lists, the
- * note body) are deliberately ignored.  When `source` is already the bare
- * inner content of a book-view block (as passed by the code-block processor),
- * the whole string is scanned.
+ * Extract links from the bare inner content passed by the code-block processor.
+ * Use parseBookViewBlocks for a full note; never infer the input kind from
+ * whether it happens to contain a book-view fence.
  *
  * Supported syntax inside the block:
  *   [[Target]]
@@ -32,34 +28,46 @@ export function parseCodeBlockLinks(source: string): RawCodeBlockLink[] {
 	const LINK_RE = /\[\[([^\]]+)\]\]|\[([^\]]+)\]\(([^)]+)\)/g;
 	const results: RawCodeBlockLink[] = [];
 
-	// Collect the regions to scan: inside book-view fences when the input has
-	// any, otherwise the whole input.
-	const regions: string[] = [];
-	const blockRe = /```book-view[\r\n]+([\s\S]*?)(?:```|$)/g;
-	let hasFence = false;
-	let bm: RegExpExecArray | null;
-	while ((bm = blockRe.exec(source)) !== null) {
-		hasFence = true;
-		if (bm[1] !== undefined) regions.push(bm[1]);
-	}
-	if (!hasFence) regions.push(source);
-
-	for (const region of regions) {
-		let m: RegExpExecArray | null;
-		LINK_RE.lastIndex = 0;
-		while ((m = LINK_RE.exec(region)) !== null) {
-			if (m[1] !== undefined) {
-				const pipe = m[1].indexOf('|');
-				const target = (pipe === -1 ? m[1] : m[1].substring(0, pipe)).trim();
-				const display = pipe === -1 ? undefined : m[1].substring(pipe + 1).trim();
-				if (target) results.push({ target, display, offset: m.index });
-			} else if (m[2] !== undefined && m[3] !== undefined) {
-				const display = m[2].trim();
-				const target = m[3].trim();
-				if (target) results.push({ target, display: display || undefined, offset: m.index });
-			}
+	let m: RegExpExecArray | null;
+	while ((m = LINK_RE.exec(source)) !== null) {
+		if (m[1] !== undefined) {
+			const pipe = m[1].indexOf('|');
+			const target = (pipe === -1 ? m[1] : m[1].substring(0, pipe)).trim();
+			const display = pipe === -1 ? undefined : m[1].substring(pipe + 1).trim();
+			if (target) results.push({ target, display, offset: m.index });
+		} else if (m[2] !== undefined && m[3] !== undefined) {
+			const display = m[2].trim();
+			const target = m[3].trim();
+			if (target) results.push({ target, display: display || undefined, offset: m.index });
 		}
 	}
+	return results;
+}
+
+/** Scan note-body fences, ignoring other languages and nested fence examples. */
+export function parseBookViewBlocks(source: string): RawCodeBlockLink[] {
+	const results: RawCodeBlockLink[] = [];
+	let fence: { marker: string; length: number; isBook: boolean } | null = null;
+	let body: string[] = [];
+	for (const line of source.split('\n')) {
+		const match = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)\r?$/.exec(line);
+		if (!fence) {
+			if (!match) continue;
+			const marks = match[1]!;
+			const info = match[2]!.trim();
+			if (marks[0] === '`' && info.includes('`')) continue;
+			fence = { marker: marks[0]!, length: marks.length, isBook: info === 'book-view' };
+			body = [];
+		} else if (match && match[1]![0] === fence.marker
+			&& match[1]!.length >= fence.length && !match[2]!.trim()) {
+			if (fence.isBook) results.push(...parseCodeBlockLinks(body.join('\n')));
+			fence = null;
+			body = [];
+		} else if (fence.isBook) {
+			body.push(line);
+		}
+	}
+	if (fence?.isBook) results.push(...parseCodeBlockLinks(body.join('\n')));
 	return results;
 }
 
