@@ -4,7 +4,7 @@ import type { ModifierConfig, MenuProfile, ScriptEntry } from '../settings';
 import { generalSettingDefinitions } from './generalSettingDefinitions';
 import { tocSettingDefinitions } from './tocSettingDefinitions';
 import { renderSettingDefinitions } from './settingDefinitions';
-import type { BookSettingDefinition, BookSettingGroup } from './settingDefinitions';
+import type { BookSettingDefinition, BookSettingPage } from './settingDefinitions';
 import { listCommands, CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
 
 function renderMenuIcon(element: HTMLElement, icon: string): boolean {
@@ -43,11 +43,11 @@ export class BookViewSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	getSettingDefinitions(): (BookSettingDefinition | BookSettingGroup)[] {
+	getSettingDefinitions(): BookSettingPage[] {
 		return [
-			...this.getGeneralDefinitions(),
-			{ type: 'group', heading: 'Table of contents', items: tocSettingDefinitions(this.plugin) },
-			{ type: 'group', heading: 'Context menus', items: [{
+			{ type: 'page', name: 'General', items: this.getGeneralDefinitions() },
+			{ type: 'page', name: 'Table of contents', items: tocSettingDefinitions(this.plugin) },
+			{ type: 'page', name: 'Context menus', items: [{
 				name: 'Menu profiles',
 				desc: 'Configure modifier shortcuts and commands for each context menu.',
 				render: (setting) => {
@@ -62,6 +62,19 @@ export class BookViewSettingTab extends PluginSettingTab {
 	private getGeneralDefinitions(): BookSettingDefinition[] {
 		return [
 			...generalSettingDefinitions(this.plugin, () => this.refreshSettings()),
+			{
+				name: 'Startup diagnostics',
+				desc: 'Record the first 60 seconds after Book View loads; restart Obsidian after changing this. Keeps 20 local reports in the plugin folder with tab types, caller stacks and errors. No note text is recorded or sent. Use the Copy startup reports command to share them.',
+				render: (setting) => {
+					setting.addToggle((toggle) => toggle
+						.setValue(this.plugin.settings.startupDiagnosticsEnabled)
+						.onChange(async (value) => {
+							this.plugin.settings.startupDiagnosticsEnabled = value;
+							if (!value) this.plugin.startupDiagnostics?.stop('disabled in settings');
+							await this.plugin.saveSettings();
+						}));
+				},
+			},
 			{
 				name: 'Editor shortcut modifiers',
 				desc: 'Modifier keys required to open the editor on double-click.',

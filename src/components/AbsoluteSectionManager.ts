@@ -1039,6 +1039,20 @@ export class AbsoluteSectionManager {
 		return this.layout.getOffset(path);
 	}
 
+	getReadingAnchor(scrollTop: number): { path: string; offset: number } | undefined {
+		const anchor = this.layout.findAnchorAt(scrollTop);
+		const path = anchor && this.fileOrder[anchor.idx];
+		if (path) return { path, offset: anchor.anchorOffset };
+		return undefined;
+	}
+
+	restoreReadingAnchor(anchor: { path: string; offset: number }): boolean {
+		const idx = this.fileOrder.indexOf(anchor.path);
+		if (idx < 0) return false;
+		this.layout.restoreScrollAt({ idx, anchorOffset: anchor.offset }, this.scrollContainer.scrollTop);
+		return true;
+	}
+
 	getScrollTop(): number {
 		return this.lastScrollTop;
 	}

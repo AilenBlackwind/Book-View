@@ -55,6 +55,17 @@ export function tocSettingDefinitions(plugin: BookViewPlugin): BookSettingDefini
 			},
 		},
 		{
+			name: 'Wrap long headings',
+			desc: 'Wrap long headings onto up to three lines.',
+			render: setting => {
+				setting.addToggle(toggle => toggle.setValue(plugin.settings.tocWrapHeadings)
+					.onChange(async value => {
+						plugin.settings.tocWrapHeadings = value;
+						await plugin.saveSettings();
+					}));
+			},
+		},
+		{
 			name: 'Render Markdown',
 			desc: 'Render bold, italic, code and other inline Markdown in headings instead of showing raw syntax.',
 			render: (setting) => {

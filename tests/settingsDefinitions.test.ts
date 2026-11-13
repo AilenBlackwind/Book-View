@@ -21,7 +21,12 @@ describe('searchable settings', () => {
 		const owner = plugin();
 		const tab = new BookViewSettingTab(new App(), owner as unknown as BookViewPlugin);
 		const definitions = tab.getSettingDefinitions();
-		const rows = definitions.flatMap((definition) => 'items' in definition ? definition.items : [definition]);
+		expect(definitions.map(({ type, name }) => ({ type, name }))).toEqual([
+			{ type: 'page', name: 'General' },
+			{ type: 'page', name: 'Table of contents' },
+			{ type: 'page', name: 'Context menus' },
+		]);
+		const rows = definitions.flatMap((definition) => definition.items);
 		expect(rows.map((row) => row.name)).toEqual(expect.arrayContaining([
 			'Book width', 'Wheel flick acceleration', 'Editor used on double-click',
 			'Auto expand', 'Default collapsed level', 'Editor shortcut modifiers', 'Menu profiles',

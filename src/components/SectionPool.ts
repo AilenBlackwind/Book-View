@@ -645,11 +645,17 @@ export class SectionPool {
 			if (link.type === 'empty') {
 				const path = `__book-warning__${link.file.path}`;
 				const el = this.host.spacerEl.createEl('section', {
-					cls: 'book-section-warning book-section-absolute',
+					cls: 'book-section-warning book-section-absolute book-section-empty',
 					attr: { 'data-path': path },
 				});
 				el.createSpan({ text: '⚠️ ' });
 				el.createSpan({ cls: 'book-warning-text', text: `Empty note: ${link.file.path}` });
+				const edit = el.createEl('button', {
+					cls: 'clickable-icon book-edit-empty-note',
+					attr: { type: 'button', 'aria-label': 'Edit empty note', title: 'Edit empty note' },
+				});
+				edit.dataset.path = link.file.path;
+				setIcon(edit, 'pencil');
 				this.addWarningSection(path, el);
 				continue;
 			}
@@ -806,7 +812,12 @@ export class SectionPool {
 		// closes, and a fresh render on unfold is instant anyway. Placeholder
 		// DOM is likewise never cached: it lacks the formulas, and serving it as
 		// the "full" render on a later remount would keep them hidden forever.
-		if (!data.placeholder && this.host.getFoldMode(path) !== 'full') {
+		// HTML alone cannot revive unloaded widget components or their listeners.
+		// Re-render code-block notes and interactive DOM on remount instead.
+		const source = this.host.rawContent.get(path) ?? '';
+		const hasCodeBlocks = /^[ \t]*(?:`{3,}|~{3,})/m.test(source);
+		const hasControls = data.el.querySelector('input, button, select, textarea, iframe, canvas, [contenteditable], [class*="block-language-"]') !== null;
+		if (!data.placeholder && !hasCodeBlocks && !hasControls && this.host.getFoldMode(path) !== 'full') {
 			const rendered = data.el.querySelector('.markdown-rendered');
 			if (rendered) {
 				// Never persist transient find marks in the cache: a section
@@ -1166,6 +1177,9 @@ export class SectionPool {
 		const t0 = performance.now();
 		let renderError: unknown = null;
 		try {
+			// Processors using context.addChild() initialize their widgets only
+			// when the rendering owner is loaded. unloadSection owns teardown.
+			component.load();
 			await MarkdownRenderer.render(this.host.app, renderContent, renderContainer, path, component);
 		} catch (err) {
 			renderError = err;
@@ -1349,6 +1363,7 @@ export class SectionPool {
 		const t0 = performance.now();
 		let renderError: unknown = null;
 		try {
+			component.load();
 			await MarkdownRenderer.render(this.host.app, ensureTrailingBlankLine(buildPlaceholderContent(normalizeListTabs(stripYamlFrontmatter(content)))), renderContainer, path, component);
 		} catch (err) {
 			renderError = err;

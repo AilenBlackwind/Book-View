@@ -9,9 +9,9 @@ export interface BookSettingDefinition {
 	render: (setting: Setting) => void;
 }
 
-export interface BookSettingGroup {
-	type: 'group';
-	heading: string;
+export interface BookSettingPage {
+	type: 'page';
+	name: string;
 	items: BookSettingDefinition[];
 }
 

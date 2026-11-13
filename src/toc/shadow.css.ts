@@ -126,6 +126,17 @@ export const TOC_SHADOW_CSS = `
 	min-width: 0;
 }
 
+.bv-toc-wrap .bv-toc-heading { height: auto; min-height: 26px; }
+.bv-toc-wrap .bv-toc-heading-inner { height: auto; align-items: flex-start; }
+.bv-toc-wrap .bv-toc-chevron { height: 26px; }
+.bv-toc-wrap .bv-toc-item { height: auto; white-space: normal; overflow-wrap: anywhere; }
+.bv-toc-wrap .bv-toc-item > span {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	overflow: hidden;
+}
+
 .bv-toc-item:hover {
 	background: var(--background-modifier-hover);
 	color: var(--nav-item-color-hover);

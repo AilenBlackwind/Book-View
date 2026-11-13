@@ -3,11 +3,11 @@ import { getManifestFiles } from './ManifestParser';
 import { uniqueMarkdownPath } from '../utils/uniquePath';
 
 /** Save a fresh manuscript alongside its source book, preserving earlier exports. */
-export async function collectManuscript(app: App, manifestFile: TFile): Promise<void> {
+export async function collectManuscript(app: App, manifestFile: TFile): Promise<TFile | null> {
 	const files = await getManifestFiles(app, manifestFile);
 	if (files.length === 0) {
 		new Notice('No linked notes found in this book.');
-		return;
+		return null;
 	}
 
 	const parts: string[] = [];
@@ -20,6 +20,7 @@ export async function collectManuscript(app: App, manifestFile: TFile): Promise<
 	const folder = manifestFile.parent?.path;
 	const name = `${manifestFile.basename} — Manuscript.md`;
 	const outputPath = uniqueMarkdownPath(app.vault, folder ? `${folder}/${name}` : name);
-	await app.vault.create(outputPath, parts.join('\n\n'));
+	const output = await app.vault.create(outputPath, parts.join('\n\n'));
 	new Notice(`Manuscript saved: ${outputPath}`);
+	return output;
 }

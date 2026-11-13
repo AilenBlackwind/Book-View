@@ -2,5 +2,6 @@ node_modules/
 main.js
 /styles.css
 data.json
+startup-diagnostics.json
 IDEAS.md
 docs/handoff-toc-scroll-perf.md

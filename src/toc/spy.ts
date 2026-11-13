@@ -447,9 +447,13 @@ window.clearTimeout(s.activePathTimer);
 		const el = index >= 0 ? s.rowAnchorByEntry.get(index) : undefined;
 		let transform = 'translate3d(0, -99999px, 0)';
 		let level = 0;
+		let pillHeight = '';
 		if (el) {
 			const item = s.entryToItem[index];
 			const top = item !== undefined && item >= 0 ? (s.virtualOffsets[item] ?? 0) : 0;
+			if (s.settings?.tocWrapHeadings && item !== undefined && item >= 0) {
+				pillHeight = String(Math.max(0, (s.virtualOffsets[item + 1] ?? top + s.rowHeight) - top - 4)) + 'px';
+			}
 			const entry = s.entries[index];
 			level = entry?.level ?? 1;
 			const indent = (level - 1) * 12;
@@ -459,6 +463,7 @@ window.clearTimeout(s.activePathTimer);
 			s.highlightEl = host.createSpan({ cls: 'bv-toc-highlight' });
 		}
 		const pill = s.highlightEl;
+		if (pill.style.height !== pillHeight) pill.style.height = pillHeight;
 		if (level !== this.lastPillLevel) {
 			this.lastPillLevel = level;
 			for (let lv = 1; lv <= 6; lv++) {
@@ -499,7 +504,7 @@ window.clearTimeout(s.activePathTimer);
 		const item = s.entryToItem[index];
 		if (item === undefined || item < 0) return;
 		const top = s.virtualOffsets[item] ?? 0;
-		const bottom = top + s.rowHeight;
+		const bottom = s.virtualOffsets[item + 1] ?? top + s.rowHeight;
 		const scrollTop = s.panelScrollTop;
 		const viewport = s.tocViewportHeight;
 		const pad = s.tocPaddingTop;
@@ -542,7 +547,8 @@ window.clearTimeout(s.activePathTimer);
 			const item = s.entryToItem[index];
 			if (item === undefined || item < 0) return;
 			const top = s.virtualOffsets[item] ?? 0;
-			const target = Math.max(0, top - (s.tocViewportHeight - s.rowHeight) / 2);
+			const rowHeight = (s.virtualOffsets[item + 1] ?? top + s.rowHeight) - top;
+			const target = Math.max(0, top - (s.tocViewportHeight - rowHeight) / 2);
 			// Skip when the panel is effectively already centered — avoids
 			// starting a smooth animation (and its panel-scroll churn) over a
 			// couple of pixels.

@@ -17,7 +17,7 @@ type OnPick = (built: string) => void;
 
 /** Extract the link target from the raw source line stored in the input. */
 function extractLinkTarget(line: string): string {
-	const wikilink = line.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+	const wikilink = line.match(/^\[\[([^\]|]*)(?:\|([^\]]+))?\]\]$/);
 	if (wikilink) return (wikilink[1] ?? wikilink[2] ?? '').trim();
 	const mdLink = line.match(/^\[[^\]]*\]\(([^)]*)\)$/);
 	if (mdLink) return (mdLink[1] ?? '').trim();
@@ -27,7 +27,7 @@ function extractLinkTarget(line: string): string {
 /** Rebuild the source line after a note was picked, keeping the line format
  *  (wikilink vs markdown link) and any alias / link text. */
 function buildLinkFor(original: string, newTarget: string): string {
-	const wikilink = original.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+	const wikilink = original.match(/^\[\[([^\]|]*)(?:\|([^\]]+))?\]\]$/);
 	if (wikilink) {
 		return wikilink[2] !== undefined
 			? `[[${newTarget}|${wikilink[2]}]]`

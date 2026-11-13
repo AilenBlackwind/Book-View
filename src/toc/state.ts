@@ -63,6 +63,7 @@ export class TocState {
 	virtualItems: VirtualItem[] = [];
 	/** Cumulative top offset per item; last element = total height. */
 	virtualOffsets: number[] = [0];
+	wrappedHeadingHeights = new Map<number, number>();
 	/** Parallel to entries: virtual item index of a visible heading, -1 when
 	 *  hidden (collapsed) or absent. */
 	entryToItem: number[] = [];
@@ -233,6 +234,7 @@ export class TocState {
 
 	/** Reset build-scoped state before a rebuild. */
 	resetForBuild(): void {
+		this.wrappedHeadingHeights.clear();
 		this.entries = [];
 		this.virtualItems = [];
 		this.virtualOffsets = [0];
@@ -254,6 +256,7 @@ export class TocState {
 
 	/** Drop all collected data (full teardown; DOM is emptied by the view). */
 	clearData(): void {
+		this.wrappedHeadingHeights.clear();
 		this.entries = [];
 		this.virtualItems = [];
 		this.virtualOffsets = [0];
@@ -413,7 +416,7 @@ export class TocState {
 		);
 		this.virtualItems = items;
 		this.entryToItem = entryToItem;
-		this.virtualOffsets = computeVirtualOffsets(items, this.rowHeight, this.fileRowHeight);
+		this.virtualOffsets = computeVirtualOffsets(items, this.rowHeight, this.fileRowHeight, this.settings?.tocWrapHeadings ? this.wrappedHeadingHeights : undefined);
 		this.allRowsHidden = !items.some((item) => item.type === 'heading');
 	}
 

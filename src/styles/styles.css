@@ -232,14 +232,33 @@
 	overflow: clip;
 }
 
+.book-section-warning.book-section-empty {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.book-section-empty .book-warning-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.book-section-empty .book-edit-empty-note {
+	flex: none;
+	height: 18px;
+	padding: 2px 4px;
+}
+
 /* Sections are virtualized and only the outer book container scrolls, so the
    note DOM inside a section must never become a scroll container itself.
    Obsidian's base CSS makes .markdown-preview-view overflow-y:auto, which
    under some themes renders a phantom scrollbar beside each note that does
    nothing but swallow wheel input. Force the content to flow and hide any
    scrollbar a theme might still paint. */
-.book-section-placeholder .markdown-rendered,
-.book-section-placeholder .markdown-preview-view {
+.book-section-placeholder > .markdown-rendered,
+.book-section-placeholder > .markdown-preview-view {
 	padding: 0;
 	margin: 0;
 	overflow: visible !important;
@@ -247,37 +266,38 @@
 }
 
 .book-section-placeholder::-webkit-scrollbar,
-.book-section-placeholder *::-webkit-scrollbar {
+.book-section-placeholder > .markdown-rendered::-webkit-scrollbar,
+.book-section-placeholder > .markdown-preview-view::-webkit-scrollbar {
 	display: none;
 	width: 0;
 	height: 0;
 }
 
-.book-section-absolute .markdown-rendered > :first-child,
-.book-section-absolute .markdown-rendered > :first-child * {
+/* Trim only the section's outer margins. Recursive resets here also erase
+   widget headers, result spacing and callout contents. The extra selectors
+   handle Obsidian's ordinary text wrappers without entering plugin widgets
+   or nested markdown-rendered containers. */
+.book-section-absolute > .markdown-rendered > :first-child,
+.book-section-absolute > .markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6, .el-p):first-child > :is(h1, h2, h3, h4, h5, h6, p) {
 	margin-top: 0 !important;
 	margin-block-start: 0 !important;
 }
 
-/* Zero the first block's top padding, but keep it for a leading callout:
-   the callout's padding is part of its own box (background + radius), and
-   stripping it would push the title flush against the note's top edge. */
-.book-section-absolute .markdown-rendered > :first-child:not(.callout),
-.book-section-absolute .markdown-rendered > :first-child:not(.callout) *:not(.callout) {
+/* Only plain text needs padding trimmed at a note boundary. Boxed blocks
+   (widgets, callouts, code, tables, embeds) own their internal padding. */
+.book-section-absolute > .markdown-rendered > :is(h1, h2, h3, h4, h5, h6, p, .el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6, .el-p):first-child,
+.book-section-absolute > .markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6, .el-p):first-child > :is(h1, h2, h3, h4, h5, h6, p) {
 	padding-top: 0 !important;
 }
 
-.book-section-absolute .markdown-rendered > :last-child,
-.book-section-absolute .markdown-rendered > :last-child * {
+.book-section-absolute > .markdown-rendered > :last-child,
+.book-section-absolute > .markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6, .el-p):last-child > :is(h1, h2, h3, h4, h5, h6, p) {
 	margin-bottom: 0 !important;
 	margin-block-end: 0 !important;
 }
 
-/* Same for the trailing block's bottom padding: a callout at the very end
-   of a note must keep its bottom padding or its last line is clipped flush
-   against the callout's bottom border. */
-.book-section-absolute .markdown-rendered > :last-child:not(.callout),
-.book-section-absolute .markdown-rendered > :last-child:not(.callout) *:not(.callout) {
+.book-section-absolute > .markdown-rendered > :is(h1, h2, h3, h4, h5, h6, p, .el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6, .el-p):last-child,
+.book-section-absolute > .markdown-rendered > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6, .el-p):last-child > :is(h1, h2, h3, h4, h5, h6, p) {
 	padding-bottom: 0 !important;
 }
 
@@ -1194,10 +1214,106 @@ mark.book-search-all {
 .book-view-codeblock-item {
 	display: flex;
 	align-items: center;
+	position: relative;
+	gap: 4px;
 	padding: 2px 0;
 	/* The row is a click-to-edit affordance in Live Preview: clicking it
 	   opens an inline editor for that row's source line. */
 	cursor: pointer;
+}
+
+.book-view-codeblock-item .book-view-codeblock-action {
+	display: none;
+	flex: none;
+	padding: 2px 4px;
+	height: 24px;
+}
+
+.markdown-source-view .cm-preview-code-block.cm-lang-book-view .book-view-codeblock-action,
+.book-chapter-list-modal .book-view-codeblock-action {
+	display: inline-flex;
+}
+
+:is(.markdown-source-view, .book-chapter-list-modal) .book-view-codeblock-item.book-view-codeblock-editing .book-view-codeblock-action {
+	display: none;
+}
+
+.book-view-codeblock-grip {
+	cursor: grab;
+}
+
+:is(.book-view-codeblock-add, .book-view-codeblock-remove) {
+	margin-inline-start: auto;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.book-view-codeblock-remove + .book-view-codeblock-add {
+	margin-inline-start: 0;
+}
+
+.book-view-codeblock-item:hover > :is(.book-view-codeblock-add, .book-view-codeblock-remove),
+:is(.book-view-codeblock-add, .book-view-codeblock-remove):focus-visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.book-view-codeblock-moved {
+	animation: book-view-codeblock-moved 1.8s ease-out;
+}
+
+@keyframes book-view-codeblock-moved {
+	0%, 45% {
+		background-color: var(--text-selection);
+	}
+	100% {
+		background-color: transparent;
+	}
+}
+
+.book-view-codeblock-drop-before {
+	box-shadow: 0 -2px var(--interactive-accent);
+}
+
+.book-view-codeblock-drop-after {
+	box-shadow: 0 2px var(--interactive-accent);
+}
+
+.book-view-create-note {
+	position: absolute;
+	inset: 100% 0 auto auto;
+	z-index: 2;
+	display: grid;
+	gap: 8px;
+	width: max-content;
+	max-width: min(340px, calc(100vw - 16px));
+	margin: 0;
+	padding: 12px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+}
+
+.book-view-create-note[popover] {
+	position: fixed;
+	inset: auto;
+}
+
+.book-view-create-note[popover]:not(:popover-open) {
+	display: none;
+}
+
+.book-view-create-note > :is(input, select) {
+	width: 100%;
+}
+
+.book-view-create-note-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
 }
 
 /* Visually hint an editable row when hovering it (already in Live Preview).
@@ -1221,6 +1337,31 @@ mark.book-search-all {
 .book-view-codeblock-broken {
 	color: var(--text-error);
 	font-style: italic;
+}
+
+.book-view-codeblock-empty-link {
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.book-chapter-list-modal .modal-content {
+	display: grid;
+	gap: 8px;
+}
+
+.book-chapter-list-modal .book-view-codeblock-list {
+	max-height: 55vh;
+	overflow-y: auto;
+}
+
+.book-chapter-list-modal .book-chapter-list-link {
+	min-width: 0;
+	height: auto;
+	white-space: normal;
+	text-align: start;
+	overflow-wrap: anywhere;
+	background: transparent;
+	box-shadow: none;
 }
 
 /* Inline editor shown in place of a row's link when editing it in Live

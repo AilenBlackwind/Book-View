@@ -1,6 +1,6 @@
 import { TocState } from './state';
 import type { TocBuilder } from './builder';
-import { firstItemAt, firstItemAfter } from './virtual';
+import { computeVirtualOffsets, firstItemAt, firstItemAfter } from './virtual';
 import type { VirtualItem } from './virtual';
 import { TOC_SHADOW_CSS } from './shadow.css';
 import { DebugLog } from '../utils/debug';
@@ -69,6 +69,11 @@ export class TocWindow {
 
 	/** Called after a row-window rebuild (used to re-host the highlight pill
 	 *  into the active row, which may have been re-created). */
+	private wrapObserver: ResizeObserver | null = null;
+	private wrapWidth = -1;
+	private wrapFrame = 0;
+	private observedRows = new Set<HTMLElement>();
+
 	onRowsRendered: (() => void) | null = null;
 
 	constructor(private state: TocState, private builder: TocBuilder) {}
@@ -149,6 +154,9 @@ export class TocWindow {
 			return;
 		}
 
+		const wrap = !!s.settings?.tocWrapHeadings;
+		s.highlightHost?.classList.toggle('bv-toc-wrap', wrap);
+		if (!wrap && this.wrapObserver) this.stopWrapMeasurements();
 		const items = s.virtualItems;
 		const offsets = s.virtualOffsets;
 		const n = items.length;
@@ -212,7 +220,7 @@ export class TocWindow {
 		// overlap the 140ms glides into a blur (see scrollTooFastForAnimation).
 		const structural = this.renderedItems !== items;
 		const animate =
-			structural &&
+			!wrap && structural &&
 			this.renderedItems !== null &&
 			(s.settings?.tocExpandAnim ?? true) &&
 			!s.scrollTooFastForAnimation();
@@ -273,14 +281,87 @@ export class TocWindow {
 			if (!byKey.has(`${kind}:${item.index}`)) newRows++;
 		}
 
-		if (newRows >= INCREMENTAL_THRESHOLD) {
+		if (!wrap && newRows >= INCREMENTAL_THRESHOLD) {
 			this.startIncrementalFill(start, end, items, byKey, animate);
 			return;
 		}
 
 		this.renderWindowRange(start, end, byKey, animate);
+		if (wrap) this.measureWrappedRows();
 		this.pulseToggled();
 		this.onRowsRendered?.();
+	}
+
+	/** Only mounted rows are measured. Keep the first visible item anchored
+	 * when estimates above it are replaced by real heights. */
+	private measureWrappedRows(): void {
+		const s = this.state;
+		const list = this.listEl;
+		const spacer = this.spacerEl;
+		if (!s.settings?.tocWrapHeadings || !list || !spacer || list.clientWidth === 0) return;
+		const width = list.clientWidth;
+		let changed = false;
+		if (width !== this.wrapWidth) {
+			this.wrapWidth = width;
+			changed = s.wrappedHeadingHeights.size > 0;
+			s.wrappedHeadingHeights.clear();
+		}
+		if (!this.wrapObserver) {
+			this.wrapObserver = new ResizeObserver(() => this.scheduleWrapMeasure());
+			this.wrapObserver.observe(list);
+		}
+		const rows = new Set(s.rowByEntry.values());
+		for (const row of this.observedRows) if (!rows.has(row)) this.wrapObserver.unobserve(row);
+		for (const [index, row] of s.rowByEntry) {
+			if (!this.observedRows.has(row)) this.wrapObserver.observe(row);
+			const height = row.offsetHeight;
+			if (!height || height === (s.wrappedHeadingHeights.get(index) ?? s.rowHeight)) continue;
+			s.wrappedHeadingHeights.set(index, height);
+			changed = true;
+		}
+		this.observedRows = rows;
+		if (!changed) return;
+		const previous = s.virtualOffsets;
+		const position = s.containerEl.scrollTop;
+		const anchor = firstItemAt(previous, Math.max(0, position - s.tocPaddingTop), s.virtualItems.length);
+		const offsets = computeVirtualOffsets(s.virtualItems, s.rowHeight, s.fileRowHeight, s.wrappedHeadingHeights);
+		s.virtualOffsets = offsets;
+		this.spacerHeightPx = offsets[offsets.length - 1] ?? 0;
+		spacer.style.height = String(this.spacerHeightPx) + 'px';
+		for (let i = this.startIndex; i < this.endIndex; i++) {
+			const item = s.virtualItems[i];
+			if (!item) continue;
+			const row = item.type === 'heading' ? s.rowByEntry.get(item.index)
+				: list.querySelector<HTMLElement>('.bv-toc-file[data-index="' + item.index + '"]');
+			if (row) row.style.top = String(offsets[i] ?? 0) + 'px';
+		}
+		const oldTop = previous[anchor] ?? 0;
+		const newTop = offsets[anchor] ?? 0;
+		const within = position - oldTop - s.tocPaddingTop;
+		const newHeight = (offsets[anchor + 1] ?? newTop + s.rowHeight) - newTop;
+		s.containerEl.scrollTop = Math.max(0, position + newTop - oldTop + Math.min(0, newHeight - 1 - within));
+		s.panelScrollTop = s.containerEl.scrollTop;
+		this.onRowsRendered?.();
+		this.scheduleWrapMeasure();
+	}
+
+	private scheduleWrapMeasure(): void {
+		if (this.wrapFrame) return;
+		const win = this.state.containerEl.win;
+		this.wrapFrame = win.requestAnimationFrame(() => {
+			this.wrapFrame = 0;
+			this.measureWrappedRows();
+			this.render();
+		});
+	}
+
+	private stopWrapMeasurements(): void {
+		this.wrapObserver?.disconnect();
+		this.wrapObserver = null;
+		this.observedRows.clear();
+		if (this.wrapFrame) this.state.containerEl.win.cancelAnimationFrame(this.wrapFrame);
+		this.wrapFrame = 0;
+		this.wrapWidth = -1;
 	}
 
 	/** Synchronously build every row in [start, end) into `listEl`. Rows are
@@ -620,6 +701,7 @@ export class TocWindow {
 	}
 
 	destroy(): void {
+		this.stopWrapMeasurements();
 		if (this.scrollHandler) {
 			this.state.containerEl.removeEventListener('scroll', this.scrollHandler);
 			this.scrollHandler = null;

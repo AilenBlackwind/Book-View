@@ -1,5 +1,6 @@
 import { ItemView, WorkspaceLeaf } from 'obsidian';
 import { TocController } from '../toc/controller';
+import { TocSectionMenu } from '../toc/sectionMenu';
 import type { TocEntry } from '../toc/entries';
 import { DebugLog } from '../utils/debug';
 import type { BookView } from './BookView';
@@ -13,6 +14,7 @@ export const VIEW_TYPE_BOOK_TOC = 'book-toc-view';
  */
 export class BookTocView extends ItemView {
 	private tocController: TocController | null = null;
+	private sectionMenu: TocSectionMenu | null = null;
 	private boundBook: BookView | null = null;
 	/** Book scope classes currently applied to contentEl (see bind). */
 	private scopeClasses: string[] = [];
@@ -103,6 +105,9 @@ export class BookTocView extends ItemView {
 			manager,
 		);
 		this.tocController.build();
+		this.sectionMenu = this.addChild(new TocSectionMenu(
+			this.contentEl, this.app, files, () => this.getEntries(),
+		));
 
 		manager.onSectionRendered = (path, sectionContainer) => {
 			// Measurement is deferred to the manager frame (onTagFrame); only
@@ -115,6 +120,10 @@ export class BookTocView extends ItemView {
 	}
 
 	unbind(): void {
+		if (this.sectionMenu) {
+			this.removeChild(this.sectionMenu);
+			this.sectionMenu = null;
+		}
 		// Debug.
 		DebugLog.log('TOC unbind', this.boundBook?.filePath || '');
 		this.tocController?.destroy();

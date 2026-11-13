@@ -1,6 +1,7 @@
 import { MarkdownView, Notice, Plugin, TFolder, TFile, WorkspaceLeaf } from 'obsidian';
 import { createBookForFolder } from './components/CreateBook';
-import { collectManuscript } from './components/CollectManuscript';
+import { collectActiveManuscript } from './commands/collectManuscript';
+import { registerEditChapterList } from './commands/editChapterList';
 import { ThemeSpacings, measureThemeSpacings } from './utils/theme';
 import { BookView, VIEW_TYPE_BOOK_VIEW } from './views/BookView';
 import { BookTocView, VIEW_TYPE_BOOK_TOC } from './views/BookTocView';
@@ -17,8 +18,11 @@ import { ensureGlobalFrameProbe } from './components/AbsoluteSectionManager';
 import { updateManifestLinksOnRename } from './components/LinkUpdater';
 import { maybeWarnHasSelectors } from './utils/cssDiag';
 import { CssFingerprint, makeCssFingerprint, cssFingerprintsMatch } from './utils/cssFingerprint';
+import { StartupDiagnostics } from './diagnostics/StartupDiagnostics';
+import { registerStartupDiagnosticCommands } from './diagnostics/commands';
 
 export default class BookViewPlugin extends Plugin {
+	startupDiagnostics: StartupDiagnostics | null = null;
 	settings: BookViewSettings = DEFAULT_SETTINGS;
 	bufferManager: BufferManager = null as unknown as BufferManager;
 	api: BookViewAPI | null = null;
@@ -142,8 +146,13 @@ export default class BookViewPlugin extends Plugin {
 	}
 
 	async onload() {
+		const loadStarted = performance.now();
 		DebugLog.startup('plugin load');
 		await this.loadSettings();
+		if (this.settings.startupDiagnosticsEnabled === true) {
+			this.startupDiagnostics = new StartupDiagnostics(this, loadStarted);
+		}
+		registerStartupDiagnosticCommands(this);
 
 		this.registerEvent(
 			this.app.workspace.on('css-change', async () => {
@@ -157,6 +166,7 @@ export default class BookViewPlugin extends Plugin {
 		registerBookViewCodeBlock(
 			this.app,
 			this.registerMarkdownCodeBlockProcessor.bind(this),
+			() => this.settings.chapterFolderFirst,
 		);
 		this.api = new BookViewAPI(
 			this.app,
@@ -255,9 +265,10 @@ export default class BookViewPlugin extends Plugin {
 			id: 'collect-manuscript',
 			name: 'Collect manuscript from linked notes',
 			callback: () => {
-				void this.collectManuscript();
+				void collectActiveManuscript(this.app);
 			},
 		});
+		registerEditChapterList(this);
 
 		this.addCommand({
 			id: 'create-book',
@@ -295,6 +306,14 @@ export default class BookViewPlugin extends Plugin {
 			if (!(evt.ctrlKey || evt.metaKey) || evt.code !== 'KeyF' || evt.shiftKey || evt.altKey) return;
 			const target = evt.target as HTMLElement | null;
 			if (!target) return;
+
+			const chapterEditor = target.closest('.book-chapter-list-modal');
+			if (chapterEditor) {
+				evt.preventDefault();
+				evt.stopImmediatePropagation();
+				chapterEditor.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+				return;
+			}
 
 			// The find bar's field is an INPUT element: handle a Ctrl+F pressed
 			// while its field is focused (re-open the bar) before the input
@@ -732,19 +751,6 @@ export default class BookViewPlugin extends Plugin {
 			type: VIEW_TYPE_BOOK_VIEW,
 			state: { filePath },
 		});
-	}
-
-	private async collectManuscript(): Promise<void> {
-		const bv = this.app.workspace.getActiveViewOfType(BookView);
-		if (!bv || !bv.filePath) {
-			new Notice('Open a book view first.');
-			return;
-		}
-
-		const manifestFile = this.app.vault.getFileByPath(bv.filePath);
-		if (!(manifestFile instanceof TFile)) return;
-
-		await collectManuscript(this.app, manifestFile);
 	}
 
 	/** Create a new `<folder> Book.md` manifest that links every

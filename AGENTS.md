@@ -33,6 +33,15 @@ npm run dev
 npm run build
 ```
 
+### Local workflow: test vault → main vault
+
+- Develop and test in `F:\ObsidianVaults\TestVault\.obsidian\plugins\Book-View`; the plugin used daily lives in `F:\ObsidianVaults\MainVault\.obsidian\plugins\Book-View`.
+- After completing changes to plugin code or styles and running the relevant checks, run **`npm run build`** from this project. Documentation-only changes do not require a build.
+- The full build type-checks the source, bundles `main.js`, updates root `styles.css`, and runs `copy-to-main.cjs` to copy `main.js`, `styles.css`, and `manifest.json` to the main vault. Running esbuild alone or `npm run dev` does not perform this deployment.
+- Use the existing copy script rather than copying files manually. This copy to the main vault is part of the user's normal development workflow.
+- Check the build output for `Copied main.js`, `Copied styles.css`, and `Copied manifest.json`. If the script reports a skipped copy or the environment blocks writing to the main vault, report that deployment did not complete; do not claim the main vault was updated. Request the necessary filesystem access when required.
+- Remind the user to reload the plugin in the main vault after deployment. Do not commit generated release artifacts.
+
 ## Linting
 
 - ESLint is preconfigured with `eslint-plugin-obsidianmd` for Obsidian-specific rules.

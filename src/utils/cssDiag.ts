@@ -17,14 +17,10 @@ export interface HasFinding {
  *
  *     div:has(:is(h1, h2, h3, h4)):has(+ div > .callout[data-callout*="list"])
  *
- * A `:has()` whose subject is a broad element (a tag like `div`, or a heading)
- * and whose argument escapes the subject's own box (descendant or child) makes
- * Blink treat every matching subject AND its ancestors as potential has()
- * dependents. When content is inserted further down (a section mount), the
- * whole ancestor chain up to `.app-container` gets a style recalc — the 2.4s
- * "Affected by :has()" trace this plugin hit. Sibling-scoped `:has(+ x)` and
- * `:has(~ x)` are cheap: the dependency is confined to the adjacent siblings,
- * so they are intentionally not reported.
+ * A `:has()` anchored to a broad element can increase selector work when
+ * descendants change. The cost depends on the complete selector, DOM and browser;
+ * this scan flags candidates, not measured slow rules. A pure sibling argument
+ * is excluded by this heuristic, but that is not a performance guarantee.
  *
  * The scan is pure string parsing of selectorText. It never touches the live
  * DOM, never runs querySelectorAll with :has(), and never forces layout, so
@@ -130,18 +126,20 @@ function isBroadSubject(subject: string): boolean {
 
 /**
  * Cost class for a :has() argument:
- *  - null: sibling-scoped (+ / ~) — cheap, not reported.
- *  - 'medium': child combinator (>) — invalidation confined to direct children.
- *  - 'high': descendant (bare compound or universal) — worst case, the one
- *    that spreads style recalc up the whole ancestor chain.
+ *  - null: only sibling-prefixed branches (+ / ~), excluded by the heuristic.
+ *  - 'medium': child-prefixed branches (>), worth inspecting if profiling is slow.
+ *  - 'high': at least one unrestricted descendant branch.
+ * These are syntax categories, not browser timings or invalidation guarantees.
  */
 function argSeverity(arg: string): 'high' | 'medium' | null {
-	const a = arg.trim();
-	if (!a) return null;
-	const first = a[0];
-	if (first === '+' || first === '~') return null;
-	if (first === '>') return 'medium';
-	return 'high';
+	let severity: 'medium' | null = null;
+	for (const branch of splitTopLevel(arg)) {
+		const first = branch[0];
+		if (first === '+' || first === '~') continue;
+		if (first !== '>') return 'high';
+		severity = 'medium';
+	}
+	return severity;
 }
 
 function sheetLabel(sheet: CSSStyleSheet): string {
@@ -175,8 +173,10 @@ function customCssRuntimeOf(app: App): CustomCssRuntimeLike | null {
 	const css = (app as unknown as { customCss?: unknown }).customCss;
 	if (!css || typeof css !== 'object') return null;
 	const c = css as Partial<CustomCssRuntimeLike>;
-	if (!Array.isArray(c.extraStyleEls)) return null;
-	return c as CustomCssRuntimeLike;
+	return {
+		styleEl: c.styleEl ?? null,
+		extraStyleEls: Array.isArray(c.extraStyleEls) ? c.extraStyleEls : [],
+	};
 }
 
 /** Classify a stylesheet's owner as user theme, user snippet, plugin, or other. */
@@ -186,7 +186,9 @@ function sheetSource(sheet: CSSStyleSheet, css: CustomCssRuntimeLike | null): Ha
 		if (node === css.styleEl) return 'theme';
 		if (node instanceof HTMLStyleElement && css.extraStyleEls.includes(node)) return 'snippet';
 	}
-	if (node instanceof HTMLElement) return node.tagName.toLowerCase() === 'style' ? 'plugin' : 'other';
+	// A generic <style> may belong to Obsidian itself. Its tag alone cannot
+	// identify a third-party plugin. Only classify a plugin when its URL does.
+	if (sheet.href && /[/\\]plugins[/\\]/.test(sheet.href)) return 'plugin';
 	return 'other';
 }
 
@@ -222,16 +224,18 @@ export function scanHasPerformance(app?: App): HasFinding[] {
 		}
 	};
 
-	for (const sheet of Array.from(document.styleSheets)) {
+	for (const [index, sheet] of Array.from(document.styleSheets).entries()) {
+		if (sheet.disabled) continue;
 		let rules: CSSRuleList;
 		try {
 			rules = sheet.cssRules;
 		} catch {
-			// Unreadable from this origin (Obsidian's own app.css) — those have
-			// no :has() in this app version anyway.
+			// Unreadable sheets cannot be evaluated by this diagnostic.
 			continue;
 		}
-		walk(rules, sheetLabel(sheet), sheetSource(sheet, css));
+		// Anonymous style elements can have the same label. Keep their findings
+		// separate instead of deduplicating unrelated sheets together.
+		walk(rules, `${sheetLabel(sheet)} [sheet ${index + 1}]`, sheetSource(sheet, css));
 	}
 
 	return out.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'high' ? -1 : 1));
@@ -241,15 +245,23 @@ export function scanHasPerformance(app?: App): HasFinding[] {
  *  Uses only debug/warn (allowed by the obsidian no-console rule). */
 export function logHasFindings(findings: HasFinding[], force = false): void {
 	if (findings.length === 0) {
-		if (force) console.debug('[Book View] CSS :has() diagnostics: no expensive selectors found.');
+		if (force) console.debug('[Book View] CSS :has() diagnostics: no heuristic matches found.');
 		return;
 	}
 	for (const f of findings) {
 		console.debug(`[Book View] ${f.severity} [${f.source}] ${f.sheet} :: ${f.selector}`);
 	}
-	console.warn(
-		`[Book View] ${findings.length} expensive :has() selector(s). These rules make Blink treat every matching element (and its ancestors) as a :has() dependent; when the book mounts a section, the whole ancestor chain gets a style recalc. Prefer sibling-scoped :has(+ x) / :has(~ x), or scope the subject to a non-broad class.`,
-	);
+	const counts = (['snippet', 'theme', 'plugin', 'other'] as const)
+		.map((source) => `${source}=${findings.filter((finding) => finding.source === source).length}`)
+		.join(', ');
+	const message = `[Book View] CSS :has() heuristic: ${findings.length} candidate selector(s) (${counts}). `
+		+ 'This scans readable document stylesheets, not just snippets, and does not measure style or layout cost. '
+		+ 'Rules may be scoped to unrelated views or inactive conditions. Confirm slow selectors with a Performance recording.';
+	if (force || findings.some((finding) => finding.source === 'snippet' && finding.severity === 'high')) {
+		console.warn(message);
+	} else {
+		console.debug(message);
+	}
 }
 
 let warnedOnce = false;
@@ -274,7 +286,7 @@ export function maybeWarnHasSelectors(plugin: BookViewPlugin): void {
 	if (snippetHigh === 0) return;
 	const example = findings.find((f) => f.source === 'snippet' && f.severity === 'high')!.selector;
 	new Notice(
-		`Book View: ${snippetHigh} expensive :has() selector${snippetHigh > 1 ? 's' : ''} in your CSS snippets — they can cause style-recalc freezes on every section mount (details in console). Example: ${example}`,
+		`Book View: ${snippetHigh} potentially costly :has() selector${snippetHigh > 1 ? 's' : ''} in your CSS snippets. This is a heuristic, not a measured slowdown (details in console). Example: ${example}`,
 		15000,
 	);
 }

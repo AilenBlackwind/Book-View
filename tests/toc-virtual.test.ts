@@ -97,3 +97,13 @@ describe('firstItemAt / firstItemAfter', () => {
 		expect(firstItemAfter(offsets, 10_000, 7)).toBe(7);
 	});
 });
+
+it("uses measured heights for wrapped headings without changing file rows", () => {
+	const { items } = buildVirtualItems(entries, files, ALL, true);
+	const heights = new Map([[0, 48], [2, 70]]);
+	const offsets = computeVirtualOffsets(items, 26, 34, heights);
+	expect(offsets).toEqual([0, 34, 82, 108, 178, 212, 238, 264]);
+	expect(firstItemAt(offsets, 177, items.length)).toBe(3);
+	expect(firstItemAt(offsets, 178, items.length)).toBe(4);
+	expect(firstItemAfter(offsets, 83, items.length)).toBe(3);
+});

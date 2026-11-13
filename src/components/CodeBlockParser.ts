@@ -9,7 +9,8 @@ export interface RawCodeBlockLink {
 	display?: string;
 	/** Character offset of this link within the scanned (block) source, used
 	 *  to jump the editor cursor to the matching source line on click. */
-	offset?: number;
+	offset: number;
+	end: number;
 }
 
 /**
@@ -24,8 +25,8 @@ export interface RawCodeBlockLink {
  *   [Display Text](note-name)
  *   plain text lines are ignored
  */
-export function parseCodeBlockLinks(source: string): RawCodeBlockLink[] {
-	const LINK_RE = /\[\[([^\]]+)\]\]|\[([^\]]+)\]\(([^)]+)\)/g;
+export function parseCodeBlockLinks(source: string, includePlaceholders = false): RawCodeBlockLink[] {
+	const LINK_RE = /\[\[([^\]]*)\]\]|\[([^\]]+)\]\(([^)]+)\)/g;
 	const results: RawCodeBlockLink[] = [];
 
 	let m: RegExpExecArray | null;
@@ -34,41 +35,52 @@ export function parseCodeBlockLinks(source: string): RawCodeBlockLink[] {
 			const pipe = m[1].indexOf('|');
 			const target = (pipe === -1 ? m[1] : m[1].substring(0, pipe)).trim();
 			const display = pipe === -1 ? undefined : m[1].substring(pipe + 1).trim();
-			if (target) results.push({ target, display, offset: m.index });
+			if (target || (includePlaceholders && m[1] === '')) {
+				results.push({ target, display, offset: m.index, end: LINK_RE.lastIndex });
+			}
 		} else if (m[2] !== undefined && m[3] !== undefined) {
 			const display = m[2].trim();
 			const target = m[3].trim();
-			if (target) results.push({ target, display: display || undefined, offset: m.index });
+			if (target) results.push({ target, display: display || undefined, offset: m.index, end: LINK_RE.lastIndex });
 		}
 	}
 	return results;
 }
 
 /** Scan note-body fences, ignoring other languages and nested fence examples. */
-export function parseBookViewBlocks(source: string): RawCodeBlockLink[] {
-	const results: RawCodeBlockLink[] = [];
-	let fence: { marker: string; length: number; isBook: boolean } | null = null;
-	let body: string[] = [];
+export interface BookViewBlock {
+	from: number;
+	to: number;
+	indent: string;
+}
+
+export function findBookViewBlocks(source: string): BookViewBlock[] {
+	const blocks: BookViewBlock[] = [];
+	let fence: { marker: string; length: number; isBook: boolean; from: number; indent: string } | null = null;
+	let offset = 0;
 	for (const line of source.split('\n')) {
+		const start = offset;
+		offset += line.length + 1;
 		const match = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)\r?$/.exec(line);
 		if (!fence) {
 			if (!match) continue;
 			const marks = match[1]!;
 			const info = match[2]!.trim();
 			if (marks[0] === '`' && info.includes('`')) continue;
-			fence = { marker: marks[0]!, length: marks.length, isBook: info === 'book-view' };
-			body = [];
+			fence = { marker: marks[0]!, length: marks.length, isBook: info === 'book-view',
+				from: Math.min(offset, source.length), indent: line.slice(0, line.indexOf(marks)) };
 		} else if (match && match[1]![0] === fence.marker
 			&& match[1]!.length >= fence.length && !match[2]!.trim()) {
-			if (fence.isBook) results.push(...parseCodeBlockLinks(body.join('\n')));
+			if (fence.isBook) blocks.push({ from: fence.from, to: start, indent: fence.indent });
 			fence = null;
-			body = [];
-		} else if (fence.isBook) {
-			body.push(line);
 		}
 	}
-	if (fence?.isBook) results.push(...parseCodeBlockLinks(body.join('\n')));
-	return results;
+	if (fence?.isBook) blocks.push({ from: fence.from, to: source.length, indent: fence.indent });
+	return blocks;
+}
+
+export function parseBookViewBlocks(source: string): RawCodeBlockLink[] {
+	return findBookViewBlocks(source).flatMap(({ from, to }) => parseCodeBlockLinks(source.slice(from, to).replace(/\r?\n$/, '')));
 }
 
 /**

@@ -13,11 +13,13 @@ export class BookSearcher {
 		private readRawContent: (path: string) => string | null,
 	) {}
 
-	async search(query: string, maxResults = 200): Promise<SearchHit[]> {
+	async search(query: string, maxResults = 200, fresh = false): Promise<SearchHit[]> {
 		const hits: SearchHit[] = [];
 		for (const file of this.files) {
 			if (hits.length >= maxResults) break;
-			let content = this.readRawContent(file.path);
+			// Render caches can still contain the old text while an edited
+			// section is waiting for its asynchronous refresh.
+			let content = fresh ? null : this.readRawContent(file.path);
 			if (content === null || content === undefined) {
 				content = await this.app.vault.cachedRead(file);
 			}

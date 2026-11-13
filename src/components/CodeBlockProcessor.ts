@@ -1,6 +1,9 @@
-import { App, Editor, MarkdownPostProcessorContext, MarkdownView } from 'obsidian';
+import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Notice } from 'obsidian';
 import { parseCodeBlockLinks } from './CodeBlockParser';
 import { CodeBlockLinkSuggest } from './CodeBlockLinkSuggest';
+import { insertCodeBlockLink, locateCodeBlock, reorderCodeBlockLinks } from './CodeBlockEdits';
+import { codeBlockButton, showCreateNotePopover } from './CodeBlockCreateNote';
+import type { ChapterFolder } from '../settings';
 
 /**
  * Register a ```book-view code block processor that replaces the raw fenced
@@ -29,6 +32,7 @@ let activeInlineEditor: {
 	input: HTMLInputElement;
 	editor: Editor;
 	line: number;
+	start: number;
 	original: string;
 	suggest: CodeBlockLinkSuggest;
 } | null = null;
@@ -43,15 +47,18 @@ function closeInlineEditor(save: boolean): void {
 	const active = activeInlineEditor;
 	if (!active) return;
 	activeInlineEditor = null;
-	const value = active.input.value;
+	let value = active.input.value;
+	if (active.original === '[[]]' && !parseCodeBlockLinks(value, true).length) {
+		value = `[[${value.trim()}]]`;
+	}
 	active.input.remove();
 	active.suggest.close();
 	active.item.removeClass('book-view-codeblock-editing');
 	if (save && value !== active.original) {
 		active.editor.replaceRange(
 			value,
-			{ line: active.line, ch: 0 },
-			{ line: active.line, ch: active.original.length },
+			{ line: active.line, ch: active.start },
+			{ line: active.line, ch: active.start + active.original.length },
 		);
 	}
 }
@@ -62,9 +69,12 @@ function closeInlineEditor(save: boolean): void {
  *  an `AbstractInputSuggest` popover lists vault notes ranked by the same
  *  fuzzy search as the native `[[` autocomplete; picking one rewrites the
  *  link and closes the editor, so no link has to be typed by hand. */
-function openInlineEditor(app: App, item: HTMLElement, editor: Editor, line: number): void {
+function openInlineEditor(app: App, item: HTMLElement, editor: Editor, line: number, placeholderStart?: number): void {
 	closeInlineEditor(false);
-	const original = editor.getLine(line);
+	const text = editor.getLine(line);
+	const start = placeholderStart ?? 0;
+	const original = placeholderStart === undefined ? text : text.slice(start, start + 4);
+	if (placeholderStart !== undefined && original !== '[[]]') return;
 	const input = item.createEl('input', {
 		cls: 'book-view-codeblock-edit',
 		type: 'text',
@@ -73,7 +83,7 @@ function openInlineEditor(app: App, item: HTMLElement, editor: Editor, line: num
 	input.spellcheck = false;
 	item.addClass('book-view-codeblock-editing');
 	const suggest = new CodeBlockLinkSuggest(app, input, () => closeInlineEditor(true));
-	activeInlineEditor = { item, input, editor, line, original, suggest };
+	activeInlineEditor = { item, input, editor, line, start, original, suggest };
 	input.addEventListener('click', (evt) => evt.stopPropagation());
 	input.addEventListener('keydown', (evt: KeyboardEvent) => {
 		if (evt.key === 'Enter') {
@@ -100,8 +110,9 @@ function openInlineEditor(app: App, item: HTMLElement, editor: Editor, line: num
 			if (activeInlineEditor?.input === input) closeInlineEditor(false);
 		}, 0);
 	});
-	input.focus();
-	input.select();
+	input.focus({ preventScroll: true });
+	if (original === '[[]]') input.setSelectionRange(2, 2);
+	else input.select();
 }
 export function registerBookViewCodeBlock(
 	app: App,
@@ -113,21 +124,114 @@ export function registerBookViewCodeBlock(
 			ctx: MarkdownPostProcessorContext,
 		) => void,
 	) => void,
+	preferredFolder: () => ChapterFolder,
 ): void {
+	let pendingEdit: {
+		editor: Editor;
+		path: string;
+		line: number;
+		body: string;
+		row: number;
+		action: 'highlight' | 'focus' | 'edit';
+	} | undefined;
 	register('book-view', (source, el, ctx) => {
-		const rawLinks = parseCodeBlockLinks(source);
+		const rawLinks = parseCodeBlockLinks(source, true);
 		if (rawLinks.length === 0) return;
 
 		const list = el.createDiv({ cls: 'book-view-codeblock-list' });
+		const listFile = app.vault.getFileByPath(ctx.sourcePath);
+		const locate = () => {
+			const editor = findEditorFor(app, list, ctx.sourcePath);
+			if (editor) return locateCodeBlock(editor, ctx, el, source);
+			return undefined;
+		};
+		const updateBlock = (block: NonNullable<ReturnType<typeof locate>>, body: string, row: number,
+			action: NonNullable<typeof pendingEdit>['action']) => {
+			if (body === block.body) return;
+			closeInlineEditor(false);
+			const update = { editor: block.editor, path: ctx.sourcePath, line: block.line, body, row, action };
+			pendingEdit = update;
+			block.replaceKeepingScroll(body);
+			el.win.setTimeout(() => {
+				if (pendingEdit === update) pendingEdit = undefined;
+			}, 2000);
+		};
+		const move = (from: number, to: number, restoreFocus = false) => {
+			if (from === to || to < 0 || to >= rawLinks.length) return;
+			const block = locate();
+			if (!block) {
+				new Notice('The chapter list changed. Try moving the link again.');
+				return;
+			}
+			const body = reorderCodeBlockLinks(block.body, from, to);
+			updateBlock(block, body, to, restoreFocus ? 'focus' : 'highlight');
+		};
+		let dragging: number | undefined;
+		let dropTarget: HTMLElement | undefined;
+		const clearDropTarget = () => {
+			dropTarget?.removeClass('book-view-codeblock-drop-before', 'book-view-codeblock-drop-after');
+			dropTarget = undefined;
+		};
 
-		for (const raw of rawLinks) {
+		for (const [index, raw] of rawLinks.entries()) {
 			const item = list.createDiv({ cls: 'book-view-codeblock-item' });
-			item.dataset.linkOffset = String(raw.offset ?? 0);
+			item.dataset.linkOffset = String(raw.offset);
+			if (!raw.target) item.dataset.emptyLink = 'true';
+			if (listFile && rawLinks.length > 1) {
+				const handle = codeBlockButton(item, 'Move link (up or down arrow)', 'grip-vertical', 'book-view-codeblock-grip');
+				handle.draggable = true;
+				handle.addEventListener('click', (event) => event.stopPropagation());
+				handle.addEventListener('keydown', (event) => {
+					if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+					event.preventDefault();
+					event.stopPropagation();
+					move(index, index + (event.key === 'ArrowUp' ? -1 : 1), true);
+				});
+				handle.addEventListener('dragstart', (event) => {
+					if (!locate() || !event.dataTransfer) {
+						event.preventDefault();
+						return;
+					}
+					event.stopPropagation();
+					dragging = index;
+					event.dataTransfer.effectAllowed = 'move';
+					event.dataTransfer.setData('application/x-book-view-link', String(index));
+					const bounds = item.getBoundingClientRect();
+					event.dataTransfer.setDragImage(item, event.clientX - bounds.left, event.clientY - bounds.top);
+				});
+				handle.addEventListener('dragend', () => {
+					dragging = undefined;
+					clearDropTarget();
+				});
+			}
+			const insertAfter = (event: DragEvent) => {
+				const bounds = item.getBoundingClientRect();
+				return event.clientY >= bounds.top + bounds.height / 2;
+			};
+			item.addEventListener('dragover', (event) => {
+				if (dragging === undefined) return;
+				event.preventDefault();
+				event.stopPropagation();
+				if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+				clearDropTarget();
+				dropTarget = item;
+				item.addClass(insertAfter(event) ? 'book-view-codeblock-drop-after' : 'book-view-codeblock-drop-before');
+			});
+			item.addEventListener('drop', (event) => {
+				if (dragging === undefined) return;
+				event.preventDefault();
+				event.stopPropagation();
+				const slot = index + (insertAfter(event) ? 1 : 0);
+				const from = dragging;
+				dragging = undefined;
+				clearDropTarget();
+				move(from, slot > from ? slot - 1 : slot);
+			});
 
-			const resolved = app.metadataCache.getFirstLinkpathDest(
+			const resolved = raw.target ? app.metadataCache.getFirstLinkpathDest(
 				raw.target,
-				'',
-			);
+				ctx.sourcePath,
+			) : null;
 
 			if (resolved) {
 				const link = item.createEl('a', {
@@ -138,10 +242,54 @@ export function registerBookViewCodeBlock(
 				link.dataset.tooltipPosition = 'top';
 			} else {
 				item.createSpan({
-					cls: 'book-view-codeblock-broken',
-					text: raw.display ?? raw.target,
+					cls: raw.target ? 'book-view-codeblock-broken' : 'book-view-codeblock-empty-link',
+					text: raw.target ? raw.display ?? raw.target : 'Empty link',
 				});
 			}
+			if (listFile) {
+				const add = codeBlockButton(item, 'Add link below', 'plus', 'book-view-codeblock-add');
+				add.addEventListener('click', (event) => {
+					event.stopPropagation();
+					if (!locate()) {
+						new Notice('The chapter list changed. Try opening the form again.');
+						return;
+					}
+					closeInlineEditor(false);
+					showCreateNotePopover(app, add, listFile, resolved?.extension === 'md' ? resolved : null,
+						preferredFolder(), () => !!locate(), (link) => {
+							const block = locate();
+							if (!block) throw new Error('Chapter list changed');
+							block.replace(insertCodeBlockLink(block.body, index, link, block.indent));
+						}, () => {
+							const block = locate();
+							if (!block) {
+								new Notice('The chapter list changed. Try opening the form again.');
+								return;
+							}
+							updateBlock(block, insertCodeBlockLink(block.body, index, '[[]]', block.indent), index + 1, 'edit');
+						});
+				});
+			}
+		}
+
+		const update = pendingEdit;
+		if (update?.path === ctx.sourcePath) {
+			el.win.requestAnimationFrame(() => {
+				if (pendingEdit !== update) return;
+				const block = locate();
+				if (block?.editor !== update.editor || block.line !== update.line || block.body !== update.body) return;
+				const item = list.children.item(update.row) as HTMLElement | null;
+				if (!item) return;
+				pendingEdit = undefined;
+				if (update.action === 'edit') {
+					editCodeBlockRow(app, item, block.editor, block.line, source);
+				} else {
+					item.addClass('book-view-codeblock-moved');
+					if (update.action === 'focus') {
+						item.querySelector<HTMLElement>('.book-view-codeblock-grip')?.focus({ preventScroll: true });
+					}
+				}
+			});
 		}
 
 		el.addEventListener('click', (evt) =>
@@ -176,31 +324,43 @@ function handleCodeBlockClick(
 
 	// The whole row is the edit affordance; only intercept where there is an
 	// editor to write to (Live Preview). Reading view has none → fall through.
-	const editor = findEditorFor(app, item);
+	const editor = findEditorFor(app, item, ctx.sourcePath);
 	if (!editor) return;
 
 	evt.preventDefault();
 	evt.stopPropagation();
 
 	const info = ctx.getSectionInfo(item);
-	if (!info?.lineStart) return;
+	if (!info) return;
 
+	editCodeBlockRow(app, item, editor, info.lineStart, source);
+}
+
+function editCodeBlockRow(app: App, item: HTMLElement, editor: Editor, fenceLine: number, source: string): void {
+	const offset = Number(item.dataset.linkOffset);
 	// `source` is the block's inner content (no fences); the line containing
 	// the link is `lineStart + 1` (skip the opening fence) plus the 0-based
 	// line of the offset within the block content.
 	const blockLine = source.slice(0, offset).split('\n').length - 1;
-	const line = info.lineStart + 1 + blockLine;
+	const line = fenceLine + 1 + blockLine;
 	if (line < 0 || line >= editor.lineCount()) return;
 
-	openInlineEditor(app, item, editor, line);
+	const start = item.dataset.emptyLink ? offset - (source.lastIndexOf('\n', offset - 1) + 1) : undefined;
+	openInlineEditor(app, item, editor, line, start);
 }
 
 /** The MarkdownView editor owning `item` (its leaf's container contains it),
  *  or null when none (reading view, no editable container). */
-function findEditorFor(app: App, item: HTMLElement): Editor | null {
+function findEditorFor(app: App, item: HTMLElement, sourcePath: string): Editor | null {
+	if (!item.closest('.markdown-source-view')) return null;
+	const active = app.workspace.activeEditor;
+	if (active instanceof MarkdownView && active.file?.path === sourcePath && active.containerEl.contains(item)) {
+		return active.editor;
+	}
 	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
 		const view = leaf.view;
 		if (!(view instanceof MarkdownView)) continue;
+		if (view.file?.path !== sourcePath || view.getMode() !== 'source') continue;
 		if (!view.containerEl.contains(item)) continue;
 		if (!view.editor) continue;
 		return view.editor;

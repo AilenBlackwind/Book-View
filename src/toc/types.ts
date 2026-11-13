@@ -17,6 +17,7 @@ export interface TocSettings {
 	tocShowFileNames: boolean;
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
+	tocWrapHeadings?: boolean;
 	tocCollapsedLevel: number;
 	tocCollapseRestLevel: number;
 	autoExpandMode: AutoExpandMode;

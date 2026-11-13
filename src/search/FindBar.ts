@@ -71,7 +71,12 @@ export class FindBar {
 	}
 
 	hide(): void {
+		window.clearTimeout(this.debounceTimer);
 		this.el.removeClass('is-open');
+	}
+
+	isOpen(): boolean {
+		return this.el.hasClass('is-open');
 	}
 
 	getQuery(): string {

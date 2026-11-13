@@ -29,14 +29,35 @@ Book View renders a sequence of linked notes as a single, continuous long-form d
 
 ---
 
+## Shared chapter lists
+
+Keep a chapter list in a separate note, for example `Shared chapters.md`:
+
+```markdown
+[[Chapter 1]]
+[[Chapter 2]]
+```
+
+Embed it in any number of book notes:
+
+```markdown
+---
+book-view: true
+---
+![[Shared chapters]]
+```
+
+Book View expands the list into chapters at the embed's position. Editing the shared list updates every open book that uses it. The list note needs no `book-view` property. Nested embeds, Markdown note embeds, heading embeds (`![[Shared chapters#Part]]`) and block embeds (`![[Shared chapters#^list]]`) are supported. Relative links resolve from the note containing them; repeated chapters appear once, and cyclic embeds stop safely. Image and other attachment embeds do not become chapter lists. Ordinary chapter links keep their usual behavior.
+
 ## Additional Features
 
 * Customizable scroll speed in Book View.
 * Ability to change the modifier key or set a custom key combination for editing notes.
 * Scripting API that allows reading and modifying atomized text.
 * Customizable dropdown menu for running script commands.
+* Right-click a table of contents heading and select **Copy section** to copy its Markdown and nested subsections, across linked notes, up to the next heading of the same or higher level. Note properties are excluded; no manuscript file is created.
 
-**Create book** saves a new manifest and excludes existing book manifests from its chapter list. If the filename is taken, it adds a numbered suffix such as `(2)`; existing files are preserved. **Collect manuscript from linked notes** saves a new export alongside the source book and uses the same naming rule.
+**Create book** saves a new manifest and excludes existing book manifests from its chapter list. If the filename is taken, it adds a numbered suffix such as `(2)`; existing files are preserved. **Collect manuscript from linked notes** saves a new export alongside the source book and uses the same naming rule. Run it while the book or its table of contents is active; the exported manuscript opens in a new tab.
 
 **Apply buffer changes** keeps the buffer when any section conflicts or is missing. Successfully applied sections can be retried safely; the buffer is moved to trash only after all mapped sections have been applied.
 
@@ -113,3 +134,13 @@ Enable the snippet in **Settings → Appearance → CSS snippets**. To style onl
 
 ## Script API
 [Script API](SCRIPT_API.md)
+
+## Diagnosing intermittent slow startup
+
+Enable **Settings → Book View → General → Startup diagnostics**, then fully restart Obsidian. This setting is off by default. Each launch records the first 60 seconds after Book View loads and keeps the latest 20 reports in `startup-diagnostics.json` inside this plugin's folder. Reloading the plugin in an already running app is labelled separately from a startup.
+
+The reports include timings for tab restoration, caller stacks, workspace readiness, pending operations, event loop gaps, and errors. Book View separately measures the inherited file-restoration step, pane-size wait, metadata wait, and book loading. The recorder temporarily observes the public `WorkspaceLeaf.setViewState` method and restores it after recording. It does not delay restoration to wait for layout readiness. Recording begins after Book View's settings load, so it cannot see initialization or earlier plugin activity.
+
+No note contents or tab file paths are added to the report. Error messages and caller stacks may contain paths or details from Obsidian or other plugins; review reports before sharing them. Everything stays inside the vault until you choose to copy a report. There are no network requests.
+
+After a slow launch, run **Book View: Copy startup reports** and copy Obsidian's **Startup time** report using the stopwatch in **Settings → General → Advanced**. The startup reports remain available across restarts. For comparison, change only Homepage's **Open on startup** setting, keep the workspace comparable, and collect reports with that setting both on and off. A successful run alone does not rule out an intermittent problem; a pending operation or plugin caller is a lead, not proof of responsibility. Disable startup diagnostics after the investigation and restart Obsidian; saved reports remain available in the plugin folder and can be deleted there.

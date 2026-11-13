@@ -31,6 +31,14 @@ export type EditorMode = 'popup' | 'native';
  *  overrides it with bookWidth px. */
 export type BookWidthMode = 'obsidian' | 'custom';
 
+export const CHAPTER_FOLDER_OPTIONS = {
+	list: 'Same folder as the chapter list',
+	chapter: 'Same folder as the selected note',
+	root: 'Vault root',
+} as const;
+
+export type ChapterFolder = keyof typeof CHAPTER_FOLDER_OPTIONS;
+
 /** Sane limits for the custom book width (px). */
 export const BOOK_WIDTH_MIN = 400;
 export const BOOK_WIDTH_MAX = 1600;
@@ -40,9 +48,12 @@ import type { AutoExpandMode } from './toc/types';
 export type { AutoExpandMode } from './toc/types';
 
 export interface BookViewSettings {
+	startupDiagnosticsEnabled: boolean;
+	chapterFolderFirst: ChapterFolder;
 	tocShowFileNames: boolean;
 	tocGuides: boolean;
 	tocRenderMarkdown: boolean;
+	tocWrapHeadings: boolean;
 	tocCollapsedLevel: number;
 	autoExpandMode: AutoExpandMode;
 	tocCollapseRestLevel: number;
@@ -66,9 +77,12 @@ export interface BookViewSettings {
 }
 
 export const DEFAULT_SETTINGS: BookViewSettings = {
+	startupDiagnosticsEnabled: false,
+	chapterFolderFirst: 'list',
 	tocShowFileNames: true,
 	tocGuides: true,
 	tocRenderMarkdown: true,
+	tocWrapHeadings: false,
 	tocCollapsedLevel: 0,
 	autoExpandMode: 'disabled',
 	tocCollapseRestLevel: 0,

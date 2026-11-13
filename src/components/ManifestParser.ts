@@ -1,8 +1,5 @@
 import { App, TFile } from 'obsidian';
-import {
-	parseBookViewBlocks,
-	resolveCodeBlockLinks,
-} from './CodeBlockParser';
+import { collectManifestLinks } from './EmbeddedManifest';
 
 export type ManifestLink =
 	| { type: 'file'; file: TFile }
@@ -48,88 +45,14 @@ export function frontmatterEndOffset(content: string): number {
 	return match[0].length;
 }
 
-/**
- * Collect all links that define the book's ordered section list.
- *
- * Two sources are combined:
- *  1. `cache.links` — Obsidian's metadata-cache entries for `[[wikilinks]]`
- *     and `[markdown](links)` in the note body (these appear in the graph).
- *  2. Links inside ` ```book-view ``` fenced code blocks — parsed from the
- *     raw file content so they are invisible to Obsidian's graph view.
- *
- * Both sets are deduplicated by resolved path; whichever source mentions a
- * path first wins.  The code-block pass is intentionally sequenced after the
- * cache pass so that "real" links keep their priority.
- */
+/** Collect chapters, expanding embedded lists and tracking their source notes. */
 export async function getManifestLinks(
 	app: App,
 	masterFile: TFile,
 	rawContent?: string,
+	sources?: Set<string>,
 ): Promise<ManifestLink[]> {
-	const cache = app.metadataCache.getFileCache(masterFile);
-	const links: ManifestLink[] = [];
-	const seen = new Set<string>();
-
-	// Raw content is needed both to filter frontmatter links out of the
-	// cache pass and to parse ```book-view code blocks. Read it once here.
-	let raw: string;
-	try {
-		raw = rawContent ?? await app.vault.cachedRead(masterFile);
-	} catch {
-		// File may have been deleted between the cache hit and this read;
-		// fall back to the cache pass without position filtering.
-		raw = '';
-	}
-	const fmEnd = frontmatterEndOffset(raw);
-
-	// ── Pass 1: regular metadata-cache links (body only) ──────────────
-	if (cache?.links) {
-		for (const link of cache.links) {
-			// Skip links whose span lies inside the frontmatter block (e.g. a
-			// `chapters:` list). The frontmatter describes book metadata, not
-			// sections to render, so it must never appear in the scroll.
-			const pos = link.position?.start?.offset ?? -1;
-			if (raw && fmEnd > 0 && pos >= 0 && pos < fmEnd) continue;
-
-			const resolved = app.metadataCache.getFirstLinkpathDest(
-				link.link,
-				masterFile.path,
-			);
-
-			if (!(resolved instanceof TFile) || resolved.extension !== 'md') {
-				if (!seen.has(link.link)) {
-					seen.add(link.link);
-					links.push({ type: 'broken', display: link.original });
-				}
-				continue;
-			}
-
-			if (seen.has(resolved.path)) continue;
-			seen.add(resolved.path);
-
-			const content = app.vault.getFileByPath(resolved.path);
-			if (content && content.stat.size === 0) {
-				links.push({ type: 'empty', file: resolved });
-			} else {
-				links.push({ type: 'file', file: resolved });
-			}
-		}
-	}
-
-	// ── Pass 2: ```book-view fenced code blocks ───────────────────────
-	try {
-		const rawLinks = parseBookViewBlocks(raw.slice(fmEnd));
-		if (rawLinks.length > 0) {
-			links.push(
-				...resolveCodeBlockLinks(app, masterFile, rawLinks, seen),
-			);
-		}
-	} catch {
-		// File may have been deleted between the cache hit and this read;
-		// silently skip code-block links — the regular links still stand.
-	}
-
-	return links;
+	return collectManifestLinks(app, masterFile, rawContent, sources);
 }
 
 export async function getManifestFiles(

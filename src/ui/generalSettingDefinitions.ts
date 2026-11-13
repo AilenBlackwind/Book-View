@@ -1,9 +1,22 @@
 import type BookViewPlugin from '../main';
 import type { BookSettingDefinition } from './settingDefinitions';
-import type { BookWidthMode, EditorMode } from '../settings';
-import { BOOK_WIDTH_MIN, BOOK_WIDTH_MAX } from '../settings';
+import type { BookWidthMode, ChapterFolder, EditorMode } from '../settings';
+import { BOOK_WIDTH_MIN, BOOK_WIDTH_MAX, CHAPTER_FOLDER_OPTIONS } from '../settings';
 export function generalSettingDefinitions(plugin: BookViewPlugin, refresh: () => void): BookSettingDefinition[] {
 	return [
+		{
+			name: 'Preferred folder for new chapters',
+			desc: 'First folder offered when creating a note from a chapter list.',
+			render: (setting) => {
+				setting.addDropdown((drop) => drop
+					.addOptions(CHAPTER_FOLDER_OPTIONS)
+					.setValue(plugin.settings.chapterFolderFirst)
+					.onChange(async (value) => {
+						plugin.settings.chapterFolderFirst = value as ChapterFolder;
+						await plugin.saveSettings();
+					}));
+			},
+		},
 		{
 			name: 'Reading',
 			render: (setting) => {
@@ -64,7 +77,7 @@ export function generalSettingDefinitions(plugin: BookViewPlugin, refresh: () =>
 		},
 		{
 			name: 'Warn about expensive CSS :has() selectors',
-			desc: 'Scan your enabled CSS snippets for :has() selectors that make Obsidian recalculate styles across the whole app on every section mount, and warn once per session when one is found. Sibling-scoped :has(+ X) selectors are safe and are not reported. Selectors from themes and other plugins are only logged to the console.',
+			desc: 'Warn once per session about potentially costly :has() selectors in enabled CSS snippets. This heuristic does not measure slowdowns. Theme and other stylesheet findings are logged as diagnostic information in the console.',
 			render: (setting) => {
 				setting
 					.addToggle((toggle) => toggle

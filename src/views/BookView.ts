@@ -217,6 +217,8 @@ export class BookView extends FileView {
 	private wheelAccelerator: WheelAccelerator | null = null;
 	private currentFiles: TFile[] = [];
 	private manifestPaths: Set<string> = new Set();
+	private emptyChapterPaths = new Set<string>();
+	private manifestSources = new Set<string>();
 	/** Path actually rendered into the view (setState pre-sets filePath, so a
 	 *  separate field is needed to detect duplicate loads of the same book). */
 	private loadedPath = '';
@@ -293,6 +295,8 @@ export class BookView extends FileView {
 
 	protected async onOpen(): Promise<void> {
 		const t0 = performance.now();
+		const diagnostics = this.plugin?.startupDiagnostics;
+		diagnostics?.record(`book#${this.instanceId} onOpen`, `${diagnostics.leafName(this.leaf)} layoutReady=${this.app.workspace.layoutReady}`);
 		DebugLog.startup('onOpen', this.filePath || '(no path)', `layout=${this.app.workspace.layoutReady}`);
 		const state = this.getState();
 		if (typeof state.filePath === 'string' && state.filePath) {
@@ -303,19 +307,29 @@ export class BookView extends FileView {
 	}
 
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
-		await super.setState(state, result);
-		const s = state as Record<string, unknown>;
-		// Accept both conventions: `filePath` (our plugin) and `file` (Obsidian FileView / workspace restore).
-		const raw = (typeof s?.filePath === 'string' && s.filePath)
-			|| (typeof s?.file === 'string' && s.file);
-		if (raw) {
-			this.filePath = raw;
-			this.file = this.app.vault.getFileByPath(raw) ?? null;
-			await this.loadBookWhenReady(raw);
+		const diagnostics = this.plugin?.startupDiagnostics?.active ? this.plugin.startupDiagnostics : null;
+		const end = diagnostics?.begin(`book#${this.instanceId} setState`);
+		try {
+			await (diagnostics?.measure(`book#${this.instanceId} FileView.setState`, () => super.setState(state, result))
+				?? super.setState(state, result));
+			const s = state as Record<string, unknown>;
+			// Accept both conventions: `filePath` (our plugin) and `file` (Obsidian FileView / workspace restore).
+			const raw = (typeof s?.filePath === 'string' && s.filePath)
+				|| (typeof s?.file === 'string' && s.file);
+			if (raw) {
+				this.filePath = raw;
+				this.file = this.app.vault.getFileByPath(raw) ?? null;
+				await this.loadBookWhenReady(raw);
+			}
+			end?.();
+		} catch (error) {
+			end?.(error);
+			throw error;
 		}
 	}
 
 	protected async onClose(): Promise<void> {
+		this.plugin?.startupDiagnostics?.record(`book#${this.instanceId} onClose`);
 		this.plugin?.tocCoordinator?.onBookClosed(this);
 		this.cleanup();
 	}
@@ -348,6 +362,7 @@ export class BookView extends FileView {
 		for (const path of paths) {
 			this.absoluteManager?.markDirty(path);
 		}
+		this.refreshFindResults();
 	}
 
 	// ------------------------------------------------------------------ find
@@ -374,15 +389,20 @@ export class BookView extends FileView {
 			this.contentEl.appendChild(this.findBar.el);
 		}
 		this.findBar.show();
+		if (this.findBar.getQuery().trim()) this.scheduleFind(this.findBar.getQuery(), true);
 	}
 
 	closeFindBar(): void {
+		window.clearTimeout(this.findDebounce);
+		this.findRequestId++;
 		this.findBar?.hide();
 		this.clearFindMarks();
 		this.findMatches = [];
 		this.findIndex = -1;
+		this.findQuery = '';
 		this.findAllActive = false;
 		this.findBar?.setFindAllActive(false);
+		this.findBar?.setCount(0, 0);
 	}
 
 	/** ESC entry point, called by the plugin's window capture handler. Closes
@@ -393,17 +413,27 @@ export class BookView extends FileView {
 		this.closeFindBar();
 	}
 
-	private scheduleFind(query: string): void {
+	private scheduleFind(query: string, refresh = false): void {
 		window.clearTimeout(this.findDebounce);
-		this.findDebounce = window.setTimeout(() => void this.runFind(query), 150);
+		this.findRequestId++;
+		this.findDebounce = window.setTimeout(() => void this.runFind(query, refresh), 150);
 	}
 
-	private async runFind(query: string): Promise<void> {
+	private refreshFindResults(): void {
+		if (!this.findBar?.isOpen()) return;
+		this.scheduleFind(this.findBar.getQuery(), true);
+	}
+
+	private async runFind(query: string, refresh = false): Promise<void> {
 		const q = query.trim();
 		const requestId = ++this.findRequestId;
+		const keepAll = refresh && this.findAllActive;
+		const previous = refresh ? this.findMatches[this.findIndex] : undefined;
+		const previousIndex = this.findIndex;
 		this.clearFindMarks();
-		this.findAllActive = false;
-		this.findBar?.setFindAllActive(false);
+		this.findAllActive = keepAll;
+		this.findBar?.setFindAllActive(keepAll);
+		this.findQuery = q;
 
 		if (!q) {
 			this.findMatches = [];
@@ -412,21 +442,25 @@ export class BookView extends FileView {
 			return;
 		}
 
-		if (q !== this.findQuery) {
-			this.findQuery = q;
-			const searcher = new BookSearcher(
-				this.app,
-				this.currentFiles,
-				(path) => this.absoluteManager?.getRawContent(path) ?? null,
-			);
-			const hits = await searcher.search(q, 200);
-			if (requestId !== this.findRequestId) return;
-			this.findMatches = hits;
-			this.findIndex = hits.length ? 0 : -1;
+		const searcher = new BookSearcher(
+			this.app,
+			this.currentFiles,
+			(path) => this.absoluteManager?.getRawContent(path) ?? null,
+		);
+		const hits = await searcher.search(q, 200, refresh);
+		if (requestId !== this.findRequestId) return;
+		this.findMatches = hits;
+		this.findIndex = hits.length ? 0 : -1;
+		if (refresh && hits.length) {
+			const retained = previous ? hits.findIndex((hit) => hit.filePath === previous.filePath
+				&& hit.line === previous.line && hit.column === previous.column) : -1;
+			this.findIndex = retained >= 0 ? retained : Math.max(0, Math.min(previousIndex, hits.length - 1));
 		}
 
 		this.updateFindCount();
-		if (this.findIndex >= 0) {
+		if (keepAll) this.highlightAll(q);
+		// Live refresh must not pull the reader away from the note being edited.
+		if (!refresh && this.findIndex >= 0) {
 			void this.gotoFindMatch();
 		}
 	}
@@ -553,6 +587,26 @@ export class BookView extends FileView {
 	/** Open a note in Obsidian's native editor in a separate popout window
 	 *  (public API). Used as the 'native' editor mode and as the fallback
 	 *  when the detached-leaf popup fails. */
+	private openChapterPopover(file: TFile, line: number): void {
+		try {
+			new NativeLeafPopover(
+				this.app,
+				file,
+				line,
+				this.plugin?.settings.popupHideFrontmatter ?? false,
+				this.bookCssClasses,
+				() => {
+					this.absoluteManager?.markDirty(file.path);
+					this.refreshFindResults();
+				},
+				() => this.openNativePopout(file, line),
+			).open();
+		} catch (error) {
+			DebugLog.log('EDIT', 'popover failed, opening popout window:', String(error));
+			this.openNativePopout(file, line);
+		}
+	}
+
 	private openNativePopout(targetFile: TFile, targetLine: number): void {
 		const leaf = this.app.workspace.openPopoutLeaf();
 		this.popoutLeaf = leaf;
@@ -778,6 +832,8 @@ export class BookView extends FileView {
 
 	private async loadBookWhenReady(filePath: string): Promise<void> {
 		const t0 = performance.now();
+		const diagnostics = this.plugin?.startupDiagnostics?.active ? this.plugin.startupDiagnostics : null;
+		const endSizeWait = diagnostics?.begin(`book#${this.instanceId} wait for pane size`);
 		// Deferred-view replay (app startup) can run before workspace layout is
 		// marked ready — awaiting onLayoutReady there would deadlock on the 5s
 		// safety timeout (obsidian creates leaves → calls onOpen → we await
@@ -789,14 +845,19 @@ export class BookView extends FileView {
 		// leaf already sized) skip the loop instantly.
 		for (let i = 0; i < 120 && this.contentEl.clientHeight <= 0; i++) {
 			await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-			if (this.leaf.view !== this) return;
+			if (this.leaf.view !== this) {
+				endSizeWait?.();
+				return;
+			}
 		}
+		endSizeWait?.();
 		const waitMs = performance.now() - t0;
 		if (waitMs > 100) {
 			DebugLog.log('LOAD wait-ms', String(this.instanceId), filePath, Math.round(waitMs));
 			DebugLog.startup('onOpen waited', filePath, `${Math.round(waitMs)}ms`);
 		}
-		await this.loadBook(filePath);
+		await (diagnostics?.measure(`book#${this.instanceId} loadBook`, () => this.loadBook(filePath))
+			?? this.loadBook(filePath));
 		DebugLog.startup('loadBook done', filePath, `${Math.round(performance.now() - t0)}ms`);
 	}
 
@@ -836,6 +897,8 @@ export class BookView extends FileView {
 			DebugLog.log('LOAD skip', String(this.instanceId), filePath);
 			return;
 		}
+		const reloadTop = force && this.loadedPath === filePath ? this.contentContainer?.scrollTop : undefined;
+		const anchor = reloadTop === undefined ? undefined : this.absoluteManager?.getReadingAnchor(reloadTop);
 		this.cleanup();
 		// Clear in-memory scroll state: cleanup already persisted to
 		// plugin.scrollPositions keyed by filePath, so the next restore
@@ -864,7 +927,8 @@ export class BookView extends FileView {
 		const { match: hasRawLinks, raw: manifestRaw } = await this.rawContainsLinks(file);
 		if (cacheMissing && hasRawLinks) {
 			DebugLog.log('LOAD wait-metadata', String(this.instanceId), filePath);
-			await this.waitForManifestCache(file);
+			await (this.plugin?.startupDiagnostics?.measure(`book#${this.instanceId} wait for metadata`, () => this.waitForManifestCache(file))
+				?? this.waitForManifestCache(file));
 		}
 
 		this.contentEl.empty();
@@ -988,17 +1052,21 @@ export class BookView extends FileView {
 			() => this.absoluteManager?.isNativeScrollActive() ?? false,
 		);
 
-		const links = await getManifestLinks(this.app, file, manifestRaw);
+		const links = await getManifestLinks(this.app, file, manifestRaw, this.manifestSources);
+		this.watchManifestChanges(comp);
+
 		const files = links
 			.filter((l): l is { type: 'file'; file: TFile } => l.type === 'file')
 			.map((l) => l.file);
 		if (links.length === 0) {
 			this.contentContainer.createDiv({ cls: 'book-empty', text: 'No linked notes found in manifest.' });
+			this.initialLoadInProgress = false;
 			return;
 		}
 
 		this.currentFiles = files;
 		this.manifestPaths = new Set(files.map((f) => f.path));
+		this.emptyChapterPaths = new Set(links.flatMap((link) => link.type === 'empty' ? [link.file.path] : []));
 
 		const settings = this.plugin?.settings;
 
@@ -1030,12 +1098,26 @@ export class BookView extends FileView {
 			this.absoluteManager.themeSpacings = this.plugin.themeSpacings;
 		}
 		this.absoluteManager.render();
+		if (reloadTop !== undefined) {
+			if (!anchor || !this.absoluteManager.restoreReadingAnchor(anchor)) {
+				const container = this.contentContainer;
+				guardedScrollWrite(container, () => { container.scrollTop = reloadTop; });
+			}
+		}
 
 		// In-book ToC is disabled for the sidebar-toc spike. The right-rail
 		// BookTocView owns TocController + tagHeadings via the coordinator,
 		// which rebinds after this book finishes loading.
 		this.plugin?.tocCoordinator?.setCurrentBook(this);
 		this.plugin?.onBookOpened();
+
+		comp.registerDomEvent(this.contentContainer, 'click', (evt: MouseEvent) => {
+			const button = (evt.target as HTMLElement).closest<HTMLElement>('.book-edit-empty-note');
+			const file = button?.dataset.path && this.app.vault.getFileByPath(button.dataset.path);
+			if (!file) return;
+			evt.stopPropagation();
+			this.openChapterPopover(file, 0);
+		});
 
 		comp.registerDomEvent(this.contentContainer, 'dblclick', (evt: MouseEvent) => {
 			const mod = this.plugin?.settings.editorModifiers;
@@ -1076,25 +1158,7 @@ export class BookView extends FileView {
 			//    via vault.on('modify'); NativeLeafPopover also re-renders on close.
 			//  - 'native': the native editor in a separate popout window.
 			if (this.plugin?.settings.editorMode === 'popup') {
-				// The popup relies on a private WorkspaceLeaf constructor; if a
-				// future Obsidian version removes/breaks it, open the native
-				// popout window instead so the click always yields an editor.
-				try {
-					new NativeLeafPopover(
-						this.app,
-						targetFile,
-						targetLine,
-						this.plugin?.settings.popupHideFrontmatter ?? false,
-						this.bookCssClasses,
-						() => {
-							this.absoluteManager?.markDirty(targetFile.path);
-						},
-						() => this.openNativePopout(targetFile, targetLine),
-					).open();
-				} catch (err) {
-					DebugLog.log('EDIT', 'popover failed, opening popout window:', String(err instanceof Error ? err.message : err));
-					this.openNativePopout(targetFile, targetLine);
-				}
+				this.openChapterPopover(targetFile, targetLine);
 			} else {
 				this.openNativePopout(targetFile, targetLine);
 			}
@@ -1338,10 +1402,30 @@ export class BookView extends FileView {
 			}),
 		);
 
+
+		// Restore persisted scroll position on initial load: the
+		// active-leaf-change listener only fires on leaf switches, not on
+		// the first activation (the leaf is already active when loadBook
+		// registers the listener). Defer until sections have mounted and
+		// scrollHeight is non-zero (the pool creates placeholders with
+		// estimated heights synchronously, but the ResizeObserver needs
+		// one paint frame to report real heights).
+		if (reloadTop === undefined) this.schedulePersistedScrollRestore();
+		else {
+			this.initialLoadInProgress = false;
+			this.saveScrollPosition();
+		}
+
+	}
+
+
+	private watchManifestChanges(comp: Component): void {
 		comp.registerEvent(
 			this.app.vault.on('modify', (file) => {
 				if (!(file instanceof TFile)) return;
-				if (file.path === this.filePath) {
+				if (this.manifestSources.has(file.path) ||
+					(this.emptyChapterPaths.has(file.path) && file.stat.size > 0) ||
+					(this.manifestPaths.has(file.path) && file.stat.size === 0)) {
 					this.scheduleReload();
 					return;
 				}
@@ -1353,7 +1437,7 @@ export class BookView extends FileView {
 		comp.registerEvent(
 			this.app.metadataCache.on('changed', (file) => {
 				if (!(file instanceof TFile)) return;
-				if (file.path === this.filePath) {
+				if (this.manifestSources.has(file.path)) {
 					this.scheduleReload();
 					return;
 				}
@@ -1366,15 +1450,20 @@ export class BookView extends FileView {
 			}),
 		);
 
-		// Restore persisted scroll position on initial load: the
-		// active-leaf-change listener only fires on leaf switches, not on
-		// the first activation (the leaf is already active when loadBook
-		// registers the listener). Defer until sections have mounted and
-		// scrollHeight is non-zero (the pool creates placeholders with
-		// estimated heights synchronously, but the ResizeObserver needs
-		// one paint frame to report real heights).
-		this.schedulePersistedScrollRestore();
-
+		comp.registerEvent(this.app.vault.on('delete', (file) => {
+			if (this.manifestSources.has(file.path) || this.manifestPaths.has(file.path) || this.emptyChapterPaths.has(file.path)) {
+				this.scheduleReload();
+			}
+		}));
+		comp.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+			if (this.manifestSources.has(oldPath)) {
+				this.manifestSources.delete(oldPath);
+				this.manifestSources.add(file.path);
+				this.scheduleReload();
+			} else if (this.manifestPaths.has(oldPath) || this.emptyChapterPaths.has(oldPath)) {
+				this.scheduleReload();
+			}
+		}));
 	}
 
 	private refreshTimers: Map<string, number> = new Map();
@@ -1387,6 +1476,7 @@ export class BookView extends FileView {
 		const timer = window.setTimeout(() => {
 			this.refreshTimers.delete(path);
 			this.absoluteManager?.markDirty(path);
+			this.refreshFindResults();
 		}, 300);
 		this.refreshTimers.set(path, timer);
 	}
@@ -1487,6 +1577,7 @@ export class BookView extends FileView {
 	}
 
 	private cleanup(): void {
+		this.findRequestId++;
 		// Persist the current scroll position before destroying the container:
 		// active-leaf-change does not fire when the same leaf switches views
 		// (e.g. book A → book B in the same pane), so without this the old
@@ -1519,6 +1610,8 @@ export class BookView extends FileView {
 		}
 		this.currentFiles = [];
 		this.manifestPaths.clear();
+		this.emptyChapterPaths.clear();
+		this.manifestSources.clear();
 		window.clearTimeout(this.findDebounce);
 		this.findBar?.destroy();
 		this.findBar = null;

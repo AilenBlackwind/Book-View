@@ -68,12 +68,14 @@ export function computeVirtualOffsets(
 	items: readonly VirtualItem[],
 	headingHeight: number,
 	fileHeight: number,
+	headingHeights?: ReadonlyMap<number, number>,
 ): number[] {
 	const offsets = new Array<number>(items.length + 1);
 	let acc = 0;
 	for (let i = 0; i < items.length; i++) {
 		offsets[i] = acc;
-		acc += items[i]?.type === 'file' ? fileHeight : headingHeight;
+		const item = items[i]!;
+		acc += item.type === 'file' ? fileHeight : headingHeights?.get(item.index) ?? headingHeight;
 	}
 	offsets[items.length] = acc;
 	return offsets;
