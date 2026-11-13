@@ -899,90 +899,6 @@
 	margin-top: 8px;
 }
 
-/* Settings: script list */
-.bv-script-row {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 4px 0;
-}
-
-.bv-move-btn {
-	width: 22px;
-	height: 22px;
-	padding: 0;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-s);
-	background: var(--background-primary);
-	color: var(--text-muted);
-	cursor: pointer;
-	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 9px;
-}
-
-.bv-move-btn:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-}
-
-.bv-move-btn:disabled {
-	opacity: 0.3;
-	cursor: default;
-}
-
-.bv-move-btn:disabled:hover {
-	background: var(--background-primary);
-	color: var(--text-muted);
-}
-
-.bv-script-input {
-	flex: 1;
-	min-width: 0;
-}
-
-.bv-icon-btn {
-	width: 26px;
-	height: 26px;
-	padding: 0;
-	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
-
-.bv-color-input {
-	width: 26px;
-	height: 26px;
-	padding: 0;
-	flex-shrink: 0;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-s);
-	cursor: pointer;
-}
-
-.bv-clear-color-btn {
-	width: 20px;
-	height: 20px;
-	padding: 0;
-	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 11px;
-	opacity: 0.6;
-}
-
-.bv-clear-color-btn:hover {
-	opacity: 1;
-}
-
-.bv-find-btn {
-	flex-shrink: 0;
-}
-
 .bv-remove-btn {
 	width: 20px;
 	height: 20px;
@@ -999,15 +915,143 @@
 	opacity: 1;
 }
 
-.bv-sep-icon {
-	color: var(--text-muted);
-	padding: 0 4px;
+.bv-command-settings button:not(.mod-cta) {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
-.bv-sep-label {
-	color: var(--text-muted);
-	font-style: italic;
-	flex: 1;
+.bv-command-settings button:not(:disabled):hover {
+  background: var(--background-modifier-hover);
+}
+
+.bv-command-settings button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+.bv-command-settings button.bv-cmd-item-icon-btn {
+  --icon-size: 16px;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.bv-command-settings .bv-cmd-item-icon-btn svg {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  max-width: none;
+  max-height: none;
+}
+
+.bv-command-settings {
+  --bv-cmd-control-size: 28px;
+}
+
+.bv-command-settings button {
+  min-height: var(--bv-cmd-control-size);
+}
+
+.bv-command-settings .bv-cmd-entry-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.bv-command-settings .bv-cmd-entry-controls {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+}
+
+.bv-command-settings .bv-cmd-entry-details {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.bv-command-settings .bv-cmd-entry-details input {
+  width: 100%;
+  min-width: 0;
+}
+
+.bv-command-settings .bv-cmd-entry-description {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.bv-command-settings button.bv-cmd-entry-action,
+.bv-command-settings .bv-cmd-entry-color {
+  box-sizing: border-box;
+  width: var(--bv-cmd-control-size);
+  height: var(--bv-cmd-control-size);
+  padding: 0;
+  flex: none;
+  cursor: pointer;
+}
+
+.bv-command-settings button.bv-cmd-entry-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.bv-command-settings button.bv-cmd-entry-action:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.bv-command-settings .bv-cmd-entry-color {
+  border: 0;
+  background: transparent;
+}
+
+.bv-command-settings button.bv-cmd-entry-label:not([hidden]) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: var(--bv-cmd-control-size);
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.bv-command-settings .bv-cmd-entry-label-input {
+  box-sizing: border-box;
+  height: var(--bv-cmd-control-size);
+}
+
+.bv-command-settings .bv-cmd-entry-command-name {
+  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bv-command-settings .bv-cmd-entry-label[hidden],
+.bv-command-settings .bv-cmd-entry-command-name[hidden] {
+  display: none;
+}
+
+.bv-command-settings .bv-cmd-entry-separator {
+  align-items: center;
+  flex-wrap: nowrap;
+  margin-bottom: 4px;
+}
+
+.bv-command-settings .bv-cmd-entry-separator-line {
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .bv-add-row {
@@ -1254,3 +1298,30 @@ mark.book-search-all {
 	width: 100%;
 }
 
+.bv-command-settings input[type="color"].bv-cmd-entry-color {
+  appearance: none;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.bv-command-settings input[type="color"].bv-cmd-entry-color::-webkit-color-swatch-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.bv-command-settings input[type="color"].bv-cmd-entry-color::-webkit-color-swatch {
+  box-sizing: border-box;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 50%;
+}

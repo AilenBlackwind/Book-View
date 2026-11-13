@@ -1,10 +1,14 @@
 import { App, Command, FuzzySuggestModal, FuzzyMatch, setIcon } from 'obsidian';
 import { ICON_LIST } from '../generated/icon-list';
 
-export class CommandSuggestModal extends FuzzySuggestModal<Command> {
-	private onSelect: (command: Command) => void;
+export function listCommands(app: App): Command[] {
+	return (app as unknown as { commands: { listCommands: () => Command[] } }).commands.listCommands();
+}
 
-	constructor(app: App, onSelect: (command: Command) => void) {
+export class CommandSuggestModal extends FuzzySuggestModal<Command> {
+	private onSelect: (command: Command) => void | Promise<void>;
+
+	constructor(app: App, onSelect: (command: Command) => void | Promise<void>) {
 		super(app);
 		this.onSelect = onSelect;
 		this.setPlaceholder('Type to search for a command...');
@@ -16,7 +20,7 @@ export class CommandSuggestModal extends FuzzySuggestModal<Command> {
 	}
 
 	getItems(): Command[] {
-		return (this.app as unknown as { commands: { listCommands: () => Command[] } }).commands.listCommands();
+		return listCommands(this.app);
 	}
 
 	getItemText(command: Command): string {
@@ -24,14 +28,14 @@ export class CommandSuggestModal extends FuzzySuggestModal<Command> {
 	}
 
 	onChooseItem(command: Command): void {
-		this.onSelect(command);
+		void this.onSelect(command);
 	}
 }
 
 export class IconSuggestModal extends FuzzySuggestModal<string> {
-	private onSelect: (icon: string) => void;
+	private onSelect: (icon: string) => void | Promise<void>;
 
-	constructor(app: App, onSelect: (icon: string) => void) {
+	constructor(app: App, onSelect: (icon: string) => void | Promise<void>) {
 		super(app);
 		this.onSelect = onSelect;
 		this.setPlaceholder('Type to search for an icon...');
@@ -59,6 +63,6 @@ export class IconSuggestModal extends FuzzySuggestModal<string> {
 	}
 
 	onChooseItem(icon: string): void {
-		this.onSelect(icon);
+		void this.onSelect(icon);
 	}
 }

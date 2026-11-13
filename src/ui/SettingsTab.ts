@@ -1,11 +1,17 @@
 import { App, PluginSettingTab, setIcon } from 'obsidian';
 import type BookViewPlugin from '../main';
-import type { ModifierConfig, MenuProfile } from '../settings';
+import type { ModifierConfig, MenuProfile, ScriptEntry } from '../settings';
 import { generalSettingDefinitions } from './generalSettingDefinitions';
 import { tocSettingDefinitions } from './tocSettingDefinitions';
 import { renderSettingDefinitions } from './settingDefinitions';
 import type { BookSettingDefinition, BookSettingGroup } from './settingDefinitions';
-import { CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
+import { listCommands, CommandSuggestModal, IconSuggestModal } from './CommandSuggestModal';
+
+function renderMenuIcon(element: HTMLElement, icon: string): boolean {
+	element.empty();
+	setIcon(element, icon);
+	return element.querySelector('svg') !== null;
+}
 
 type SettingsSection = 'toc' | 'menus' | 'general';
 
@@ -29,6 +35,7 @@ function getDefaultColor(): string {
 
 export class BookViewSettingTab extends PluginSettingTab {
 	plugin: BookViewPlugin;
+	private commandNames = new Map<string, string>();
 	private activeSection: SettingsSection = 'general';
 
 	constructor(app: App, plugin: BookViewPlugin) {
@@ -142,6 +149,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 	}
 
 	private renderMenuProfiles(containerEl: HTMLElement): void {
+		this.commandNames = new Map(listCommands(this.app).map(({ id, name }) => [id, name]));
 		containerEl.createEl('p', {
 			text: 'Each profile is an independent right-click menu with its own modifier shortcut and scripts. Right-click with the matching modifiers to open that profile\'s menu.',
 			cls: 'setting-item-description',
@@ -197,7 +205,7 @@ export class BookViewSettingTab extends PluginSettingTab {
 				renderModCheckbox('Shift', 'shift');
 				renderModCheckbox('Meta', 'meta');
 
-				this.renderProfileScripts(card, profile, renderAll);
+				this.renderProfileScripts(card, profile);
 			}
 		};
 
@@ -211,159 +219,190 @@ export class BookViewSettingTab extends PluginSettingTab {
 		};
 	}
 
-	private renderProfileScripts(card: HTMLElement, profile: MenuProfile, onReorder: () => void): void {
+	private renderProfileScripts(card: HTMLElement, profile: MenuProfile): void {
+		const listDiv = card.createDiv({ cls: 'bv-profile-scripts bv-command-settings' });
+		const rows = listDiv.createDiv();
 		const scripts = profile.scripts;
-		const listDiv = card.createDiv({ cls: 'bv-profile-scripts' });
-
-		const renderList = () => {
-			listDiv.empty();
-
+		const render = () => {
+			rows.empty();
 			for (let i = 0; i < scripts.length; i++) {
-				const entry = scripts[i];
-				if (!entry) continue;
-
-				if (entry.isSeparator) {
-					const row = listDiv.createDiv({ cls: 'bv-script-row' });
-					this.renderMoveButtons(row, scripts, i, renderList);
-
-					const sepIcon = row.createSpan({ cls: 'bv-sep-icon' });
-					sepIcon.setText('\u2014');
-
-					row.createSpan({ cls: 'bv-sep-label', text: 'Separator' });
-
-					const removeBtn = row.createEl('button', { text: '\u00D7', cls: 'bv-remove-btn' });
-					removeBtn.onclick = async () => {
-						scripts.splice(i, 1);
-						await this.plugin.saveSettings();
-						renderList();
-					};
-
-					continue;
-				}
-
-				const row = listDiv.createDiv({ cls: 'bv-script-row' });
-				this.renderMoveButtons(row, scripts, i, renderList);
-
-				const labelInput = row.createEl('input', { type: 'text', cls: 'bv-script-input' });
-				labelInput.value = entry.label;
-				labelInput.placeholder = 'Label (e.g. Replace text)';
-				labelInput.onchange = async () => {
-					entry.label = labelInput.value;
-					await this.plugin.saveSettings();
-				};
-
-				const iconBtn = row.createEl('button', { cls: 'bv-icon-btn' });
-				iconBtn.title = 'Choose icon';
-				const renderIcon = () => {
-					iconBtn.empty();
-					if (entry.icon) {
-						setIcon(iconBtn, entry.icon);
-					} else {
-						iconBtn.setText('?');
-					}
-				};
-				renderIcon();
-				iconBtn.onclick = () => {
-					new IconSuggestModal(this.app, (iconName) => {
-						entry.icon = iconName;
-						renderIcon();
-						void this.plugin.saveSettings();
-					}).open();
-				};
-
-				const colorInput = row.createEl('input', { type: 'color', cls: 'bv-color-input' });
-				colorInput.value = entry.color || getDefaultColor();
-				colorInput.title = 'Item color';
-				colorInput.onchange = () => {
-					entry.color = colorInput.value;
-					void this.plugin.saveSettings();
-				};
-
-				const clearColorBtn = row.createEl('button', { text: '\u00D7', cls: 'bv-clear-color-btn' });
-				clearColorBtn.title = 'Clear color';
-				clearColorBtn.onclick = async () => {
-					entry.color = undefined;
-					colorInput.value = getDefaultColor();
-					await this.plugin.saveSettings();
-				};
-
-				const cmdInput = row.createEl('input', { type: 'text', cls: 'bv-script-input' });
-				cmdInput.value = entry.commandId;
-				cmdInput.placeholder = 'Command ID (e.g. Quickadd:macro:mymacro)';
-				cmdInput.onchange = async () => {
-					entry.commandId = cmdInput.value;
-					await this.plugin.saveSettings();
-				};
-
-				const searchBtn = row.createEl('button', { text: 'Find...', cls: 'bv-find-btn' });
-				searchBtn.title = 'Search for a command';
-				searchBtn.onclick = () => {
-					new CommandSuggestModal(this.app, (command) => {
-						labelInput.value = command.name;
-						cmdInput.value = command.id;
-						entry.label = command.name;
-						entry.commandId = command.id;
-						void this.plugin.saveSettings();
-					}).open();
-				};
-
-				const removeBtn = row.createEl('button', { text: '\u00D7', cls: 'bv-remove-btn' });
-				removeBtn.onclick = async () => {
-					scripts.splice(i, 1);
-					await this.plugin.saveSettings();
-					renderList();
-				};
+				this.renderEntryRow(rows, scripts, i, render);
 			}
 		};
+		render();
 
-		renderList();
-
-		const addRow = listDiv.createDiv({ cls: 'bv-add-row' });
-		const addBtn = addRow.createEl('button', { text: '+ add script' });
-		addBtn.onclick = async () => {
-			scripts.push({ label: 'New script', commandId: '' });
-			await this.plugin.saveSettings();
-			renderList();
-		};
-		const addSepBtn = addRow.createEl('button', { text: '+ separator' });
-		addSepBtn.onclick = async () => {
+		const actions = listDiv.createDiv({ cls: 'bv-add-row' });
+		this.renderAddCommand(actions, scripts, render);
+		const separator = actions.createEl('button', { text: '+ separator' });
+		separator.onclick = async () => {
 			scripts.push({ label: '', commandId: '', isSeparator: true });
 			await this.plugin.saveSettings();
-			renderList();
+			render();
 		};
 	}
 
-	private renderMoveButtons(row: HTMLElement, list: unknown[], index: number, onReorder: () => void): void {
-		const moveUp = row.createEl('button', { text: '\u25B2', cls: 'bv-move-btn' });
-		moveUp.title = 'Move up';
-		moveUp.disabled = index === 0;
-		moveUp.onclick = async () => {
-			if (index > 0) {
-				const prev = list[index - 1];
-				const curr = list[index];
-				if (prev !== undefined && curr !== undefined) {
-					list[index - 1] = curr;
-					list[index] = prev;
-					await this.plugin.saveSettings();
-					onReorder();
-				}
-			}
+	private renderAddCommand(container: HTMLElement, list: ScriptEntry[], render: () => void): void {
+		const button = container.createEl('button', { text: '+ add command' });
+		button.onclick = () => {
+			new CommandSuggestModal(this.app, async ({ id, name }) => {
+				this.commandNames.set(id, name);
+				list.push({ label: name, commandId: id, commandName: name });
+				await this.plugin.saveSettings();
+				render();
+			}).open();
+		};
+	}
+
+	private renderEntryRow(
+		container: HTMLElement,
+		list: ScriptEntry[],
+		index: number,
+		render: () => void
+	): void {
+		const entry = list[index];
+		if (!entry) return;
+		const row = container.createDiv({ cls: entry.isSeparator ? 'bv-cmd-entry-row bv-cmd-entry-separator' : 'bv-cmd-entry-row' });
+		const order = row.createDiv({ cls: 'bv-cmd-entry-controls' });
+
+		const action = (parent: HTMLElement, text: string, title: string, cls = '') => {
+			const button = parent.createEl('button', {
+				text,
+				cls: 'bv-cmd-entry-action ' + cls,
+				attr: { title, 'aria-label': title },
+			});
+			return button;
 		};
 
-		const moveDown = row.createEl('button', { text: '\u25BC', cls: 'bv-move-btn' });
-		moveDown.title = 'Move down';
-		moveDown.disabled = index === list.length - 1;
-		moveDown.onclick = async () => {
-			if (index < list.length - 1) {
-				const next = list[index + 1];
-				const curr = list[index];
-				if (next !== undefined && curr !== undefined) {
-					list[index + 1] = curr;
-					list[index] = next;
+		for (const [offset, title] of [[-1, 'Move up'], [1, 'Move down']] as const) {
+			const button = action(order, '', title, 'bv-cmd-item-icon-btn');
+			const icon = offset < 0 ? 'chevron-up' : 'chevron-down';
+			if (!renderMenuIcon(button, icon)) button.setText(offset < 0 ? '↑' : '↓');
+			const next = index + offset;
+			button.disabled = next < 0 || next >= list.length;
+			button.onclick = async () => {
+				const target = list[next];
+				if (!target) return;
+				list[index] = target;
+				list[next] = entry;
+				await this.plugin.saveSettings();
+				render();
+			};
+		}
+
+		const details = row.createDiv({ cls: 'bv-cmd-entry-details' });
+		const controls = row.createDiv({ cls: 'bv-cmd-entry-controls' });
+
+		if (entry.isSeparator) {
+			details.createDiv({ cls: 'bv-cmd-entry-separator-line', attr: { role: 'separator' } });
+		} else {
+			const labelButton = details.createEl('button', {
+				cls: 'bv-cmd-entry-label',
+				attr: { type: 'button' },
+			});
+			const description = details.createDiv({ cls: 'bv-cmd-entry-description bv-cmd-entry-command-name' });
+			const renderLabel = () => {
+				const name = this.commandNames.get(entry.commandId);
+				const original = name ?? entry.commandName;
+				const label = entry.label || original || 'Menu label';
+				const distinctName = original && original.trim() !== label.trim() ? original : '';
+				const status = name ? '' : entry.commandId ? 'Command unavailable' : 'No command selected';
+				const subtitle = [distinctName, status].filter(Boolean).join(' · ');
+				labelButton.setText(label);
+				labelButton.title = label + ' — click to edit';
+				labelButton.setAttribute('aria-label', 'Edit menu label: ' + label);
+				description.setText(subtitle);
+				description.title = subtitle;
+				description.hidden = !subtitle;
+			};
+			renderLabel();
+
+			labelButton.onclick = () => {
+				labelButton.hidden = true;
+				const input = details.createEl('input', {
+					type: 'text',
+					cls: 'bv-cmd-entry-label-input',
+					attr: { 'aria-label': 'Menu label', placeholder: 'Menu label' },
+				});
+				details.insertBefore(input, description);
+				input.value = entry.label;
+
+				const finish = (save: boolean, restoreFocus: boolean) => {
+					if (!labelButton.hidden) return;
+					labelButton.hidden = false;
+					input.remove();
+					if (restoreFocus) labelButton.focus();
+					if (!save || input.value === entry.label) return;
+					entry.label = input.value;
+					renderLabel();
+					void this.plugin.saveSettings();
+				};
+
+				input.onblur = () => finish(true, false);
+				input.onkeydown = (event) => {
+					if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return;
+					event.preventDefault();
+					event.stopPropagation();
+					finish(event.key === 'Enter', true);
+				};
+				input.focus();
+				input.select();
+			};
+
+			const iconBtn = action(controls, '', 'Choose icon', 'bv-cmd-item-icon-btn');
+			const renderIcon = () => {
+				if (!entry.icon || !renderMenuIcon(iconBtn, entry.icon)) iconBtn.setText('?');
+			};
+			renderIcon();
+			iconBtn.onclick = () => {
+				new IconSuggestModal(this.app, async (iconName) => {
+					entry.icon = iconName;
+					renderIcon();
 					await this.plugin.saveSettings();
-					onReorder();
-				}
-			}
+				}).open();
+			};
+
+			const colorInput = controls.createEl('input', {
+				type: 'color',
+				cls: 'bv-cmd-entry-color',
+				attr: { title: 'Item color', 'aria-label': 'Item color' },
+			});
+			colorInput.value = entry.color || getDefaultColor();
+			colorInput.onchange = async () => {
+				entry.color = colorInput.value;
+				await this.plugin.saveSettings();
+			};
+
+			const clearColor = action(controls, '', 'Restore default color', 'bv-cmd-item-icon-btn');
+			if (!renderMenuIcon(clearColor, 'rotate-ccw')) clearColor.setText('↺');
+			clearColor.onclick = async () => {
+				delete entry.color;
+				colorInput.value = getDefaultColor();
+				await this.plugin.saveSettings();
+			};
+
+			const replaceCommand = action(controls, '', 'Change command', 'bv-cmd-item-icon-btn');
+			if (!renderMenuIcon(replaceCommand, 'search')) replaceCommand.setText('…');
+			replaceCommand.onclick = () => {
+				new CommandSuggestModal(this.app, async ({ id, name }) => {
+					const previousName = this.commandNames.get(entry.commandId) ?? entry.commandName;
+					if (!entry.commandId || !entry.label || entry.label === previousName) {
+						entry.label = name;
+					}
+					entry.commandId = id;
+					entry.commandName = name;
+					this.commandNames.set(id, name);
+					renderLabel();
+					await this.plugin.saveSettings();
+				}).open();
+			};
+		}
+
+		const remove = action(controls, '', entry.isSeparator ? 'Remove separator' : 'Remove command', 'bv-cmd-item-icon-btn');
+		if (!renderMenuIcon(remove, 'trash-2')) remove.setText('×');
+		remove.onclick = async () => {
+			list.splice(index, 1);
+			await this.plugin.saveSettings();
+			render();
 		};
 	}
 }

@@ -1,6 +1,7 @@
 export interface ScriptEntry {
 	label: string;
 	commandId: string;
+	commandName?: string;
 	icon?: string;
 	color?: string;
 	isSeparator?: boolean;
